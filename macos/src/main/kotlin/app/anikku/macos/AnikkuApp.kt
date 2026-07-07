@@ -39,8 +39,10 @@ fun main() = application {
         // Set up the macOS native menu bar via java.awt
         // (Compose Desktop MenuBar/Menu/Item composable API unavailable in 1.11.x)
         val onQuit = { exitApplication() }
+        val onSettings = { /* TODO: Phase 5 — Navigate to Settings screen */ }
+        val onOpenBackup = { /* TODO: Phase 7 — Open file picker for .tachibk backup */ }
         (window as? Frame)?.let { frame ->
-            MacOSMenuBarFactory.attach(frame, onQuit)
+            MacOSMenuBarFactory.attach(frame, onQuit, onSettings, onOpenBackup)
         }
 
         AnikkuTheme(

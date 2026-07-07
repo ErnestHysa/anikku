@@ -1,12 +1,14 @@
 package app.anikku.macos.ui
 
 import app.anikku.macos.platform.MacOSFullScreen
+import java.awt.Desktop
 import java.awt.Frame
 import java.awt.Menu
 import java.awt.MenuBar
 import java.awt.MenuItem
 import java.awt.MenuShortcut
 import java.awt.event.KeyEvent
+import java.net.URI
 
 /**
  * macOS native menu bar per AD-04 (Phase 9.1).
@@ -41,11 +43,16 @@ object MacOSMenuBarFactory {
      * @param onQuit Called when Quit (⌘Q) or Close Window (⌘W) is selected
      * @param onSettings Called when Settings... (⌘,) is selected
      */
-    fun create(frame: Frame, onQuit: () -> Unit, onSettings: () -> Unit = {}): MenuBar {
+    fun create(
+        frame: Frame,
+        onQuit: () -> Unit,
+        onSettings: () -> Unit = {},
+        onOpenBackup: () -> Unit = {},
+    ): MenuBar {
         return MenuBar().apply {
             // App menu (first menu becomes macOS application menu)
             add(appMenu(frame, onQuit, onSettings))
-            add(fileMenu(onQuit))
+            add(fileMenu(onQuit, onOpenBackup))
             add(editMenu())
             add(viewMenu(frame))
             add(playbackMenu())
@@ -62,8 +69,13 @@ object MacOSMenuBarFactory {
      * @param onQuit Called when Quit (⌘Q) or Close Window (⌘W) is selected
      * @param onSettings Called when Settings... (⌘,) is selected
      */
-    fun attach(frame: Frame, onQuit: () -> Unit, onSettings: () -> Unit = {}) {
-        frame.menuBar = create(frame, onQuit, onSettings)
+    fun attach(
+        frame: Frame,
+        onQuit: () -> Unit,
+        onSettings: () -> Unit = {},
+        onOpenBackup: () -> Unit = {},
+    ) {
+        frame.menuBar = create(frame, onQuit, onSettings, onOpenBackup)
     }
 
     // ---------------------------------------------------------------------------
@@ -98,10 +110,10 @@ object MacOSMenuBarFactory {
     // ---------------------------------------------------------------------------
     // File Menu
     // ---------------------------------------------------------------------------
-    private fun fileMenu(onQuit: () -> Unit): Menu {
+    private fun fileMenu(onQuit: () -> Unit, onOpenBackup: () -> Unit): Menu {
         return Menu("File").apply {
             add(MenuItem("Open Backup...", MenuShortcut(KeyEvent.VK_O, false)).also {
-                it.addActionListener { /* TODO: Phase 7 */ }
+                it.addActionListener { onOpenBackup() }
             })
             add(MenuItem("Save Backup...", MenuShortcut(KeyEvent.VK_S, true)).also {
                 it.addActionListener { /* TODO: Phase 7 */ }
@@ -220,7 +232,7 @@ object MacOSMenuBarFactory {
                 it.addActionListener { /* TODO: Phase 12 — Open help documentation */ }
             })
             add(MenuItem("Report Issue...").also {
-                it.addActionListener { /* TODO: Phase 12 — Open GitHub issues in browser */ }
+                it.addActionListener { openGitHubIssues() }
             })
         }
     }
@@ -228,6 +240,15 @@ object MacOSMenuBarFactory {
     // ---------------------------------------------------------------------------
     // Window action helpers (Phase 9.2)
     // ---------------------------------------------------------------------------
+
+    /** Opens the Anikku GitHub issues page in the system browser. */
+    private fun openGitHubIssues() {
+        try {
+            Desktop.getDesktop().browse(URI("https://github.com/komikku-app/anikku/issues/new"))
+        } catch (_: Exception) {
+            // Browser not available (headless environments)
+        }
+    }
 
     /** Toggles the frame between maximized and normal state. */
     private fun toggleZoom(frame: Frame) {
