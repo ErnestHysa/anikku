@@ -54,6 +54,7 @@ import kotlin.math.roundToInt
  */
 private val sheetAnimationSpec = tween<Float>(durationMillis = 350)
 
+@Suppress("DEPRECATION")
 @Composable
 fun AdaptiveSheet(
     isTabletUi: Boolean,

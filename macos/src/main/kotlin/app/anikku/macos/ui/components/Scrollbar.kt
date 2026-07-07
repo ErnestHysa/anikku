@@ -66,6 +66,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastFirstOrNull
 import androidx.compose.ui.util.fastSumBy
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -101,6 +102,7 @@ fun Modifier.drawVerticalScrollbar(
     positionOffsetPx: Float = 0f,
 ): Modifier = drawScrollbar(state, Orientation.Vertical, reverseScrolling, positionOffsetPx)
 
+@OptIn(FlowPreview::class)
 private fun Modifier.drawScrollbar(
     state: LazyListState,
     orientation: Orientation,
@@ -185,6 +187,7 @@ private fun ContentDrawScope.onDrawScrollbar(
     }
 }
 
+@OptIn(FlowPreview::class)
 private fun Modifier.drawScrollbar(
     orientation: Orientation,
     reverseScrolling: Boolean,

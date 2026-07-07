@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastFirstOrNull
 import androidx.compose.ui.util.fastForEach
 import androidx.compose.ui.util.fastMaxBy
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.collectLatest
@@ -100,6 +101,7 @@ object Scroller {
 /**
  * Draws vertical fast scroller to a lazy list.
  */
+@OptIn(FlowPreview::class)
 @Composable
 fun VerticalFastScroller(
     listState: LazyListState,
@@ -251,6 +253,7 @@ private fun rememberColumnWidthSums(
     }
 }
 
+@OptIn(FlowPreview::class)
 @Composable
 fun VerticalGridFastScroller(
     state: LazyGridState,

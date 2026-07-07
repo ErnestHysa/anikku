@@ -7,9 +7,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Book
 import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.History
-import androidx.compose.material.icons.outlined.LibraryBooks
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.Icon
@@ -33,7 +33,7 @@ object LibraryScreen : AnikkuScreen(), Tab {
         PlaceholderTabContent(
             title = "Library",
             description = "Your anime library will appear here.\nBrowse, filter, and manage your collection.",
-            icon = Icons.Outlined.LibraryBooks,
+            icon = Icons.Outlined.Book,
         )
     }
 
@@ -42,7 +42,7 @@ object LibraryScreen : AnikkuScreen(), Tab {
         get() = TabOptions(
             index = 0u,
             title = "Library",
-            icon = rememberVectorPainter(Icons.Outlined.LibraryBooks),
+            icon = rememberVectorPainter(Icons.Outlined.Book),
         )
 }
 
