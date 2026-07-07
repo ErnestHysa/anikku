@@ -67,6 +67,10 @@ dependencies {
     implementation(libs.jsoup)
     implementation(libs.disklrucache)
     implementation(libs.kotlinx.immutables)
+
+    // JNA - Java Native Access for macOS native API calls
+    implementation(libs.jna.core)
+    implementation(libs.jna.platform)
 }
 
 compose.desktop {
@@ -76,6 +80,11 @@ compose.desktop {
         jvmArgs += listOf(
             "-Xmx2G",
             "-Dapple.awt.application.appearance=system",
+            // Allow access to internal AWT APIs for JNA native window bridging
+            "--add-exports", "java.desktop/sun.lwawt=ALL-UNNAMED",
+            "--add-exports", "java.desktop/sun.lwawt.macosx=ALL-UNNAMED",
+            "--add-opens", "java.desktop/sun.lwawt=ALL-UNNAMED",
+            "--add-opens", "java.desktop/sun.lwawt.macosx=ALL-UNNAMED",
         )
 
         nativeDistributions {

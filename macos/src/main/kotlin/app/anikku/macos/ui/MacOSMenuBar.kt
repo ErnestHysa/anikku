@@ -1,7 +1,7 @@
 package app.anikku.macos.ui
 
+import app.anikku.macos.platform.MacOSFullScreen
 import java.awt.Frame
-import java.awt.GraphicsDevice
 import java.awt.Menu
 import java.awt.MenuBar
 import java.awt.MenuItem
@@ -33,9 +33,6 @@ import java.awt.event.KeyEvent
  * ```
  */
 object MacOSMenuBarFactory {
-
-    private var fullScreenDevice: GraphicsDevice? = null
-    private var preFullScreenBounds: java.awt.Rectangle? = null
 
     /**
      * Creates the full macOS menu bar with all AD-04 menus.
@@ -167,7 +164,7 @@ object MacOSMenuBarFactory {
                 it.addActionListener { /* TODO: Phase 5 */ }
             })
             add(MenuItem("Toggle Full Screen", MenuShortcut(KeyEvent.VK_F, false)).also {
-                it.addActionListener { toggleFullScreen(frame) }
+                it.addActionListener { MacOSFullScreen.toggleFullScreen(frame) }
             })
         }
     }
@@ -241,31 +238,4 @@ object MacOSMenuBarFactory {
         }
     }
 
-    /**
-     * Toggles full-screen mode via AWT exclusive fullscreen.
-     *
-     * Note: On macOS, `GraphicsDevice.setFullScreenWindow()` creates game-style
-     * exclusive fullscreen (hides menu bar), not macOS-native fullscreen Space.
-     * A future phase should replace this with NSWindow.toggleFullScreen() via JNA.
-     */
-    private fun toggleFullScreen(frame: Frame) {
-        val device = frame.graphicsConfiguration.device
-        if (!device.isFullScreenSupported) return
-
-        if (fullScreenDevice != null) {
-            // Exit full screen
-            device.fullScreenWindow = null
-            fullScreenDevice = null
-            preFullScreenBounds?.let { frame.bounds = it }
-            preFullScreenBounds = null
-            frame.isUndecorated = false
-            frame.isVisible = true
-        } else {
-            // Enter full screen
-            preFullScreenBounds = frame.bounds
-            fullScreenDevice = device
-            frame.isUndecorated = true
-            device.fullScreenWindow = frame
-        }
-    }
 }
