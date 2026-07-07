@@ -45,7 +45,7 @@ class MacOSHttpServer(
     fun startServer() {
         if (isRunning) return
         try {
-            start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
+            start(NanoHTTPD.SOCKET_READ_TIMEOUT, true) // daemon thread — allows clean JVM exit
             isRunning = true
             logger.info { "Local HTTP server started on port $actualPort" }
         } catch (e: Exception) {

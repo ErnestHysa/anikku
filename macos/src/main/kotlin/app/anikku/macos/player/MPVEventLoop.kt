@@ -158,19 +158,20 @@ class MPVEventLoop(
 
     private fun processPropertyChange(event: MPVEvent) {
         // Parse property change event data
-        // The mpv_event_property struct has:
-        //   name: *const c_char
-        //   format: mpv_format
-        //   data: *mut c_void
+        // The mpv_event_property struct layout (64-bit):
+        //   offset 0: name (pointer, 8 bytes) — *const c_char
+        //   offset 8: format (int, 4 bytes) — mpv_format enum
+        //   offset 12: padding (4 bytes)
+        //   offset 16: data (pointer, 8 bytes) — *mut c_void
         val dataPtr = event.data
         if (dataPtr == null || dataPtr == Pointer.NULL) return
 
         try {
-            // Read property name at offset 0 (pointer to null-terminated string)
+            // Read property name pointer at offset 0
             val namePtr = dataPtr.getPointer(0)
             val name = namePtr?.getString(0) ?: return
 
-            // Read format at offset 8 (on 64-bit: pointer + long = 8 + 8 = 16)
+            // Read format at offset 8 (int32 on both x86_64 and arm64)
             val format = dataPtr.getInt(8)
 
             _propertyChanges.tryEmit(PropertyChange(name, format, event.replyUserdata))

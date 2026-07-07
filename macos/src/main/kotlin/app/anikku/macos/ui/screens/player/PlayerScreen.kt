@@ -109,6 +109,7 @@ data class PlayerScreen(
         val playerViewModel = remember { PlayerViewModel() }
 
         // Collect player state
+        val mpvHandle by playerViewModel.handle.collectAsState()
         val playbackState by playerViewModel.playbackState.collectAsState()
         val currentPosition by playerViewModel.currentPosition.collectAsState()
         val duration by playerViewModel.duration.collectAsState()
@@ -137,7 +138,7 @@ data class PlayerScreen(
 
         PlayerContent(
             playerViewModel = playerViewModel,
-            mpvHandle = null, // Set from PlayerViewModel when needed
+            mpvHandle = mpvHandle,
             animeTitle = anime?.title ?: "Unknown",
             episodes = allEpisodes,
             currentEpisodeIndex = currentEpisodeIndex,

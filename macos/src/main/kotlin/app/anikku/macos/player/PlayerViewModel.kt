@@ -9,6 +9,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 private val logger = KotlinLogging.logger {}
@@ -51,8 +53,15 @@ class PlayerViewModel {
     /** Current mpv handle (null when not initialized). */
     private var mpvHandle: Pointer? = null
 
+    /** Expose mpv handle reactively for the video surface composable. */
+    private val _handle = MutableStateFlow<Pointer?>(null)
+    val handle: StateFlow<Pointer?> = _handle.asStateFlow()
+
     /** Event loop for processing mpv events. */
     private var eventLoop: MPVEventLoop? = null
+
+    /** Tracks the periodic position-update coroutine for cleanup on shutdown. */
+    private var positionUpdateJob: Job? = null
 
     /** Current video URL being played. */
     private var currentUrl: String? = null
@@ -118,6 +127,7 @@ class PlayerViewModel {
         try {
             val handle = MPVLib.create()
             mpvHandle = handle
+            _handle.value = handle
 
             // Configure mpv
             configureMPV(handle)
@@ -125,6 +135,9 @@ class PlayerViewModel {
             val result = MPVLib.initialize(handle)
             if (result < 0) {
                 logger.error { "mpv_initialize failed with code: $result" }
+                _handle.value = null
+                mpvHandle = null
+                MPVLib.destroy(handle)
                 _playbackState.value = PlaybackState.ERROR
                 return
             }
@@ -178,11 +191,11 @@ class PlayerViewModel {
                 }
             }
 
-            // Periodic position updates
-            scope.launch {
-                while (true) {
+            // Periodic position updates — tracked for cleanup on shutdown
+            positionUpdateJob = scope.launch {
+                while (isActive) {
                     delay(500)
-                    if (_playbackState.value == PlaybackState.PLAYING) {
+                    if (mpvHandle != null && _playbackState.value == PlaybackState.PLAYING) {
                         updatePosition()
                     }
                 }
@@ -235,6 +248,8 @@ class PlayerViewModel {
      * Shut down the player, clean up mpv resources.
      */
     fun shutdown() {
+        positionUpdateJob?.cancel()
+        positionUpdateJob = null
         eventLoop?.stop()
         mpvHandle?.let { handle ->
             try {
@@ -242,6 +257,7 @@ class PlayerViewModel {
             } catch (_: Exception) { }
             MPVLib.destroy(handle)
         }
+        _handle.value = null
         mpvHandle = null
         eventLoop = null
         _playbackState.value = PlaybackState.IDLE
