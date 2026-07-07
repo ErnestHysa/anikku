@@ -8,6 +8,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import app.anikku.macos.ui.components.AnimatedTabFade
@@ -17,7 +21,6 @@ import app.anikku.macos.ui.screens.LibraryScreen
 import app.anikku.macos.ui.screens.MoreScreen
 import app.anikku.macos.ui.screens.UpdatesScreen
 import cafe.adriel.voyager.navigator.tab.CurrentTab
-import cafe.adriel.voyager.navigator.tab.LocalTabNavigator
 import cafe.adriel.voyager.navigator.tab.Tab
 import cafe.adriel.voyager.navigator.tab.TabNavigator
 
@@ -47,11 +50,20 @@ fun MainWindow() {
         tab = LibraryScreen,
         key = "MainWindowTabs",
     ) { tabNavigator ->
+        // Track current tab index via state — updated ONLY in event
+        // handlers (onClick / TabSwitchHandler callback). We NEVER read
+        // tabNavigator.current during composition because Voyager's
+        // getter internally casts navigator.items.last() as Tab, which
+        // throws ClassCastException when a non-Tab screen like
+        // AnimeDetailScreen is on the tab's inner navigator stack.
+        var currentTabIndex by remember { mutableStateOf(0) }
+
         // Bridge ⌘1-4/⌘5 View menu shortcuts to Voyager tab switching
         DisposableEffect(tabNavigator) {
             TabSwitchHandler.onSwitchTab = { index ->
                 orderedTabs.getOrNull(index)?.let { tab ->
                     tabNavigator.current = tab
+                    currentTabIndex = index
                 }
             }
             onDispose {
@@ -63,14 +75,20 @@ fun MainWindow() {
             color = MaterialTheme.colorScheme.background,
         ) {
             Row {
-                // Side Navigation Rail
-                NavigationRailSidebar()
+                // Side Navigation Rail — pass index to avoid reading
+                // tabNavigator.current during composition
+                NavigationRailSidebar(
+                    currentTabIndex = currentTabIndex,
+                    onSelectTab = { index ->
+                        orderedTabs.getOrNull(index)?.let { tab ->
+                            tabNavigator.current = tab
+                            currentTabIndex = index
+                        }
+                    },
+                )
 
-                // Tab content with saveable-state-safe fade transition.
-                // tabNavigator.current is safe to call here since the
-                // LocalNavigator override that caused ClassCastException
-                // has been removed from this composable tree.
-                AnimatedTabFade(contentKey = tabNavigator.current.key) {
+                // Tab content with saveable-state-safe fade transition
+                AnimatedTabFade(contentKey = orderedTabs[currentTabIndex].key) {
                     CurrentTab()
                 }
             }
@@ -82,24 +100,29 @@ fun MainWindow() {
  * Desktop NavigationRail sidebar composable.
  *
  * Renders the 5 primary tabs as NavigationRailItems.
- * Determines selection state by comparing each tab's key with
- * [tabNavigator.current.key] (safe after the LocalNavigator override
- * was removed from this composable tree — no ClassCastException risk).
+ * Uses [currentTabIndex] for selection state instead of reading
+ * [tabNavigator.current] during composition (which throws
+ * ClassCastException when non-Tab screens like AnimeDetailScreen
+ * are on the tab's inner navigator stack).
+ *
+ * Tab switching (via [onSelectTab]) is performed in an event-driven
+ * onClick lambda, where tabNavigator.current = tab is safe.
  */
 @Composable
-private fun NavigationRailSidebar() {
-    val tabNavigator = LocalTabNavigator.current
-
+private fun NavigationRailSidebar(
+    currentTabIndex: Int,
+    onSelectTab: (Int) -> Unit,
+) {
     androidx.compose.material3.NavigationRail(
         containerColor = MaterialTheme.colorScheme.surfaceContainer,
     ) {
-        orderedTabs.forEach { tab ->
-            val selected = tab.key == tabNavigator.current.key
+        orderedTabs.forEachIndexed { index, tab ->
+            val selected = index == currentTabIndex
             NavigationRailItem(
                 selected = selected,
                 onClick = {
                     if (!selected) {
-                        tabNavigator.current = tab
+                        onSelectTab(index)
                     }
                 },
                 icon = {
