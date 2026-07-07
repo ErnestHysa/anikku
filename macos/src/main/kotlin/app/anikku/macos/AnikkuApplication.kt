@@ -1,5 +1,8 @@
 package app.anikku.macos
 
+import app.anikku.macos.di.appModule
+import app.anikku.macos.di.domainModule
+import app.anikku.macos.di.platformModule
 import app.anikku.macos.platform.BackgroundTaskScheduler
 import app.anikku.macos.platform.data.MacOSCustomAnimeRepository
 import app.anikku.macos.platform.database.MacOSDatabaseDriver
@@ -14,9 +17,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import org.koin.core.context.startKoin
-import org.koin.dsl.module
-import tachiyomi.core.common.preference.PreferenceStore
-import tachiyomi.core.common.storage.FolderProvider
 import java.io.File
 
 /**
@@ -79,9 +79,13 @@ class AnikkuApplication {
         // 8. Initialize custom anime repo (Phase 2.2)
         customAnimeRepository = MacOSCustomAnimeRepository(storageProvider.dataDirectory)
 
-        // 9. Start Koin with macOS-specific modules
+        // 9. Start Koin with modular dependency injection
         startKoin {
-            modules(macOSModule(this@AnikkuApplication))
+            modules(
+                platformModule(this@AnikkuApplication),
+                domainModule(this@AnikkuApplication),
+                appModule(this@AnikkuApplication),
+            )
         }
 
         MacOSLogger.getLogger<AnikkuApplication>()
@@ -112,30 +116,4 @@ class AnikkuApplication {
         extensionManager.close()
     }
 
-    companion object {
-        /**
-         * Creates a Koin module that registers the platform-specific dependencies
-         * from the application instance.
-         */
-        fun macOSModule(app: AnikkuApplication) = module {
-            // Phase 1: Core infrastructure
-            single<MacOSStorageProvider> { app.storageProvider }
-            single<FolderProvider> { app.storageProvider }
-            single<MacOSPreferenceStore> { app.preferenceStore }
-            single<PreferenceStore> { app.preferenceStore }
-            single<MacOSDatabaseDriver> { app.databaseDriver }
-            single<BackgroundTaskScheduler> { app.backgroundScheduler }
-
-            // Phase 2: Storage & Data
-            single<MacOSStorageManager> { app.storageManager }
-            single<MacOSCustomAnimeRepository> { app.customAnimeRepository }
-
-            // Phase 3: Networking
-            single<MacOSNetworkHelper> { app.networkHelper }
-            single<MacOSCookieJar> { app.cookieJar }
-
-            // Phase 3: Extension system
-            single<MacOSExtensionManager> { app.extensionManager }
-        }
-    }
 }
