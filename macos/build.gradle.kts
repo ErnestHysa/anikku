@@ -1,0 +1,45 @@
+import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+
+plugins {
+    alias(libs.plugins.kotlin.jvm)
+    alias(libs.plugins.compose.multiplatform)
+    alias(libs.plugins.kotlin.compose.plugin)
+    alias(libs.plugins.kotlin.serialization)
+}
+
+kotlin {
+    jvmToolchain(17)
+}
+
+dependencies {
+    implementation(compose.desktop.currentOs)
+    implementation(compose.material3)
+    implementation(compose.materialIconsExtended)
+
+    implementation(libs.coroutines.core)
+    implementation(libs.coroutines.swing)
+    implementation(libs.serialization.json)
+}
+
+compose.desktop {
+    application {
+        mainClass = "app.anikku.macos.AnikkuAppKt"
+
+        jvmArgs += listOf(
+            "-Xmx2G",
+            "-Dapple.awt.application.appearance=system",
+        )
+
+        nativeDistributions {
+            targetFormats(TargetFormat.Dmg, TargetFormat.Pkg)
+            packageName = "Anikku"
+            packageVersion = "1.0.0"
+
+            macOS {
+                bundleID = "app.anikku.macos"
+                // TODO Phase 10.1: Add iconFile.set(project.file("src/main/resources/icons/app.icns"))
+                minimumSystemVersion = "12.0"
+            }
+        }
+    }
+}
