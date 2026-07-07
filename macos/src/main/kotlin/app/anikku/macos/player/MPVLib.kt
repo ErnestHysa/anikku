@@ -57,11 +57,14 @@ object MPVLib {
         val libraryPaths = listOfNotNull(
             // Bundle path (Phase 6.1)
             findBundleLibrary(),
-            // Homebrew Apple Silicon
+            // Homebrew Apple Silicon (mpv ships libmpv.2.dylib as of 0.41.0+)
+            "/opt/homebrew/lib/libmpv.2.dylib",
             "/opt/homebrew/lib/libmpv.1.dylib",
             // Homebrew Intel
+            "/usr/local/lib/libmpv.2.dylib",
             "/usr/local/lib/libmpv.1.dylib",
             // MacPorts
+            "/opt/local/lib/libmpv.2.dylib",
             "/opt/local/lib/libmpv.1.dylib",
         ).filter { File(it).isFile }
 
