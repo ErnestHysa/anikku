@@ -1,0 +1,467 @@
+package app.anikku.macos.platform.extension
+
+import app.anikku.macos.platform.network.MacOSNetworkHelper
+import app.anikku.macos.platform.storage.MacOSStorageProvider
+import eu.kanade.tachiyomi.extension.model.Extension
+import eu.kanade.tachiyomi.extension.model.InstallStep
+import eu.kanade.tachiyomi.extension.model.LoadResult
+import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
+import okhttp3.Request
+import okio.IOException
+import java.io.File
+import java.time.Instant
+import kotlin.time.Duration.Companion.days
+
+private val logger = KotlinLogging.logger {}
+
+/**
+ * macOS extension manager.
+ *
+ * Manages the lifecycle of anime extensions as JAR files:
+ * - Scanning installed extensions from the extensions directory
+ * - Fetching available extensions from remote repositories
+ * - Downloading and installing new or updated extensions
+ * - Removing extensions
+ * - Trust management (SHA-256 signature verification)
+ *
+ * Replaces the Android ExtensionManager which uses PackageManager + APK installs.
+ */
+class MacOSExtensionManager(
+    private val storageProvider: MacOSStorageProvider,
+    private val networkHelper: MacOSNetworkHelper,
+) : AutoCloseable {
+
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private val extensionsDir: File get() = storageProvider.extensionsDirectory
+    private val trustDir: File get() = File(storageProvider.dataDirectory, "trust")
+    private val trustFile get() = File(trustDir, "trusted_extensions.json")
+
+    private val json = Json { ignoreUnknownKeys = true; prettyPrint = true }
+
+    /** Timestamp of last extension repo check (for rate limiting) */
+    private var lastExtensionCheck: Long = 0
+
+    private val _isInitialized = MutableStateFlow(false)
+    val isInitialized: StateFlow<Boolean> = _isInitialized.asStateFlow()
+
+    private val installedExtensionsMapFlow = MutableStateFlow(emptyMap<String, Extension.Installed>())
+    val installedExtensionsFlow: StateFlow<List<Extension.Installed>> = installedExtensionsMapFlow
+        .map { it.values.toList() }
+        .stateIn(scope, SharingStarted.Lazily, emptyList())
+
+    private val availableExtensionsMapFlow = MutableStateFlow(emptyMap<String, Extension.Available>())
+    val availableExtensionsFlow: StateFlow<List<Extension.Available>> = availableExtensionsMapFlow
+        .map { it.values.toList() }
+        .stateIn(scope, SharingStarted.Lazily, emptyList())
+
+    private val untrustedExtensionsMapFlow = MutableStateFlow(emptyMap<String, Extension.Untrusted>())
+    val untrustedExtensionsFlow: StateFlow<List<Extension.Untrusted>> = untrustedExtensionsMapFlow
+        .map { it.values.toList() }
+        .stateIn(scope, SharingStarted.Lazily, emptyList())
+
+    private var trustStore: MutableMap<String, MutableList<MacOSExtensionLoader.TrustEntry>> = mutableMapOf()
+
+    /** Whether NSFW extensions should be loaded */
+    var loadNsfwSource: Boolean = false
+
+    init {
+        ensureDirectories()
+        loadTrustStore()
+        initExtensions()
+    }
+
+    // -------------------------------------------------------------------------
+    // Initialization
+    // -------------------------------------------------------------------------
+
+    private fun ensureDirectories() {
+        extensionsDir.mkdirs()
+        trustDir.mkdirs()
+    }
+
+    /**
+     * Scan the extensions directory and load all installed extensions.
+     */
+    private fun initExtensions() {
+        val results = MacOSExtensionLoader.loadExtensions(
+            extensionsDir = extensionsDir,
+            trustStore = trustStore,
+            loadNsfw = loadNsfwSource,
+        )
+
+        installedExtensionsMapFlow.value = results
+            .filterIsInstance<LoadResult.Success>()
+            .associate { it.extension.pkgName to it.extension }
+
+        untrustedExtensionsMapFlow.value = results
+            .filterIsInstance<LoadResult.Untrusted>()
+            .associate { it.extension.pkgName to it.extension }
+
+        _isInitialized.value = true
+        logger.info {
+            "Loaded ${installedExtensionsMapFlow.value.size} extensions, " +
+                "${untrustedExtensionsMapFlow.value.size} untrusted"
+        }
+    }
+
+    /**
+     * Reload a single extension after install/update (avoids full rescan).
+     */
+    fun reloadExtension(pkgName: String) {
+        val jarFile = File(extensionsDir, "$pkgName.jar")
+        if (!jarFile.isFile) {
+            installedExtensionsMapFlow.value -= pkgName
+            untrustedExtensionsMapFlow.value -= pkgName
+            MacOSExtensionLoader.closeClassLoader(pkgName)
+            return
+        }
+
+        val result = MacOSExtensionLoader.loadExtension(
+            jarFile = jarFile,
+            trustStore = trustStore,
+            loadNsfw = loadNsfwSource,
+        )
+
+        when (result) {
+            is LoadResult.Success -> {
+                installedExtensionsMapFlow.value += pkgName to result.extension
+                untrustedExtensionsMapFlow.value -= pkgName
+            }
+            is LoadResult.Untrusted -> {
+                installedExtensionsMapFlow.value -= pkgName
+                untrustedExtensionsMapFlow.value += pkgName to result.extension
+            }
+            is LoadResult.Error -> {
+                installedExtensionsMapFlow.value -= pkgName
+                untrustedExtensionsMapFlow.value -= pkgName
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Available extensions (repository)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Fetch available extensions from a repository URL.
+     * Rate-limited to once per day per URL (matches Android behavior).
+     *
+     * @param repoBaseUrl Base URL of the extension repository
+     * @param force Bypass rate limiting
+     * @return List of available extensions
+     */
+    suspend fun findAvailableExtensions(
+        repoBaseUrl: String,
+        force: Boolean = false,
+    ): List<Extension.Available> {
+        // Rate limit: once per day (matches Android ExtensionApi behavior)
+        val now = Instant.now().toEpochMilli()
+        if (!force && now < lastExtensionCheck + 1.days.inWholeMilliseconds) {
+            logger.debug { "Rate limited extension check. Next allowed after ${lastExtensionCheck + 1.days.inWholeMilliseconds}" }
+            return availableExtensionsFlow.value
+        }
+
+        return try {
+            val indexUrl = "$repoBaseUrl/index.min.json"
+            val request = Request.Builder()
+                .url(indexUrl)
+                .get()
+                .build()
+
+            val response = networkHelper.client.newCall(request).execute()
+            val body = response.body?.string() ?: return emptyList()
+
+            val extList: List<ExtensionJsonObject> = json.decodeFromString(body)
+
+            val extensions = extList
+                .filter {
+                    val libVersion = it.extractLibVersion()
+                    libVersion >= MacOSExtensionLoader.LIB_VERSION_MIN &&
+                        libVersion <= MacOSExtensionLoader.LIB_VERSION_MAX
+                }
+                .map { it.toExtension(repoBaseUrl) }
+
+            availableExtensionsMapFlow.value = extensions.associateBy { it.pkgName }
+            updateInstalledStatuses(extensions)
+            lastExtensionCheck = now
+
+            extensions
+        } catch (e: Exception) {
+            logger.error(e) { "Failed to fetch extensions from $repoBaseUrl" }
+            emptyList()
+        }
+    }
+
+    private fun updateInstalledStatuses(availableExtensions: List<Extension.Available>) {
+        val installed = installedExtensionsMapFlow.value.toMutableMap()
+        var changed = false
+
+        for ((pkgName, extension) in installed) {
+            val availableExt = availableExtensions.find { it.pkgName == pkgName }
+            if (availableExt == null && !extension.isObsolete) {
+                installed[pkgName] = extension.copy(isObsolete = true)
+                changed = true
+            } else if (availableExt != null) {
+                val hasUpdate = availableExt.versionCode > extension.versionCode ||
+                    availableExt.libVersion > extension.libVersion
+                if (extension.hasUpdate != hasUpdate || extension.repoUrl != availableExt.repoUrl) {
+                    installed[pkgName] = extension.copy(
+                        hasUpdate = hasUpdate,
+                        repoUrl = availableExt.repoUrl,
+                    )
+                    changed = true
+                }
+            }
+        }
+
+        if (changed) {
+            installedExtensionsMapFlow.value = installed
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Install / Update / Remove
+    // -------------------------------------------------------------------------
+
+    /**
+     * Download and install an extension JAR.
+     */
+    suspend fun installExtension(
+        extension: Extension.Available,
+        onProgress: ((InstallStep) -> Unit)? = null,
+    ) {
+        val apkUrl = "${extension.repoUrl}/apk/${extension.apkName}"
+        val tempFile = File(extensionsDir, "${extension.pkgName}.jar.tmp")
+        val finalFile = File(extensionsDir, "${extension.pkgName}.jar")
+
+        try {
+            onProgress?.invoke(InstallStep.Downloading(0f))
+
+            val request = Request.Builder()
+                .url(apkUrl)
+                .get()
+                .build()
+
+            val response = networkHelper.client.newCall(request).execute()
+
+            if (!response.isSuccessful) {
+                throw IOException("Download failed: ${response.code} ${response.message}")
+            }
+
+            response.body?.byteStream()?.use { input ->
+                tempFile.outputStream().use { output ->
+                    val buffer = ByteArray(8 * 1024)
+                    val contentLength = response.body?.contentLength() ?: -1L
+                    var bytesRead: Int
+                    var totalRead = 0L
+
+                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                        output.write(buffer, 0, bytesRead)
+                        totalRead += bytesRead
+                        if (contentLength > 0) {
+                            onProgress?.invoke(
+                                InstallStep.Downloading(totalRead.toFloat() / contentLength)
+                            )
+                        }
+                    }
+                }
+            }
+
+            onProgress?.invoke(InstallStep.Installing)
+
+            // Replace existing JAR
+            if (finalFile.exists()) {
+                finalFile.delete()
+            }
+            tempFile.renameTo(finalFile)
+
+            onProgress?.invoke(InstallStep.Complete)
+
+            // Load only the newly installed extension
+            reloadExtension(extension.pkgName)
+
+            logger.info { "Installed extension: ${extension.pkgName}" }
+        } catch (e: Exception) {
+            tempFile.delete()
+            logger.error(e) { "Failed to install extension: ${extension.pkgName}" }
+            onProgress?.invoke(InstallStep.Error(e.message ?: "Unknown error"))
+            throw e
+        }
+    }
+
+    /**
+     * Update an installed extension.
+     */
+    suspend fun updateExtension(
+        extension: Extension.Installed,
+        onProgress: ((InstallStep) -> Unit)? = null,
+    ) {
+        val availableExt = availableExtensionsMapFlow.value[extension.pkgName]
+            ?: throw IllegalStateException("No available update for ${extension.pkgName}")
+        installExtension(availableExt, onProgress)
+    }
+
+    /**
+     * Remove (uninstall) an extension.
+     */
+    fun removeExtension(extension: Extension) {
+        MacOSExtensionLoader.closeClassLoader(extension.pkgName)
+
+        val jarFile = File(extensionsDir, "${extension.pkgName}.jar")
+        if (jarFile.exists()) {
+            jarFile.delete()
+            logger.info { "Removed extension: ${extension.pkgName}" }
+        }
+
+        installedExtensionsMapFlow.value -= extension.pkgName
+        untrustedExtensionsMapFlow.value -= extension.pkgName
+    }
+
+    // -------------------------------------------------------------------------
+    // Trust management
+    // -------------------------------------------------------------------------
+
+    private fun loadTrustStore() {
+        if (!trustFile.isFile) return
+        try {
+            val content = trustFile.readText()
+            val entries: List<MacOSExtensionLoader.TrustEntry> = json.decodeFromString(content)
+            trustStore = entries
+                .groupByTo(mutableMapOf()) { it.pkgName }
+                .mapValues { (_, v) -> v.toMutableList() }
+                .toMutableMap()
+        } catch (e: Exception) {
+            logger.error(e) { "Failed to load trust store" }
+        }
+    }
+
+    private fun saveTrustStore() {
+        try {
+            val entries = trustStore.values.flatten()
+            trustFile.writeText(
+                json.encodeToString(
+                    ListSerializer(MacOSExtensionLoader.TrustEntry.serializer()),
+                    entries,
+                )
+            )
+        } catch (e: Exception) {
+            logger.error(e) { "Failed to save trust store" }
+        }
+    }
+
+    /**
+     * Trust an untrusted extension.
+     */
+    fun trustExtension(extension: Extension.Untrusted) {
+        val entry = MacOSExtensionLoader.TrustEntry(
+            pkgName = extension.pkgName,
+            versionCode = extension.versionCode,
+            signatureHash = extension.signatureHash,
+        )
+
+        trustStore.getOrPut(extension.pkgName) { mutableListOf() }.add(entry)
+        saveTrustStore()
+
+        // Remove from untrusted and reload
+        untrustedExtensionsMapFlow.value -= extension.pkgName
+        reloadExtension(extension.pkgName)
+
+        logger.info { "Trusted extension: ${extension.pkgName}" }
+    }
+
+    /**
+     * Check if a package is trusted.
+     */
+    fun isTrusted(pkgName: String, signatureHash: String): Boolean {
+        return trustStore[pkgName]?.any { it.signatureHash == signatureHash } == true
+    }
+
+    /**
+     * Revoke trust for a package.
+     */
+    fun revokeTrust(pkgName: String) {
+        trustStore.remove(pkgName)
+        saveTrustStore()
+        reloadExtension(pkgName)
+    }
+
+    // -------------------------------------------------------------------------
+    // Lifecycle
+    // -------------------------------------------------------------------------
+
+    /**
+     * Shut down the extension manager. Cancels coroutine scope and closes all class loaders.
+     */
+    override fun close() {
+        scope.cancel()
+        MacOSExtensionLoader.closeAll()
+        logger.info { "Extension manager shut down" }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Extension JSON models (matches Android ExtensionApi format)
+// ---------------------------------------------------------------------------
+
+@Serializable
+private data class ExtensionJsonObject(
+    val name: String,
+    val pkg: String,
+    val apk: String,
+    val lang: String,
+    val code: Long,
+    val version: String,
+    val nsfw: Int = 0,
+    val torrent: Int = 0,
+    val sources: List<ExtensionSourceJsonObject>? = null,
+)
+
+@Serializable
+private data class ExtensionSourceJsonObject(
+    val id: Long,
+    val lang: String,
+    val name: String,
+    val baseUrl: String,
+)
+
+private fun ExtensionJsonObject.extractLibVersion(): Double {
+    return version.substringBeforeLast('.').toDouble()
+}
+
+private fun ExtensionJsonObject.toExtension(repoUrl: String): Extension.Available {
+    return Extension.Available(
+        name = name.substringAfter("Aniyomi: "),
+        pkgName = pkg,
+        versionName = version,
+        versionCode = code,
+        libVersion = extractLibVersion(),
+        lang = lang,
+        isNsfw = nsfw == 1,
+        isTorrent = torrent == 1,
+        sources = sources?.map { source ->
+            Extension.Available.AnimeSource(
+                id = source.id,
+                lang = source.lang,
+                name = source.name,
+                baseUrl = source.baseUrl,
+            )
+        }.orEmpty(),
+        apkName = apk,
+        iconUrl = "$repoUrl/icon/$pkg.png",
+        repoUrl = repoUrl,
+    )
+}

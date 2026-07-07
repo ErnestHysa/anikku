@@ -37,6 +37,9 @@ sqldelight-coroutines = { module = "app.cash.sqldelight:coroutines-extensions-jv
 # Shared module dependencies (desktop-compatible)
 rxjava = { module = "io.reactivex:rxjava", version.ref = "rxjava" }
 okhttp-core = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
+okhttp-logging = { module = "com.squareup.okhttp3:logging-interceptor", version.ref = "okhttp" }
+okhttp-brotli = { module = "com.squareup.okhttp3:okhttp-brotli", version.ref = "okhttp" }
+okhttp-dnsoverhttps = { module = "com.squareup.okhttp3:okhttp-dnsoverhttps", version.ref = "okhttp" }
 okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
 jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
 disklrucache = { module = "com.jakewharton:disklrucache", version.ref = "disklrucache" }
