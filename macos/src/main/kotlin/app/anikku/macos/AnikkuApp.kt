@@ -41,7 +41,7 @@ fun main() = application {
         state = windowState,
     ) {
         // Shared settings state — wired to both the theme system and the Settings screen
-        val settingsState = remember { SettingsState() }
+        val settingsState = remember { SettingsState(app.preferenceStore) }
 
         // Set up the macOS native menu bar via java.awt
         // (Compose Desktop MenuBar/Menu/Item composable API unavailable in 1.11.x)
