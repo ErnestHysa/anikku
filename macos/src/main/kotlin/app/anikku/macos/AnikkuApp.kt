@@ -5,10 +5,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import app.anikku.macos.ui.MacOSMenuBarFactory
 import app.anikku.macos.ui.MainWindow
+import app.anikku.macos.ui.TabSwitchHandler
+import app.anikku.macos.ui.settings.LocalSettingsState
+import app.anikku.macos.ui.settings.SettingsState
 import app.anikku.macos.ui.theme.AnikkuTheme
-import app.anikku.macos.ui.theme.AnikkuTheme.Theme
 import java.awt.Frame
 
 /**
@@ -36,20 +40,25 @@ fun main() = application {
         title = "Anikku",
         state = windowState,
     ) {
+        // Shared settings state — wired to both the theme system and the Settings screen
+        val settingsState = remember { SettingsState() }
+
         // Set up the macOS native menu bar via java.awt
         // (Compose Desktop MenuBar/Menu/Item composable API unavailable in 1.11.x)
         val onQuit = { exitApplication() }
-        val onSettings = { /* TODO: Phase 5 — Navigate to Settings screen */ }
+        val onSettings = { TabSwitchHandler.switchTo(4) }
         val onOpenBackup = { /* TODO: Phase 7 — Open file picker for .tachibk backup */ }
         (window as? Frame)?.let { frame ->
             MacOSMenuBarFactory.attach(frame, onQuit, onSettings, onOpenBackup)
         }
 
-        AnikkuTheme(
-            theme = Theme.DEFAULT,
-            isAmoledOLED = false,
-        ) {
-            MainWindow()
+        CompositionLocalProvider(LocalSettingsState provides settingsState) {
+            AnikkuTheme(
+                theme = settingsState.theme,
+                isAmoledOLED = settingsState.isAmoledOLED,
+            ) {
+                MainWindow()
+            }
         }
     }
 }

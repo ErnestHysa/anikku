@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.anikku.macos.ui.AnikkuScreen
+import app.anikku.macos.ui.settings.SettingsScreen
 import cafe.adriel.voyager.navigator.tab.Tab
 import cafe.adriel.voyager.navigator.tab.TabOptions
 
@@ -110,11 +111,7 @@ object MoreScreen : AnikkuScreen(), Tab {
 
     @Composable
     override fun Content() {
-        PlaceholderTabContent(
-            title = "More",
-            description = "Settings, backups, statistics, and more.\nConfigure Anikku to your liking.",
-            icon = Icons.Outlined.MoreVert,
-        )
+        SettingsScreen()
     }
 
     override val options: TabOptions
