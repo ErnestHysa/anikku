@@ -71,6 +71,16 @@ dependencies {
     // JNA - Java Native Access for macOS native API calls
     implementation(libs.jna.core)
     implementation(libs.jna.platform)
+
+    // Testing
+    testImplementation(libs.junit.jupiter)
+}
+
+tasks.test {
+    useJUnitPlatform()
+    testLogging {
+        events("passed", "failed", "skipped")
+    }
 }
 
 compose.desktop {
