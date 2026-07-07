@@ -62,21 +62,18 @@ fun AnimeGridCard(
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
     ) {
         Column {
-            // Cover placeholder with gradient overlay
+            // Cover image loaded via Coil 3, with initials as fallback
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(3f / 4f)
-                    .clip(RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainerHighest),
-                contentAlignment = Alignment.Center,
+                    .clip(RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)),
             ) {
-                // Title initial as placeholder
-                Text(
-                    text = anime.title.take(2).uppercase(),
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold,
+                AnimeCoverImage(
+                    thumbnailUrl = anime.thumbnailUrl,
+                    contentDescription = anime.title,
+                    title = anime.title,
+                    modifier = Modifier.fillMaxSize(),
                 )
 
                 // Bottom gradient overlay
@@ -142,21 +139,15 @@ fun AnimeListItem(
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Cover placeholder
-        Box(
+        // Cover image loaded via Coil 3
+        AnimeCoverImage(
+            thumbnailUrl = anime.thumbnailUrl,
+            contentDescription = anime.title,
+            title = anime.title,
             modifier = Modifier
                 .size(56.dp)
-                .clip(RoundedCornerShape(6.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainerHighest),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = anime.title.take(2).uppercase(),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold,
-            )
-        }
+                .clip(RoundedCornerShape(6.dp)),
+        )
 
         Spacer(Modifier.width(12.dp))
 

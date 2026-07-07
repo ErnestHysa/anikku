@@ -1,0 +1,475 @@
+package app.anikku.macos.player
+
+import com.sun.jna.Library
+import com.sun.jna.Memory
+import com.sun.jna.Native
+import com.sun.jna.Pointer
+import com.sun.jna.ptr.LongByReference
+import com.sun.jna.ptr.PointerByReference
+import io.github.oshai.kotlinlogging.KotlinLogging
+import java.io.File
+
+private val logger = KotlinLogging.logger {}
+
+/**
+ * JNA interface mapping to libmpv's C API.
+ *
+ * This mirrors the API surface used by the Android app (is.xyz.mpv.MPVLib)
+ * so that the player subsystem can use the same patterns.
+ *
+ * **Usage:** Call [MPVLib.initialize] before any other methods.
+ * If libmpv cannot be loaded, [isAvailable] returns false and all operations
+ * become no-ops with logged warnings.
+ *
+ * ## Supported property/option mapping
+ *
+ * | Android MPVLib call | Equivalent JNA call |
+ * |---|---|
+ * | `MPVLib.create()` | `{@code create()}` |
+ * | `MPVLib.setOptionString(k, v)` | `{@code setOptionString(handle, k, v)}` |
+ * | `MPVLib.setPropertyString(k, v)` | `{@code setPropertyString(handle, k, v)}` |
+ * | `MPVLib.command(args)` | `{@code command(handle, args)}` |
+ * | `MPVLib.event()` | `{@code waitEvent(handle, timeout)}` |
+ *
+ * @see <a href="https://mpv.io/manual/stable/#c-api">mpv C API documentation</a>
+ */
+object MPVLib {
+
+    private var isInitialized = false
+
+    /** Whether libmpv was successfully loaded and is available for use. */
+    val isAvailable: Boolean get() = isInitialized
+
+    /**
+     * Attempt to load libmpv from standard locations.
+     *
+     * Search order:
+     * 1. Bundle path: `Anikku.app/Contents/Frameworks/libmpv.1.dylib`
+     * 2. Homebrew: `/opt/homebrew/lib/libmpv.1.dylib` (Apple Silicon)
+     * 3. Homebrew (Intel): `/usr/local/lib/libmpv.1.dylib`
+     * 4. MacPorts: `/opt/local/lib/libmpv.1.dylib`
+     * 5. System `java.library.path`
+     * 6. Default JNA lookup (DYLD_LIBRARY_PATH, etc.)
+     */
+    fun initialize() {
+        if (isInitialized) return
+
+        val libraryPaths = listOfNotNull(
+            // Bundle path (Phase 6.1)
+            findBundleLibrary(),
+            // Homebrew Apple Silicon
+            "/opt/homebrew/lib/libmpv.1.dylib",
+            // Homebrew Intel
+            "/usr/local/lib/libmpv.1.dylib",
+            // MacPorts
+            "/opt/local/lib/libmpv.1.dylib",
+        ).filter { File(it).isFile }
+
+        val libPath = libraryPaths.firstOrNull()
+
+        if (libPath == null) {
+            logger.warn { "libmpv.1.dylib not found. Attempting JNA default lookup..." }
+        }
+
+        try {
+            val lib = if (libPath != null) {
+                logger.info { "Loading libmpv from: $libPath" }
+                Native.load(libPath, MPVNatives::class.java) as MPVNatives
+            } else {
+                logger.info { "Loading libmpv via JNA default lookup" }
+                Native.load("mpv", MPVNatives::class.java) as MPVNatives
+            }
+            instance = lib
+            isInitialized = true
+            logger.info { "libmpv loaded successfully" }
+        } catch (e: UnsatisfiedLinkError) {
+            logger.error(e) { "Failed to load libmpv — video playback unavailable" }
+            logger.warn { "Install mpv via: brew install mpv" }
+            logger.warn { "Or bundle libmpv.1.dylib in Anikku.app/Contents/Frameworks/" }
+            instance = null
+            isInitialized = false
+        }
+    }
+
+    private fun findBundleLibrary(): String? {
+        // Check several possible bundle-relative paths
+        val candidates = listOf(
+            // Running from IDE — check relative paths
+            "../Frameworks/libmpv.1.dylib",
+            "../../Frameworks/libmpv.1.dylib",
+            // jpackage standard
+            "../lib/libmpv.1.dylib",
+        )
+        return candidates.firstOrNull { File(it).isFile }
+    }
+
+    // -------------------------------------------------------------------------
+    // Delegated native calls
+    // -------------------------------------------------------------------------
+
+    private var instance: MPVNatives? = null
+
+    private fun checkAvailable(): MPVNatives {
+        if (!isInitialized) initialize()
+        return instance ?: error("libmpv not available. Install via: brew install mpv")
+    }
+
+    /** Create a new mpv handle. */
+    fun create(): Pointer = checkAvailable().mpv_create()
+
+    /** Initialize an mpv handle after setting options. */
+    fun initialize(handle: Pointer): Int = checkAvailable().mpv_initialize(handle)
+
+    /** Destroy an mpv handle and free resources. */
+    fun destroy(handle: Pointer) {
+        try {
+            checkAvailable().mpv_destroy(handle)
+        } catch (_: Exception) {
+            // Already destroyed — safe to ignore
+        }
+    }
+
+    /** Set a string option before mpv_initialize. */
+    fun setOptionString(handle: Pointer, name: String, value: String): Int =
+        checkAvailable().mpv_set_option_string(handle, name, value)
+
+    /** Set a string property at runtime. */
+    fun setPropertyString(handle: Pointer, name: String, value: String): Int =
+        checkAvailable().mpv_set_property_string(handle, name, value)
+
+    /** Set an integer property at runtime. */
+    fun setPropertyInt(handle: Pointer, name: String, value: Int): Int =
+        checkAvailable().mpv_set_property(handle, name, FORMAT_INT64, LongByReference(value.toLong()))
+
+    /** Set a double property at runtime. */
+    fun setPropertyDouble(handle: Pointer, name: String, value: Double): Int =
+        checkAvailable().mpv_set_property(handle, name, FORMAT_DOUBLE, DoubleArrayHolder(value).pointer)
+
+    /** Get a string property. */
+    fun getPropertyString(handle: Pointer, name: String): String? {
+        val ptr = PointerByReference()
+        val result = checkAvailable().mpv_get_property(handle, name, FORMAT_STRING, ptr)
+        if (result >= 0 && ptr.value != null) {
+            val str = ptr.value.getString(0)
+            checkAvailable().mpv_free(ptr.value)
+            return str
+        }
+        return null
+    }
+
+    /** Get an integer property. */
+    fun getPropertyInt(handle: Pointer, name: String, default: Int = 0): Int {
+        val ref = LongByReference()
+        val result = checkAvailable().mpv_get_property(handle, name, FORMAT_INT64, ref)
+        return if (result >= 0) ref.value.toInt() else default
+    }
+
+    /** Get a double property. */
+    fun getPropertyDouble(handle: Pointer, name: String, default: Double = 0.0): Double {
+        val holder = DoubleArrayHolder()
+        val result = checkAvailable().mpv_get_property(handle, name, FORMAT_DOUBLE, holder.pointer)
+        return if (result >= 0) holder.value else default
+    }
+
+    /** Get a flag (boolean) property. */
+    fun getPropertyFlag(handle: Pointer, name: String, default: Boolean = false): Boolean {
+        val ref = LongByReference()
+        val result = checkAvailable().mpv_get_property(handle, name, FORMAT_FLAG, ref)
+        return if (result >= 0) ref.value != 0L else default
+    }
+
+    /** Send a command to mpv (varargs version). */
+    fun command(handle: Pointer, vararg args: String): Int {
+        return command(handle, args)
+    }
+
+    /** Send a command to mpv. */
+    fun command(handle: Pointer, args: Array<out String>): Int {
+        // JNA requires null-terminated array of C strings
+        val cArgs = args.map { it.ifEmpty { null } }.toTypedArray()
+        return checkAvailable().mpv_command(handle, cArgs)
+    }
+
+    /** Observe a property for changes. */
+    fun observeProperty(handle: Pointer, replyUserdata: Long, name: String, format: Int): Int =
+        checkAvailable().mpv_observe_property(handle, replyUserdata, name, format)
+
+    /** Unobserve a property. */
+    fun unobserveProperty(handle: Pointer, replyUserdata: Long): Int =
+        checkAvailable().mpv_unobserve_property(handle, replyUserdata)
+
+    /** Request a property change event. */
+    fun requestEvent(handle: Pointer, event: Int, enable: Boolean): Int =
+        checkAvailable().mpv_request_event(handle, event, if (enable) 1 else 0)
+
+    /** Wait for the next mpv event (blocking). Timeout in seconds (0 = no wait). */
+    fun waitEvent(handle: Pointer, timeout: Double = 0.0): MPVEvent? {
+        val ptr = checkAvailable().mpv_wait_event(handle, timeout)
+        if (ptr == null || ptr == Pointer.NULL) return null
+        val event = MPVEvent(ptr)
+        return if (event.eventId == MPV_EVENT_NONE) null else event
+    }
+
+    /** Get the mpv client name. */
+    fun clientName(handle: Pointer): String =
+        checkAvailable().mpv_client_name(handle)?.getString(0) ?: "unknown"
+
+    /** Get the mpv version number. */
+    fun getVersion(): Long = checkAvailable().mpv_client_api_version()
+
+    /** Suspend/resume the main loop (useful during render context operations). */
+    fun suspend(handle: Pointer) = checkAvailable().mpv_suspend(handle)
+    fun resume(handle: Pointer) = checkAvailable().mpv_resume(handle)
+
+    // -------------------------------------------------------------------------
+    // Format constants
+    // -------------------------------------------------------------------------
+
+    const val FORMAT_NONE = 0
+    const val FORMAT_STRING = 1
+    const val FORMAT_OSD_STRING = 2
+    const val FORMAT_FLAG = 3
+    const val FORMAT_INT64 = 4
+    const val FORMAT_DOUBLE = 5
+    const val FORMAT_NODE = 6
+    const val FORMAT_NODE_ARRAY = 7
+    const val FORMAT_NODE_MAP = 8
+    const val FORMAT_BYTE_ARRAY = 9
+
+    // -------------------------------------------------------------------------
+    // Event ID constants (matches mpv_event_id enum)
+    // -------------------------------------------------------------------------
+
+    const val MPV_EVENT_NONE = 0
+    const val MPV_EVENT_SHUTDOWN = 1
+    const val MPV_EVENT_LOG_MESSAGE = 2
+    const val MPV_EVENT_GET_CPU_REQUEST = 3
+    const val MPV_EVENT_GET_CPU_REPLY = 4
+    const val MPV_EVENT_CLIENT_MESSAGE = 6
+    const val MPV_EVENT_VIDEO_RECONFIG = 8
+    const val MPV_EVENT_AUDIO_RECONFIG = 9
+    const val MPV_EVENT_SEEK = 11
+    const val MPV_EVENT_PLAYBACK_RESTART = 12
+    const val MPV_EVENT_PROPERTY_CHANGE = 23
+    const val MPV_EVENT_FILE_LOADED = 26
+    const val MPV_EVENT_END_FILE = 27
+    const val MPV_EVENT_HOOK = 32
+
+    // -------------------------------------------------------------------------
+    // End file reason constants
+    // -------------------------------------------------------------------------
+
+    const val END_FILE_REASON_EOF = 0
+    const val END_FILE_REASON_STOP = 1
+    const val END_FILE_REASON_QUIT = 2
+    const val END_FILE_REASON_ERROR = 3
+    const val END_FILE_REASON_REDIRECT = 4
+
+    // -------------------------------------------------------------------------
+    // Log level constants
+    // -------------------------------------------------------------------------
+
+    const val LOG_LEVEL_NONE = 0
+    const val LOG_LEVEL_FATAL = 10
+    const val LOG_LEVEL_ERROR = 20
+    const val LOG_LEVEL_WARN = 30
+    const val LOG_LEVEL_INFO = 40
+    const val LOG_LEVEL_V = 50
+    const val LOG_LEVEL_DEBUG = 60
+    const val LOG_LEVEL_TRACE = 70
+
+    // -------------------------------------------------------------------------
+    // Error code constants
+    // -------------------------------------------------------------------------
+
+    const val ERROR_SUCCESS = 0
+    const val ERROR_EVENT_QUEUE_FULL = -1
+    const val ERROR_NOMEM = -2
+    const val ERROR_UNINITIALIZED = -3
+    const val ERROR_INVALID_PARAMETER = -4
+    const val ERROR_OPTION_NOT_FOUND = -5
+    const val ERROR_OPTION_FORMAT = -6
+    const val ERROR_OPTION_ERROR = -7
+    const val ERROR_PROPERTY_NOT_FOUND = -8
+    const val ERROR_PROPERTY_FORMAT = -9
+    const val ERROR_PROPERTY_UNAVAILABLE = -10
+    const val ERROR_PROPERTY_ERROR = -11
+    const val ERROR_COMMAND = -12
+    const val ERROR_LOADING_FAILED = -13
+    const val ERROR_AO_INIT_FAILED = -14
+    const val ERROR_VO_INIT_FAILED = -15
+    const val ERROR_NOTHING_TO_PLAY = -16
+    const val ERROR_UNKNOWN_FORMAT = -17
+    const val ERROR_UNSUPPORTED = -18
+    const val ERROR_NOT_IMPLEMENTED = -19
+
+    // -------------------------------------------------------------------------
+    // Render API constants
+    // -------------------------------------------------------------------------
+
+    const val RENDER_PARAM_INVALID = 0
+    const val RENDER_PARAM_API_TYPE = 1
+    const val RENDER_PARAM_OPENGL_INIT_PARAMS = 3
+    const val RENDER_PARAM_OPENGL_FBO = 6
+    const val RENDER_PARAM_FLIP_Y = 7
+    const val RENDER_PARAM_DEPTH = 8
+    const val RENDER_PARAM_ICC_PROFILE = 9
+    const val RENDER_PARAM_AMBIENT_LIGHT = 10
+    const val RENDER_PARAM_X11 = 11
+    const val RENDER_PARAM_WL = 12
+    const val RENDER_PARAM_SW = 13
+    const val RENDER_PARAM_OPENGL_FBO_SIZE = 14
+    const val RENDER_PARAM_NEXT_FRAME_INFO = 15
+    const val RENDER_PARAM_BLOCK_FOR_TARGET_TIME = 16
+    const val RENDER_PARAM_SKIP_RENDERING = 17
+    const val RENDER_PARAM_DRM_DISPLAY = 18
+    const val RENDER_PARAM_DRM_DRAW_SURFACE_SIZE = 19
+
+    // -------------------------------------------------------------------------
+    // Render API type constants
+    // -------------------------------------------------------------------------
+
+    const val RENDER_API_TYPE_OPENGL = "opengl"
+    const val RENDER_API_TYPE_SW = "sw"
+    const val RENDER_API_TYPE_LIBPLACEBO = "libplacebo"
+
+    // -------------------------------------------------------------------------
+    // Utility helper — JNA structure for double values
+    // -------------------------------------------------------------------------
+
+    private class DoubleArrayHolder(value: Double = 0.0) {
+        private val memory = Memory(8).also { it.setDouble(0, value) }
+        val pointer: Pointer get() = memory
+        val value: Double get() = memory.getDouble(0)
+    }
+}
+
+// -------------------------------------------------------------------------
+// JNA Native interface — direct mappings to libmpv C API
+// -------------------------------------------------------------------------
+
+private interface MPVNatives : Library {
+
+    /** Create a new mpv instance (mpv_create). */
+    fun mpv_create(): Pointer
+
+    /** Initialize an mpv instance (mpv_initialize). */
+    fun mpv_initialize(handle: Pointer): Int
+
+    /** Destroy an mpv instance (mpv_destroy). */
+    fun mpv_destroy(handle: Pointer)
+
+    /** Set a string option (mpv_set_option_string). */
+    fun mpv_set_option_string(handle: Pointer, name: String, value: String): Int
+
+    /** Set a property as string (mpv_set_property_string). */
+    fun mpv_set_property_string(handle: Pointer, name: String, value: String): Int
+
+    /** Set a property with format (mpv_set_property). */
+    fun mpv_set_property(handle: Pointer, name: String, format: Int, data: Pointer): Int
+
+    /** Get a property with format (mpv_get_property). */
+    fun mpv_get_property(handle: Pointer, name: String, format: Int, data: Pointer): Int
+
+    /** Send a command (mpv_command — null-terminated string array). */
+    fun mpv_command(handle: Pointer, args: Array<String?>): Int
+
+    /** Observe a property (mpv_observe_property). */
+    fun mpv_observe_property(handle: Pointer, replyUserdata: Long, name: String, format: Int): Int
+
+    /** Unobserve a property (mpv_unobserve_property). */
+    fun mpv_unobserve_property(handle: Pointer, replyUserdata: Long): Int
+
+    /** Request an event (mpv_request_event). */
+    fun mpv_request_event(handle: Pointer, event: Int, enable: Int): Int
+
+    /** Wait for the next event (mpv_wait_event). */
+    fun mpv_wait_event(handle: Pointer, timeout: Double): Pointer
+
+    /** Free a string returned by mpv (mpv_free). */
+    fun mpv_free(data: Pointer)
+
+    /** Get the client name (mpv_client_name). */
+    fun mpv_client_name(handle: Pointer): Pointer
+
+    /** Get the client API version (mpv_client_api_version). */
+    fun mpv_client_api_version(): Long
+
+    /** Suspend the main loop (mpv_suspend). */
+    fun mpv_suspend(handle: Pointer)
+
+    /** Resume the main loop (mpv_resume). */
+    fun mpv_resume(handle: Pointer)
+}
+
+// -------------------------------------------------------------------------
+// MPV Event structure wrapper
+// -------------------------------------------------------------------------
+
+/**
+ * Wraps a native mpv_event struct pointer for safe Kotlin access.
+ *
+ * Fields (matching mpv_event C struct):
+ * - event_id: Int
+ * - error: Int
+ * - reply_userdata: Long
+ * - data: Pointer (event-specific data)
+ */
+class MPVEvent(nativePointer: Pointer) {
+
+    val eventId: Int
+    val error: Int
+    val replyUserdata: Long
+    val data: Pointer
+
+    init {
+        // mpv_event struct layout (platform-dependent offsets):
+        // event_id: 4 bytes at offset 0 (int)
+        // error: 4 bytes at offset 4 (int)
+        // reply_userdata: 8 bytes at offset 8 (uint64_t)
+        // data: pointer at offset 16 (void*)
+        eventId = nativePointer.getInt(0)
+        error = nativePointer.getInt(4)
+        replyUserdata = nativePointer.getLong(8)
+        data = nativePointer.getPointer(16)
+    }
+
+    /** Returns a human-readable name for the event ID. */
+    fun eventName(): String = when (eventId) {
+        MPVLib.MPV_EVENT_NONE -> "none"
+        MPVLib.MPV_EVENT_SHUTDOWN -> "shutdown"
+        MPVLib.MPV_EVENT_LOG_MESSAGE -> "log_message"
+        MPVLib.MPV_EVENT_VIDEO_RECONFIG -> "video_reconfig"
+        MPVLib.MPV_EVENT_AUDIO_RECONFIG -> "audio_reconfig"
+        MPVLib.MPV_EVENT_SEEK -> "seek"
+        MPVLib.MPV_EVENT_PLAYBACK_RESTART -> "playback_restart"
+        MPVLib.MPV_EVENT_PROPERTY_CHANGE -> "property_change"
+        MPVLib.MPV_EVENT_FILE_LOADED -> "file_loaded"
+        MPVLib.MPV_EVENT_END_FILE -> "end_file"
+        MPVLib.MPV_EVENT_HOOK -> "hook"
+        else -> "unknown($eventId)"
+    }
+}
+
+/**
+ * Result of loading a file into mpv.
+ */
+enum class LoadResult {
+    SUCCESS,
+    FAILED,
+    UNSUPPORTED_FORMAT,
+}
+
+/**
+ * Represents the current playback state.
+ */
+enum class PlaybackState {
+    IDLE,
+    LOADING,
+    PLAYING,
+    PAUSED,
+    SEEKING,
+    BUFFERING,
+    ENDED,
+    ERROR,
+}

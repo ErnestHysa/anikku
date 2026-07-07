@@ -67,6 +67,9 @@ dependencies {
     implementation(libs.disklrucache)
     implementation(libs.kotlinx.immutables)
 
+    // NanoHTTPd — embedded HTTP server for local video streaming (Phase 6.6)
+    implementation(libs.nanohttpd)
+
     // JNA - Java Native Access for macOS native API calls
     implementation(libs.jna.core)
     implementation(libs.jna.platform)

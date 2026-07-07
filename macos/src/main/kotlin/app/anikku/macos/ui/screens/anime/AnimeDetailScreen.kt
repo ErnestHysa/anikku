@@ -1,6 +1,10 @@
 package app.anikku.macos.ui.screens.anime
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.TooltipArea
+import androidx.compose.foundation.TooltipPlacement
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,7 +23,15 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.outlined.DoneAll
+import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.OpenInBrowser
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material3.Button
@@ -30,11 +42,15 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,17 +58,37 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
+import app.anikku.macos.platform.MacOSShareUtil
+import app.anikku.macos.platform.preference.LocalBookmarkStore
 import app.anikku.macos.ui.AnikkuScreen
+import app.anikku.macos.ui.components.AnimeCoverImage
+import app.anikku.macos.ui.components.LocalToastHost
+import app.anikku.macos.ui.components.ToastDuration
 import app.anikku.macos.ui.screens.models.AnimeModel
 import app.anikku.macos.ui.screens.models.EpisodeModel
 import app.anikku.macos.ui.screens.models.MockData
+import app.anikku.macos.ui.screens.player.PlayerScreen
 import cafe.adriel.voyager.core.screen.ScreenKey
 import cafe.adriel.voyager.core.screen.uniqueScreenKey
 import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.currentOrThrow
+import java.awt.Desktop
+import java.awt.Toolkit
+import java.awt.datatransfer.StringSelection
+import java.net.URI
 
 /**
  * Anime detail screen — Phase 5.7.
@@ -74,28 +110,159 @@ data class AnimeDetailScreen(
     @Composable
     override fun Content() {
         val navigator = LocalNavigator.currentOrThrow
+        val toastHost = LocalToastHost.current
+        val bookmarkStore = LocalBookmarkStore.current
+        val focusRequester = remember { FocusRequester() }
 
         // Look up anime from MockData by ID
         var anime by remember { mutableStateOf(MockData.sampleAnime.find { it.id == animeId }) }
-        val episodes = remember { MockData.sampleEpisodes.filter { it.animeId == animeId } }
+        var episodes by remember {
+            val bookmarkedIds = bookmarkStore.getBookmarkedIds()
+            val baseEpisodes = MockData.sampleEpisodes.filter { it.animeId == animeId }
+            mutableStateOf(
+                baseEpisodes.map { ep ->
+                    if (ep.id in bookmarkedIds) ep.copy(bookmark = true) else ep
+                }
+            )
+        }
 
-        AnimeDetailContent(
-            anime = anime,
-            episodes = episodes,
-            onBack = { navigator.pop() },
-            onPlayEpisode = { _ ->
-                // TODO: Phase 6 — Navigate to player
-            },
-        )
+        // Request focus on mount so keyboard shortcuts work immediately
+        LaunchedEffect(Unit) {
+            focusRequester.requestFocus()
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .focusRequester(focusRequester)
+                .focusable()
+                .onKeyEvent { event ->
+                    if (event.type == KeyEventType.KeyDown &&
+                        event.key == Key.S &&
+                        event.isMetaPressed
+                    ) {
+                        // Share action — matches tooltip hint "Share  (⌘S)"
+                        val url = anime?.url
+                        if (url != null) {
+                            val shared = MacOSShareUtil.shareUrl(
+                                title = "Anikku",
+                                text = url,
+                                description = "${anime?.title} — URL copied to clipboard",
+                            )
+                            if (shared) {
+                                toastHost.show("URL ready to share", ToastDuration.SHORT)
+                            } else {
+                                toastHost.show("Could not share", ToastDuration.SHORT)
+                            }
+                        } else {
+                            toastHost.show("No URL available", ToastDuration.SHORT)
+                        }
+                        true
+                    } else {
+                        false
+                    }
+                },
+        ) {
+            AnimeDetailContent(
+                anime = anime,
+                episodes = episodes,
+                isFavorite = anime?.favorite ?: false,
+                onToggleFavorite = {
+                    val updated = anime?.copy(favorite = !anime!!.favorite)
+                    if (updated != null) {
+                        anime = updated
+                        if (updated.favorite) {
+                            toastHost.show("Added to favorites", ToastDuration.SHORT)
+                        } else {
+                            toastHost.show("Removed from favorites", ToastDuration.SHORT)
+                        }
+                    }
+                },
+                onToggleBookmark = { episodeId ->
+                    val newState = bookmarkStore.toggleBookmark(episodeId)
+                    episodes = episodes.map { ep ->
+                        if (ep.id == episodeId) {
+                            ep.copy(bookmark = newState)
+                        } else {
+                            ep
+                        }
+                    }
+                    toastHost.show(if (newState) "Episode bookmarked" else "Bookmark removed", ToastDuration.SHORT)
+                },
+                onMarkAllSeen = {
+                    val unseenCount = episodes.count { !it.seen }
+                    if (unseenCount == 0) {
+                        toastHost.show("All episodes already seen", ToastDuration.SHORT)
+                    } else {
+                        episodes = episodes.map { it.copy(seen = true) }
+                        toastHost.show("Marked $unseenCount episodes as seen", ToastDuration.SHORT)
+                    }
+                },
+                onShare = {
+                    val url = anime?.url
+                    if (url != null) {
+                        val shared = MacOSShareUtil.shareUrl(
+                            title = "Anikku",
+                            text = url,
+                            description = "${anime?.title} — URL copied to clipboard",
+                        )
+                        if (shared) {
+                            toastHost.show("URL ready to share", ToastDuration.SHORT)
+                        } else {
+                            toastHost.show("Could not share", ToastDuration.SHORT)
+                        }
+                    } else {
+                        toastHost.show("No URL available", ToastDuration.SHORT)
+                    }
+                },
+                onCopyUrl = {
+                    val url = anime?.url
+                    if (url != null) {
+                        try {
+                            val clipboard = Toolkit.getDefaultToolkit().systemClipboard
+                            clipboard.setContents(StringSelection(url), null)
+                            toastHost.show("URL copied to clipboard", ToastDuration.SHORT)
+                        } catch (_: Exception) {
+                            toastHost.show("Could not copy URL", ToastDuration.SHORT)
+                        }
+                    } else {
+                        toastHost.show("No URL available", ToastDuration.SHORT)
+                    }
+                },
+                onOpenInBrowser = {
+                    val url = anime?.url
+                    if (url != null) {
+                        try {
+                            Desktop.getDesktop().browse(URI(url))
+                        } catch (_: Exception) {
+                            toastHost.show("Could not open browser", ToastDuration.SHORT)
+                        }
+                    } else {
+                        toastHost.show("No URL available", ToastDuration.SHORT)
+                    }
+                },
+                onBack = { navigator.pop() },
+                onPlayEpisode = { episode ->
+                    navigator.push(PlayerScreen(animeId = animeId, episodeId = episode.id))
+                },
+            )
+        }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun AnimeDetailContent(
     anime: AnimeModel?,
     episodes: List<EpisodeModel>,
+    isFavorite: Boolean,
+    onToggleFavorite: () -> Unit,
+    onToggleBookmark: (Long) -> Unit,
+    onShare: () -> Unit,
+    onCopyUrl: () -> Unit,
+    onOpenInBrowser: () -> Unit,
     onBack: () -> Unit,
+    onMarkAllSeen: () -> Unit = {},
     onPlayEpisode: (EpisodeModel) -> Unit,
 ) {
     if (anime == null) {
@@ -123,6 +290,84 @@ private fun AnimeDetailContent(
                         )
                     }
                 },
+                actions = {
+                    // Favorite toggle
+                    TooltipArea(
+                        tooltip = {
+                            TooltipContent("Add to favorites  (⌘D)")
+                        },
+                        delayMillis = 500,
+                        tooltipPlacement = TooltipPlacement.CursorPoint(
+                            alignment = Alignment.BottomEnd,
+                            offset = DpOffset(8.dp, 8.dp),
+                        ),
+                    ) {
+                        IconButton(onClick = onToggleFavorite) {
+                            Icon(
+                                imageVector = if (isFavorite) Icons.Filled.Favorite else Icons.Outlined.FavoriteBorder,
+                                contentDescription = if (isFavorite) "Remove from favorites" else "Add to favorites",
+                                tint = if (isFavorite)
+                                    MaterialTheme.colorScheme.primary
+                                else
+                                    MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    // Share
+                    TooltipArea(
+                        tooltip = {
+                            TooltipContent("Share  (⌘S)")
+                        },
+                        delayMillis = 500,
+                        tooltipPlacement = TooltipPlacement.CursorPoint(
+                            alignment = Alignment.BottomEnd,
+                            offset = DpOffset(8.dp, 8.dp),
+                        ),
+                    ) {
+                        IconButton(onClick = onShare) {
+                            Icon(
+                                imageVector = Icons.Outlined.Share,
+                                contentDescription = "Share",
+                            )
+                        }
+                    }
+                    // Copy URL
+                    TooltipArea(
+                        tooltip = {
+                            TooltipContent("Copy URL  (⌘⇧C)")
+                        },
+                        delayMillis = 500,
+                        tooltipPlacement = TooltipPlacement.CursorPoint(
+                            alignment = Alignment.BottomEnd,
+                            offset = DpOffset(8.dp, 8.dp),
+                        ),
+                    ) {
+                        IconButton(onClick = onCopyUrl) {
+                            Icon(
+                                imageVector = Icons.Outlined.ContentCopy,
+                                contentDescription = "Copy URL",
+                            )
+                        }
+                    }
+                    // Open in browser
+                    TooltipArea(
+                        tooltip = {
+                            TooltipContent("Open in browser  (⌘⇧O)")
+                        },
+                        delayMillis = 500,
+                        tooltipPlacement = TooltipPlacement.CursorPoint(
+                            alignment = Alignment.BottomEnd,
+                            offset = DpOffset(8.dp, 8.dp),
+                        ),
+                    ) {
+                        IconButton(onClick = onOpenInBrowser) {
+                            Icon(
+                                imageVector = Icons.Outlined.OpenInBrowser,
+                                contentDescription = "Open in browser",
+                            )
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface,
                 ),
@@ -137,7 +382,14 @@ private fun AnimeDetailContent(
         ) {
             // Cover + Info header
             item(key = "header") {
-                AnimeInfoHeader(anime = anime)
+                AnimeInfoHeader(
+                    anime = anime,
+                    episodes = episodes,
+                    onPlayEpisode = onPlayEpisode,
+                    onShare = onShare,
+                    onCopyUrl = onCopyUrl,
+                    onOpenInBrowser = onOpenInBrowser,
+                )
             }
 
             // Description
@@ -171,11 +423,29 @@ private fun AnimeDetailContent(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        text = "Episodes",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "Episodes",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        TextButton(
+                            onClick = onMarkAllSeen,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.DoneAll,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                text = "Mark all seen",
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                    }
                     Text(
                         text = "${episodes.size} total",
                         style = MaterialTheme.typography.bodySmall,
@@ -192,6 +462,7 @@ private fun AnimeDetailContent(
                 EpisodeItem(
                     episode = episode,
                     onClick = { onPlayEpisode(episode) },
+                    onToggleBookmark = { onToggleBookmark(episode.id) },
                 )
             }
 
@@ -216,29 +487,30 @@ private fun AnimeDetailContent(
 }
 
 @Composable
-private fun AnimeInfoHeader(anime: AnimeModel) {
+private fun AnimeInfoHeader(
+    anime: AnimeModel,
+    episodes: List<EpisodeModel>,
+    onPlayEpisode: (EpisodeModel) -> Unit,
+    onShare: () -> Unit = {},
+    onCopyUrl: () -> Unit = {},
+    onOpenInBrowser: () -> Unit = {},
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(16.dp),
         verticalAlignment = Alignment.Top,
     ) {
-        // Cover placeholder
-        Box(
+        // Cover image loaded via Coil 3
+        AnimeCoverImage(
+            thumbnailUrl = anime.thumbnailUrl,
+            contentDescription = anime.title,
+            title = anime.title,
             modifier = Modifier
                 .width(120.dp)
                 .aspectRatio(3f / 4f)
-                .clip(RoundedCornerShape(8.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainerHighest),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = anime.title.take(2).uppercase(),
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.primary,
-                fontWeight = FontWeight.Bold,
-            )
-        }
+                .clip(RoundedCornerShape(8.dp)),
+        )
 
         Spacer(Modifier.width(16.dp))
 
@@ -302,7 +574,12 @@ private fun AnimeInfoHeader(anime: AnimeModel) {
             Spacer(Modifier.height(16.dp))
 
             Button(
-                onClick = { /* TODO: Phase 6 — Play first unseen episode */ },
+                onClick = {
+                    val firstUnseen = episodes.firstOrNull { !it.seen }
+                    if (firstUnseen != null) {
+                        onPlayEpisode(firstUnseen)
+                    }
+                },
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(8.dp),
             ) {
@@ -310,7 +587,65 @@ private fun AnimeInfoHeader(anime: AnimeModel) {
                 Spacer(Modifier.width(4.dp))
                 Text("Continue Watching")
             }
+
+            Spacer(Modifier.height(8.dp))
+
+            OutlinedButton(
+                onClick = onShare,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                enabled = anime.url != null,
+            ) {
+                Icon(Icons.Outlined.Share, contentDescription = null)
+                Spacer(Modifier.width(4.dp))
+                Text("Share")
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            OutlinedButton(
+                onClick = onCopyUrl,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                enabled = anime.url != null,
+            ) {
+                Icon(Icons.Outlined.ContentCopy, contentDescription = null)
+                Spacer(Modifier.width(4.dp))
+                Text("Copy URL")
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            OutlinedButton(
+                onClick = onOpenInBrowser,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                enabled = anime.url != null,
+            ) {
+                Icon(Icons.Outlined.OpenInBrowser, contentDescription = null)
+                Spacer(Modifier.width(4.dp))
+                Text("Open in Browser")
+            }
         }
+    }
+}
+
+/**
+ * Small styled tooltip content composable used by [TooltipArea] wrappers.
+ */
+@Composable
+private fun TooltipContent(text: String) {
+    Surface(
+        modifier = Modifier.shadow(4.dp),
+        shape = RoundedCornerShape(6.dp),
+        color = MaterialTheme.colorScheme.inverseSurface,
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.inverseOnSurface,
+        )
     }
 }
 
@@ -318,6 +653,7 @@ private fun AnimeInfoHeader(anime: AnimeModel) {
 private fun EpisodeItem(
     episode: EpisodeModel,
     onClick: () -> Unit,
+    onToggleBookmark: () -> Unit = {},
 ) {
     Card(
         modifier = Modifier
@@ -371,7 +707,24 @@ private fun EpisodeItem(
                 )
             }
 
+            // Bookmark toggle
+            IconButton(
+                onClick = onToggleBookmark,
+                modifier = Modifier.size(32.dp),
+            ) {
+                Icon(
+                    imageVector = if (episode.bookmark) Icons.Filled.Bookmark else Icons.Outlined.BookmarkBorder,
+                    contentDescription = if (episode.bookmark) "Remove bookmark" else "Bookmark episode",
+                    tint = if (episode.bookmark)
+                        MaterialTheme.colorScheme.primary
+                    else
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.size(18.dp),
+                )
+            }
+
             if (!episode.seen) {
+                Spacer(Modifier.width(4.dp))
                 Box(
                     modifier = Modifier
                         .size(6.dp)

@@ -34,6 +34,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.anikku.macos.ui.AnikkuScreen
+import app.anikku.macos.ui.components.LocalToastHost
+import app.anikku.macos.ui.components.ToastDuration
 import app.anikku.macos.ui.screens.models.HistoryEntryModel
 import app.anikku.macos.ui.screens.models.MockData
 import cafe.adriel.voyager.navigator.tab.Tab
@@ -54,8 +56,12 @@ object HistoryTab : AnikkuScreen(), Tab {
 
     @Composable
     override fun Content() {
+        val toastHost = LocalToastHost.current
         val history = remember { MockData.sampleHistory }
-        HistoryContent(history = history)
+        HistoryContent(
+            history = history,
+            onClearAll = { toastHost.show("History cleared", ToastDuration.SHORT) },
+        )
     }
 
     override val options: TabOptions
@@ -68,7 +74,10 @@ object HistoryTab : AnikkuScreen(), Tab {
 }
 
 @Composable
-private fun HistoryContent(history: List<HistoryEntryModel>) {
+private fun HistoryContent(
+    history: List<HistoryEntryModel>,
+    onClearAll: () -> Unit = {},
+) {
     if (history.isEmpty()) {
         Box(
             modifier = Modifier.fillMaxSize(),
@@ -112,7 +121,7 @@ private fun HistoryContent(history: List<HistoryEntryModel>) {
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
                     )
-                    TextButton(onClick = { /* TODO: Clear all history */ }) {
+                    TextButton(onClick = onClearAll) {
                         Text("Clear All")
                     }
                 }

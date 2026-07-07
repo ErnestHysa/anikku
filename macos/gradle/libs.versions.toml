@@ -51,6 +51,9 @@ okio = { module = "com.squareup.okio:okio", version.ref = "okio" }
 jsoup = { module = "org.jsoup:jsoup", version.ref = "jsoup" }
 disklrucache = { module = "com.jakewharton:disklrucache", version.ref = "disklrucache" }
 
+# NanoHTTPd — embedded HTTP server for local video streaming (Phase 6.6)
+nanohttpd = { module = "org.nanohttpd:nanohttpd", version = "2.3.1" }
+
 # JNA - Java Native Access (macOS native API calls)
 jna-core = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 jna-platform = { module = "net.java.dev.jna:jna-platform", version.ref = "jna" }
