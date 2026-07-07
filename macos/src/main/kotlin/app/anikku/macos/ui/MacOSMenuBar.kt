@@ -151,16 +151,16 @@ object MacOSMenuBarFactory {
     private fun viewMenu(frame: Frame): Menu {
         return Menu("View").apply {
             add(MenuItem("Library", MenuShortcut(KeyEvent.VK_1, false)).also {
-                it.addActionListener { /* TODO: Phase 5 — Switch to Library tab */ }
+                it.addActionListener { TabSwitchHandler.switchTo(0) }
             })
             add(MenuItem("Updates", MenuShortcut(KeyEvent.VK_2, false)).also {
-                it.addActionListener { /* TODO: Phase 5 — Switch to Updates tab */ }
+                it.addActionListener { TabSwitchHandler.switchTo(1) }
             })
             add(MenuItem("History", MenuShortcut(KeyEvent.VK_3, false)).also {
-                it.addActionListener { /* TODO: Phase 5 — Switch to History tab */ }
+                it.addActionListener { TabSwitchHandler.switchTo(2) }
             })
             add(MenuItem("Browse", MenuShortcut(KeyEvent.VK_4, false)).also {
-                it.addActionListener { /* TODO: Phase 5 — Switch to Browse tab */ }
+                it.addActionListener { TabSwitchHandler.switchTo(3) }
             })
             addSeparator()
             add(MenuItem("Toggle Sidebar", MenuShortcut(KeyEvent.VK_S, false)).also {

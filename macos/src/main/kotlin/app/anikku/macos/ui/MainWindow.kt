@@ -10,6 +10,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import app.anikku.macos.ui.screens.BrowseScreen
@@ -37,6 +38,15 @@ import soup.compose.material.motion.animation.materialFadeThroughOut
  *
  * Ported from the Android HomeScreen.kt and MainActivity.kt.
  */
+/** Ordered tabs matching the View menu shortcuts (⌘1-4, ⌘5 for More). */
+private val orderedTabs: List<Tab> = listOf(
+    LibraryScreen,
+    UpdatesScreen,
+    HistoryScreen,
+    BrowseScreen,
+    MoreScreen,
+)
+
 @Composable
 fun MainWindow() {
     TabNavigator(
@@ -44,6 +54,18 @@ fun MainWindow() {
         key = "MainWindowTabs",
     ) { tabNavigator ->
         val navigator = LocalNavigator.currentOrThrow
+
+        // Bridge ⌘1-4/⌘5 View menu shortcuts to Voyager tab switching
+        DisposableEffect(tabNavigator) {
+            TabSwitchHandler.onSwitchTab = { index ->
+                orderedTabs.getOrNull(index)?.let { tab ->
+                    tabNavigator.current = tab
+                }
+            }
+            onDispose {
+                TabSwitchHandler.onSwitchTab = null
+            }
+        }
 
         // Use a NavigationRail on desktop for side navigation
         CompositionLocalProvider(LocalNavigator provides navigator) {
@@ -85,18 +107,10 @@ fun MainWindow() {
 private fun NavigationRailSidebar() {
     val tabNavigator = LocalTabNavigator.current
 
-    val tabs: List<Tab> = listOf(
-        LibraryScreen,
-        UpdatesScreen,
-        HistoryScreen,
-        BrowseScreen,
-        MoreScreen,
-    )
-
     androidx.compose.material3.NavigationRail(
         containerColor = MaterialTheme.colorScheme.surfaceContainer,
     ) {
-        tabs.forEach { tab ->
+        orderedTabs.forEach { tab ->
             val selected = tabNavigator.current::class == tab::class
             NavigationRailItem(
                 selected = selected,
