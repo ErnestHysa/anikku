@@ -1,6 +1,7 @@
 package app.anikku.macos.ui
 
 import java.awt.Frame
+import java.awt.GraphicsDevice
 import java.awt.Menu
 import java.awt.MenuBar
 import java.awt.MenuItem
@@ -26,26 +27,32 @@ import java.awt.event.KeyEvent
  *
  * Usage (inside Window content lambda):
  * ```
- * (window as? Frame)?.menuBar = createMacOSMenuBar(onQuit)
+ * (window as? Frame)?.let { frame ->
+ *     MacOSMenuBarFactory.attach(frame, onQuit, onSettings)
+ * }
  * ```
  */
 object MacOSMenuBarFactory {
 
+    private var fullScreenDevice: GraphicsDevice? = null
+    private var preFullScreenBounds: java.awt.Rectangle? = null
+
     /**
      * Creates the full macOS menu bar with all AD-04 menus.
      *
+     * @param frame The AWT Frame (needed for minimize/zoom/fullscreen actions)
      * @param onQuit Called when Quit (⌘Q) or Close Window (⌘W) is selected
      * @param onSettings Called when Settings... (⌘,) is selected
      */
-    fun create(onQuit: () -> Unit, onSettings: () -> Unit = {}): MenuBar {
+    fun create(frame: Frame, onQuit: () -> Unit, onSettings: () -> Unit = {}): MenuBar {
         return MenuBar().apply {
             // App menu (first menu becomes macOS application menu)
-            add(appMenu(onQuit, onSettings))
+            add(appMenu(frame, onQuit, onSettings))
             add(fileMenu(onQuit))
             add(editMenu())
-            add(viewMenu())
+            add(viewMenu(frame))
             add(playbackMenu())
-            add(windowMenu())
+            add(windowMenu(frame))
             add(helpMenu())
         }
     }
@@ -53,15 +60,19 @@ object MacOSMenuBarFactory {
     /**
      * Attaches the menu bar to the AWT Frame underlying a Compose Window.
      * Call this inside the Window content lambda.
+     *
+     * @param frame The AWT Frame (from FrameWindowScope.window)
+     * @param onQuit Called when Quit (⌘Q) or Close Window (⌘W) is selected
+     * @param onSettings Called when Settings... (⌘,) is selected
      */
     fun attach(frame: Frame, onQuit: () -> Unit, onSettings: () -> Unit = {}) {
-        frame.menuBar = create(onQuit, onSettings)
+        frame.menuBar = create(frame, onQuit, onSettings)
     }
 
     // ---------------------------------------------------------------------------
     // macOS Application Menu
     // ---------------------------------------------------------------------------
-    private fun appMenu(onQuit: () -> Unit, onSettings: () -> Unit): Menu {
+    private fun appMenu(frame: Frame, onQuit: () -> Unit, onSettings: () -> Unit): Menu {
         return Menu("Anikku").apply {
             add(MenuItem("About Anikku").also {
                 it.addActionListener { /* TODO: Phase 5 — About dialog */ }
@@ -72,13 +83,13 @@ object MacOSMenuBarFactory {
             })
             addSeparator()
             add(MenuItem("Hide Anikku", MenuShortcut(KeyEvent.VK_H, false)).also {
-                it.addActionListener { /* TODO: Phase 9.6 */ }
+                it.addActionListener { frame.state = Frame.ICONIFIED }
             })
             add(MenuItem("Hide Others", MenuShortcut(KeyEvent.VK_H, true)).also {
-                it.addActionListener { /* TODO: Phase 9.6 */ }
+                it.addActionListener { /* TODO: Phase 9.6 — macOS hide-others via JNA */ }
             })
             add(MenuItem("Show All").also {
-                it.addActionListener { /* TODO: Phase 9.6 */ }
+                it.addActionListener { /* TODO: Phase 9.6 — macOS show-all via JNA */ }
             })
             addSeparator()
             add(MenuItem("Quit Anikku", MenuShortcut(KeyEvent.VK_Q, false)).also {
@@ -137,7 +148,7 @@ object MacOSMenuBarFactory {
     // ---------------------------------------------------------------------------
     // View Menu
     // ---------------------------------------------------------------------------
-    private fun viewMenu(): Menu {
+    private fun viewMenu(frame: Frame): Menu {
         return Menu("View").apply {
             add(MenuItem("Library", MenuShortcut(KeyEvent.VK_1, false)).also {
                 it.addActionListener { /* TODO: Phase 5 — Switch to Library tab */ }
@@ -156,7 +167,7 @@ object MacOSMenuBarFactory {
                 it.addActionListener { /* TODO: Phase 5 */ }
             })
             add(MenuItem("Toggle Full Screen", MenuShortcut(KeyEvent.VK_F, false)).also {
-                it.addActionListener { /* TODO: Phase 5 */ }
+                it.addActionListener { toggleFullScreen(frame) }
             })
         }
     }
@@ -188,17 +199,17 @@ object MacOSMenuBarFactory {
     // ---------------------------------------------------------------------------
     // Window Menu
     // ---------------------------------------------------------------------------
-    private fun windowMenu(): Menu {
+    private fun windowMenu(frame: Frame): Menu {
         return Menu("Window").apply {
             add(MenuItem("Minimize", MenuShortcut(KeyEvent.VK_M, false)).also {
-                it.addActionListener { /* TODO: Phase 9.6 */ }
+                it.addActionListener { frame.state = Frame.ICONIFIED }
             })
             add(MenuItem("Zoom").also {
-                it.addActionListener { /* TODO: Phase 5 */ }
+                it.addActionListener { toggleZoom(frame) }
             })
             addSeparator()
             add(MenuItem("Bring All to Front").also {
-                it.addActionListener { /* macOS handles this */ }
+                it.addActionListener { /* macOS handles this via standard Window menu */ }
             })
         }
     }
@@ -209,11 +220,52 @@ object MacOSMenuBarFactory {
     private fun helpMenu(): Menu {
         return Menu("Help").apply {
             add(MenuItem("Anikku Help").also {
-                it.addActionListener { /* TODO: Phase 12 */ }
+                it.addActionListener { /* TODO: Phase 12 — Open help documentation */ }
             })
             add(MenuItem("Report Issue...").also {
-                it.addActionListener { /* TODO: Phase 12 */ }
+                it.addActionListener { /* TODO: Phase 12 — Open GitHub issues in browser */ }
             })
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Window action helpers (Phase 9.2)
+    // ---------------------------------------------------------------------------
+
+    /** Toggles the frame between maximized and normal state. */
+    private fun toggleZoom(frame: Frame) {
+        frame.extendedState = if (frame.extendedState and Frame.MAXIMIZED_BOTH != 0) {
+            Frame.NORMAL
+        } else {
+            Frame.MAXIMIZED_BOTH
+        }
+    }
+
+    /**
+     * Toggles full-screen mode via AWT exclusive fullscreen.
+     *
+     * Note: On macOS, `GraphicsDevice.setFullScreenWindow()` creates game-style
+     * exclusive fullscreen (hides menu bar), not macOS-native fullscreen Space.
+     * A future phase should replace this with NSWindow.toggleFullScreen() via JNA.
+     */
+    private fun toggleFullScreen(frame: Frame) {
+        val device = frame.graphicsConfiguration.device
+        if (!device.isFullScreenSupported) return
+
+        if (fullScreenDevice != null) {
+            // Exit full screen
+            device.fullScreenWindow = null
+            fullScreenDevice = null
+            preFullScreenBounds?.let { frame.bounds = it }
+            preFullScreenBounds = null
+            frame.isUndecorated = false
+            frame.isVisible = true
+        } else {
+            // Enter full screen
+            preFullScreenBounds = frame.bounds
+            fullScreenDevice = device
+            frame.isUndecorated = true
+            device.fullScreenWindow = frame
         }
     }
 }
