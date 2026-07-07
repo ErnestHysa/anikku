@@ -170,8 +170,9 @@ class MacOSHttpServer(
 
     /**
      * Get MIME type for common video file extensions.
+     * Internal visibility for unit testing.
      */
-    private fun getMimeType(extension: String): String = when (extension.lowercase()) {
+    internal fun getMimeType(extension: String): String = when (extension.lowercase()) {
         "mp4" -> "video/mp4"
         "mkv" -> "video/x-matroska"
         "webm" -> "video/webm"
