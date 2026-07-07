@@ -31,6 +31,9 @@ class MacOSNetworkHelper(
         cookieFile = File(storageProvider.dataDirectory, "cookies.json"),
     )
 
+    /** Cloudflare bypass interceptor (no-op stub until Phase 8) */
+    val cloudflareInterceptor: CloudflareInterceptor = CloudflareInterceptor(cookieJar, userAgentProvider)
+
     val client: OkHttpClient = buildClient()
 
     private fun buildClient(
@@ -50,6 +53,7 @@ class MacOSNetworkHelper(
                 ),
             )
             .addInterceptor(UserAgentInterceptor(userAgentProvider))
+            .addInterceptor(cloudflareInterceptor)
             .addNetworkInterceptor(BrotliInterceptor)
 
         if (isDebugBuild) {
