@@ -36,7 +36,7 @@ import cafe.adriel.voyager.navigator.tab.TabNavigator
  * Ported from the Android HomeScreen.kt and MainActivity.kt.
  */
 /** Ordered tabs matching the View menu shortcuts (⌘1-4, ⌘5 for More). */
-private val orderedTabs: List<Tab> = listOf(
+internal val orderedTabs: List<Tab> = listOf(
     LibraryScreen,
     UpdatesScreen,
     HistoryScreen,
@@ -109,7 +109,7 @@ fun MainWindow() {
  * onClick lambda, where tabNavigator.current = tab is safe.
  */
 @Composable
-private fun NavigationRailSidebar(
+internal fun NavigationRailSidebar(
     currentTabIndex: Int,
     onSelectTab: (Int) -> Unit,
 ) {
