@@ -59,13 +59,6 @@ fun MainWindow() {
             }
         }
 
-        // Use a NavigationRail on desktop for side navigation.
-        // Note: Voyager's TabNavigator already sets up the correct
-        // LocalNavigator scope for its children — do NOT override it.
-        // Pushing non-tab screens (e.g. AnimeDetailScreen) from within
-        // a tab must go onto the tab screen's own Navigator (which handles
-        // Screen instances), not the TabNavigator's internal stack (which
-        // expects Tab instances).
         Surface(
             color = MaterialTheme.colorScheme.background,
         ) {
@@ -74,6 +67,9 @@ fun MainWindow() {
                 NavigationRailSidebar()
 
                 // Tab content with saveable-state-safe fade transition.
+                // tabNavigator.current is safe to call here since the
+                // LocalNavigator override that caused ClassCastException
+                // has been removed from this composable tree.
                 AnimatedTabFade(contentKey = tabNavigator.current.key) {
                     CurrentTab()
                 }
@@ -86,7 +82,9 @@ fun MainWindow() {
  * Desktop NavigationRail sidebar composable.
  *
  * Renders the 5 primary tabs as NavigationRailItems.
- * On desktop, this appears as a fixed left sidebar with icons and labels.
+ * Determines selection state by comparing each tab's key with
+ * [tabNavigator.current.key] (safe after the LocalNavigator override
+ * was removed from this composable tree — no ClassCastException risk).
  */
 @Composable
 private fun NavigationRailSidebar() {
@@ -96,7 +94,7 @@ private fun NavigationRailSidebar() {
         containerColor = MaterialTheme.colorScheme.surfaceContainer,
     ) {
         orderedTabs.forEach { tab ->
-            val selected = tabNavigator.current::class == tab::class
+            val selected = tab.key == tabNavigator.current.key
             NavigationRailItem(
                 selected = selected,
                 onClick = {
