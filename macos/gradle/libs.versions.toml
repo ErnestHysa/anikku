@@ -10,6 +10,9 @@ sqldelight = "2.1.0"
 voyager = "1.1.0-beta03"
 material-kolor = "2.1.1"
 material-motion = "2.0.1"
+coil = "3.3.0"
+moko = "0.25.0"
+markdown = "0.35.0"
 # Shared module compatible versions
 okhttp = "5.1.0"
 rxjava = "1.3.8"
@@ -57,6 +60,18 @@ material-kolor = { module = "com.materialkolor:material-kolor", version.ref = "m
 
 # Material Motion - shared axis transitions
 material-motion = { module = "io.github.fornewid:material-motion-compose-core", version.ref = "material-motion" }
+
+# Coil 3 - image loading (Compose Desktop compatible)
+coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
+coil-network-okhttp = { module = "io.coil-kt.coil3:coil-network-okhttp", version.ref = "coil" }
+# coil-gif is Android-only (AAR) — excluded from desktop build
+
+# Moko Resources - i18n string resources (KMP, JVM compatible)
+moko-resources = { module = "dev.icerock.moko:resources", version.ref = "moko" }
+
+# Markdown renderer - changelog/about screens
+markdown-core = { module = "com.mikepenz:multiplatform-markdown-renderer", version.ref = "markdown" }
+markdown-coil = { module = "com.mikepenz:multiplatform-markdown-renderer-coil3", version.ref = "markdown" }
 
 [bundles]
 voyager = ["voyager-navigator", "voyager-screenmodel", "voyager-tab-navigator", "voyager-transitions"]

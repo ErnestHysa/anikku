@@ -44,6 +44,19 @@ dependencies {
     // Material Motion - shared axis transitions
     implementation(libs.material.motion)
 
+    // Coil 3 - image loading (Compose Desktop compatible)
+    // coil-gif is Android-only (AAR) — excluded
+    implementation(platform("io.coil-kt.coil3:coil-bom:3.3.0"))
+    implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
+
+    // Moko Resources - i18n string resources (KMP, JVM compatible)
+    implementation(libs.moko.resources)
+
+    // Markdown renderer - changelog/about screens
+    implementation(libs.markdown.core)
+    implementation(libs.markdown.coil)
+
     // Shared module dependencies (desktop-compatible)
     implementation(libs.rxjava)
     implementation(libs.okhttp.core)
