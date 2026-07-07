@@ -74,6 +74,8 @@ dependencies {
 
     // Testing
     testImplementation(libs.junit.jupiter)
+    testImplementation(libs.compose.ui.test)
+    testRuntimeOnly(libs.junit.vintage.engine)
 }
 
 tasks.test {

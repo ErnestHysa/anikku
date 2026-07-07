@@ -58,6 +58,11 @@ jna-platform = { module = "net.java.dev.jna:jna-platform", version.ref = "jna" }
 # JUnit 5 — testing
 junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
 
+# Compose UI testing (uses JUnit 4 @Rule, works alongside JUnit 5)
+compose-ui-test = { module = "org.jetbrains.compose.ui:ui-test-junit4", version.ref = "compose-multiplatform" }
+# JUnit Vintage engine — needed to discover JUnit 4 tests (e.g. compose @Rule) under JUnit Platform
+junit-vintage-engine = { module = "org.junit.vintage:junit-vintage-engine", version.ref = "junit" }
+
 # Voyager navigation
 voyager-navigator = { module = "cafe.adriel.voyager:voyager-navigator", version.ref = "voyager" }
 voyager-screenmodel = { module = "cafe.adriel.voyager:voyager-screenmodel", version.ref = "voyager" }
