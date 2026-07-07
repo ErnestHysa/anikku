@@ -1,19 +1,30 @@
 package app.anikku.macos
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 
 fun main() = application {
+    // Initialize the macOS application (logging, Koin DI, storage, database)
+    val app = AnikkuApplication()
+
     Window(
-        onCloseRequest = ::exitApplication,
+        onCloseRequest = {
+            app.onShutdown()
+            exitApplication()
+        },
         title = "Anikku",
         state = rememberWindowState(width = 1280.dp, height = 800.dp),
     ) {
@@ -22,7 +33,17 @@ fun main() = application {
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("Anikku macOS — Build Successful!")
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("Anikku macOS", fontSize = 32.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Text("Phase 1 — Core Infrastructure Ready", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        "Storage: ${app.storageProvider.directory().absolutePath}",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
     }

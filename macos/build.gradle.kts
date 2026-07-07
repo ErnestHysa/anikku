@@ -16,9 +16,21 @@ dependencies {
     implementation(compose.material3)
     implementation(compose.materialIconsExtended)
 
+    // Coroutines
     implementation(libs.coroutines.core)
     implementation(libs.coroutines.swing)
     implementation(libs.serialization.json)
+
+    // Koin DI (replaces Injekt)
+    implementation(libs.koin.core)
+
+    // Logging (SLF4J + Logback)
+    implementation(libs.logback.classic)
+    implementation(libs.kotlin.logging)
+
+    // SQLDelight (JDBC driver for desktop)
+    implementation(libs.sqldelight.jdbc.driver)
+    implementation(libs.sqldelight.coroutines)
 }
 
 compose.desktop {

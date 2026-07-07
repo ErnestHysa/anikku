@@ -1,0 +1,226 @@
+package app.anikku.macos.platform.preference
+
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.double
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
+import tachiyomi.core.common.preference.Preference
+import tachiyomi.core.common.preference.PreferenceStore
+import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+
+/**
+ * macOS file-backed PreferenceStore implementation.
+ * Stores all preferences as a JSON file at the configured path.
+ * Uses kotlinx.serialization for reading/writing JSON.
+ *
+ * Data file: ~/Library/Application Support/Anikku/data/preferences.json
+ */
+class MacOSPreferenceStore(
+    private val prefsFile: File,
+    private val json: Json = Json { prettyPrint = true },
+) : PreferenceStore {
+
+    private val store = ConcurrentHashMap<String, JsonElement>()
+    private val keyFlow = MutableSharedFlow<String?>(
+        replay = 0,
+        extraBufferCapacity = 64,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+
+    init {
+        loadFromFile()
+    }
+
+    override fun getString(key: String, defaultValue: String): Preference<String> {
+        return JsonFilePreference(
+            store = store,
+            keyFlow = keyFlow,
+            key = key,
+            defaultValue = defaultValue,
+            serialize = { JsonPrimitive(it) },
+            deserialize = { it.jsonPrimitive.content },
+            onChanged = { saveToFile() },
+        )
+    }
+
+    override fun getLong(key: String, defaultValue: Long): Preference<Long> {
+        return JsonFilePreference(
+            store = store,
+            keyFlow = keyFlow,
+            key = key,
+            defaultValue = defaultValue,
+            serialize = { JsonPrimitive(it) },
+            deserialize = { it.jsonPrimitive.long },
+            onChanged = { saveToFile() },
+        )
+    }
+
+    override fun getInt(key: String, defaultValue: Int): Preference<Int> {
+        return JsonFilePreference(
+            store = store,
+            keyFlow = keyFlow,
+            key = key,
+            defaultValue = defaultValue,
+            serialize = { JsonPrimitive(it) },
+            deserialize = { it.jsonPrimitive.content.toInt() },
+            onChanged = { saveToFile() },
+        )
+    }
+
+    override fun getFloat(key: String, defaultValue: Float): Preference<Float> {
+        return JsonFilePreference(
+            store = store,
+            keyFlow = keyFlow,
+            key = key,
+            defaultValue = defaultValue,
+            serialize = { JsonPrimitive(it) },
+            deserialize = { it.jsonPrimitive.double.toFloat() },
+            onChanged = { saveToFile() },
+        )
+    }
+
+    override fun getBoolean(key: String, defaultValue: Boolean): Preference<Boolean> {
+        return JsonFilePreference(
+            store = store,
+            keyFlow = keyFlow,
+            key = key,
+            defaultValue = defaultValue,
+            serialize = { JsonPrimitive(it) },
+            deserialize = { it.jsonPrimitive.boolean },
+            onChanged = { saveToFile() },
+        )
+    }
+
+    override fun getStringSet(key: String, defaultValue: Set<String>): Preference<Set<String>> {
+        return JsonFilePreference(
+            store = store,
+            keyFlow = keyFlow,
+            key = key,
+            defaultValue = defaultValue,
+            serialize = { value ->
+                JsonArray(value.map { JsonPrimitive(it) })
+            },
+            deserialize = { element ->
+                element.jsonArray.map { it.jsonPrimitive.content }.toSet()
+            },
+            onChanged = { saveToFile() },
+        )
+    }
+
+    override fun <T> getObject(
+        key: String,
+        defaultValue: T,
+        serializer: (T) -> String,
+        deserializer: (String) -> T,
+    ): Preference<T> {
+        return JsonFilePreference(
+            store = store,
+            keyFlow = keyFlow,
+            key = key,
+            defaultValue = defaultValue,
+            serialize = { JsonPrimitive(serializer(it)) },
+            deserialize = { deserializer(it.jsonPrimitive.content) },
+            onChanged = { saveToFile() },
+        )
+    }
+
+    override fun getAll(): Map<String, *> {
+        return store.toMap().mapValues { (_, element) ->
+            try {
+                element.jsonPrimitive.content
+            } catch (_: Exception) {
+                element.toString()
+            }
+        }
+    }
+
+    private fun loadFromFile() {
+        if (prefsFile.exists()) {
+            try {
+                val jsonObject = json.parseToJsonElement(prefsFile.readText()).jsonObject
+                store.putAll(jsonObject)
+            } catch (_: Exception) {
+                // Corrupted file — start fresh
+            }
+        }
+    }
+
+    private fun saveToFile() {
+        prefsFile.parentFile?.mkdirs()
+        prefsFile.writeText(
+            json.encodeToString(
+                kotlinx.serialization.json.JsonObject.serializer(),
+                kotlinx.serialization.json.JsonObject(store),
+            ),
+        )
+    }
+
+    /**
+     * Generic JSON file-backed preference implementation.
+     */
+    private class JsonFilePreference<T>(
+        private val store: ConcurrentHashMap<String, JsonElement>,
+        private val keyFlow: MutableSharedFlow<String?>,
+        private val key: String,
+        private val defaultValue: T,
+        private val serialize: (T) -> JsonElement,
+        private val deserialize: (JsonElement) -> T,
+        private val onChanged: () -> Unit,
+    ) : Preference<T> {
+
+        override fun key(): String = key
+
+        override fun get(): T {
+            val stored = store[key] ?: return defaultValue
+            return try {
+                deserialize(stored)
+            } catch (_: Exception) {
+                defaultValue
+            }
+        }
+
+        override fun set(value: T) {
+            store[key] = serialize(value)
+            onChanged()
+            keyFlow.tryEmit(key)
+        }
+
+        override fun isSet(): Boolean = store.containsKey(key)
+
+        override fun delete() {
+            store.remove(key)
+            onChanged()
+            keyFlow.tryEmit(key)
+        }
+
+        override fun defaultValue(): T = defaultValue
+
+        override fun changes(): Flow<T> {
+            return keyFlow
+                .filter { it == key || it == null }
+                .onStart { emit(key) }
+                .map { get() }
+        }
+
+        override fun stateIn(scope: CoroutineScope): StateFlow<T> {
+            return changes().stateIn(scope, SharingStarted.Eagerly, get())
+        }
+    }
+}
