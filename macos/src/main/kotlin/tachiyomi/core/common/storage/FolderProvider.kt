@@ -4,7 +4,8 @@ import java.io.File
 
 /**
  * Local stub interface for FolderProvider.
- * In Phase 2, delete this file and use the real interface from the shared core/common module.
+ * Matches the real interface from core/common.
+ * Used until Phase 2 fully integrates shared modules.
  */
 interface FolderProvider {
     fun directory(): File

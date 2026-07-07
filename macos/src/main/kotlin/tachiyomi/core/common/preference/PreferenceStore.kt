@@ -1,13 +1,5 @@
 package tachiyomi.core.common.preference
 
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.StateFlow
-
-/**
- * Local stub interface for PreferenceStore.
- * In Phase 2, delete this file and use the real interface from the shared core/common module.
- */
 interface PreferenceStore {
     fun getString(key: String, defaultValue: String = ""): Preference<String>
     fun getLong(key: String, defaultValue: Long = 0): Preference<Long>
@@ -16,12 +8,9 @@ interface PreferenceStore {
     fun getBoolean(key: String, defaultValue: Boolean = false): Preference<Boolean>
     fun getStringSet(key: String, defaultValue: Set<String> = emptySet()): Preference<Set<String>>
     fun <T> getObject(
-        key: String,
-        defaultValue: T,
-        serializer: (T) -> String,
-        deserializer: (String) -> T,
+        key: String, defaultValue: T,
+        serializer: (T) -> String, deserializer: (String) -> T,
     ): Preference<T>
-
     fun getAll(): Map<String, *>
 
     companion object {
@@ -32,20 +21,6 @@ interface PreferenceStore {
     }
 }
 
-inline fun <reified T : Enum<T>> PreferenceStore.getEnum(
-    key: String,
-    defaultValue: T,
-): Preference<T> {
-    return getObject(
-        key = key,
-        defaultValue = defaultValue,
-        serializer = { it.name },
-        deserializer = {
-            try {
-                enumValueOf(it)
-            } catch (e: IllegalArgumentException) {
-                defaultValue
-            }
-        },
-    )
+inline fun <reified T : Enum<T>> PreferenceStore.getEnum(key: String, defaultValue: T): Preference<T> {
+    return getObject(key, defaultValue, { it.name }, { try { enumValueOf(it) } catch (_: Exception) { defaultValue } })
 }

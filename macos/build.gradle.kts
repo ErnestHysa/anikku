@@ -31,6 +31,14 @@ dependencies {
     // SQLDelight (JDBC driver for desktop)
     implementation(libs.sqldelight.jdbc.driver)
     implementation(libs.sqldelight.coroutines)
+
+    // Shared module dependencies (desktop-compatible)
+    implementation(libs.rxjava)
+    implementation(libs.okhttp.core)
+    implementation(libs.okio)
+    implementation(libs.jsoup)
+    implementation(libs.disklrucache)
+    implementation(libs.kotlinx.immutables)
 }
 
 compose.desktop {
