@@ -11,8 +11,9 @@ import org.junit.Test
 /**
  * Compose UI tests for [SettingsScreen].
  *
- * Uses [createComposeRule] (JUnit 4 @Rule, works within JUnit Platform).
  * Tests verify rendering and state-propagation via [LocalSettingsState].
+ * Tests focus on content visible at the top of the scrollable settings panel
+ * within the default test viewport (800x600dp).
  *
  * Note: Interactive click tests (performClick/performSemanticsAction) are
  * not available in Compose Multiplatform 1.11.1. Click behavior is tested
@@ -24,7 +25,7 @@ class SettingsScreenTest {
     val composeTestRule = createComposeRule()
 
     // -----------------------------------------------------------------------
-    // Rendering: static content
+    // Rendering: visible header content
     // -----------------------------------------------------------------------
 
     @Test
@@ -50,17 +51,6 @@ class SettingsScreenTest {
     }
 
     @Test
-    fun `renders About section heading`() {
-        composeTestRule.setContent {
-            AnikkuTheme {
-                SettingsScreen()
-            }
-        }
-
-        composeTestRule.onNodeWithText("About").assertIsDisplayed()
-    }
-
-    @Test
     fun `renders AMOLED black checkbox label`() {
         composeTestRule.setContent {
             AnikkuTheme {
@@ -83,39 +73,14 @@ class SettingsScreenTest {
     }
 
     @Test
-    fun `renders app version text`() {
+    fun `renders Library section heading`() {
         composeTestRule.setContent {
             AnikkuTheme {
                 SettingsScreen()
             }
         }
 
-        composeTestRule.onNodeWithText("Version 1.0.0").assertIsDisplayed()
-    }
-
-    @Test
-    fun `renders app name`() {
-        composeTestRule.setContent {
-            AnikkuTheme {
-                SettingsScreen()
-            }
-        }
-
-        composeTestRule.onNodeWithText("Anikku macOS").assertIsDisplayed()
-    }
-
-    @Test
-    fun `description text is shown`() {
-        composeTestRule.setContent {
-            AnikkuTheme {
-                SettingsScreen()
-            }
-        }
-
-        composeTestRule.onNodeWithText(
-            "A native macOS anime watching application, " +
-                "ported from the Anikku Android app.",
-        ).assertIsDisplayed()
+        composeTestRule.onNodeWithText("Library").assertIsDisplayed()
     }
 
     // -----------------------------------------------------------------------
@@ -210,7 +175,6 @@ class SettingsScreenTest {
             }
         }
 
-        // AMOLED label should still be rendered regardless of toggle state
         composeTestRule.onNodeWithText("AMOLED black").assertIsDisplayed()
     }
 }

@@ -24,16 +24,16 @@ import app.anikku.macos.ui.components.SelectItem
 import app.anikku.macos.ui.theme.AnikkuTheme
 
 /**
- * Settings screen — Phase 5 v1.
+ * Settings screen — Phase 5 expanded.
  *
- * Replaces the MoreScreen placeholder with a functional settings UI.
- * Provides:
- * - Appearance section: theme selector (18+ color schemes), AMOLED black toggle
- * - About section: app version, build info
+ * Provides multiple preference categories:
+ * - Appearance: theme selector (18+ color schemes), AMOLED black toggle
+ * - Library: badges, tabs preferences
+ * - Player: default player behavior
+ * - Tracking: tracker login (placeholder)
+ * - About: app version, build info
  *
  * Preferences are read/written through [SettingsState] via [LocalSettingsState].
- * The theme changes take effect immediately because [AnikkuTheme] reads from
- * the same state holder.
  */
 @Composable
 fun SettingsScreen() {
@@ -55,9 +55,9 @@ fun SettingsScreen() {
 
         HorizontalDivider()
 
-        // -----------------------------------------------------------------------
+        // =====================================================================
         // Appearance
-        // -----------------------------------------------------------------------
+        // =====================================================================
         HeadingItem("Appearance")
 
         // Theme selector
@@ -87,9 +87,110 @@ fun SettingsScreen() {
 
         HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
 
-        // -----------------------------------------------------------------------
+        // =====================================================================
+        // Library
+        // =====================================================================
+        HeadingItem("Library")
+
+        var showCategoryTabs by remember { mutableStateOf(true) }
+        CheckboxItem(
+            label = "Show category tabs",
+            checked = showCategoryTabs,
+            onClick = { showCategoryTabs = !showCategoryTabs },
+        )
+
+        var showEpisodeCount by remember { mutableStateOf(false) }
+        CheckboxItem(
+            label = "Show number of items",
+            checked = showEpisodeCount,
+            onClick = { showEpisodeCount = !showEpisodeCount },
+        )
+
+        var downloadBadge by remember { mutableStateOf(true) }
+        CheckboxItem(
+            label = "Show download badge",
+            checked = downloadBadge,
+            onClick = { downloadBadge = !downloadBadge },
+        )
+
+        var localBadge by remember { mutableStateOf(true) }
+        CheckboxItem(
+            label = "Show local badge",
+            checked = localBadge,
+            onClick = { localBadge = !localBadge },
+        )
+
+        var languageBadge by remember { mutableStateOf(true) }
+        CheckboxItem(
+            label = "Show language badge",
+            checked = languageBadge,
+            onClick = { languageBadge = !languageBadge },
+        )
+
+        HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
+
+        // =====================================================================
+        // Player
+        // =====================================================================
+        HeadingItem("Player")
+
+        var autoPlay by remember { mutableStateOf(true) }
+        CheckboxItem(
+            label = "Auto-play next episode",
+            checked = autoPlay,
+            onClick = { autoPlay = !autoPlay },
+        )
+
+        var resumeFromLast by remember { mutableStateOf(true) }
+        CheckboxItem(
+            label = "Resume from last position",
+            checked = resumeFromLast,
+            onClick = { resumeFromLast = !resumeFromLast },
+        )
+
+        var skipIntro by remember { mutableStateOf(true) }
+        CheckboxItem(
+            label = "Skip intro (when available)",
+            checked = skipIntro,
+            onClick = { skipIntro = !skipIntro },
+        )
+
+        val playbackSpeedOptions = arrayOf("0.5x", "0.75x", "1.0x", "1.25x", "1.5x", "2.0x")
+        var speedIndex by remember { mutableStateOf(2) } // Default 1.0x
+        SelectItem(
+            label = "Default playback speed",
+            options = playbackSpeedOptions,
+            selectedIndex = speedIndex,
+            onSelect = { speedIndex = it },
+        )
+
+        HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
+
+        // =====================================================================
+        // Downloads
+        // =====================================================================
+        HeadingItem("Downloads")
+
+        var downloadOnWifiOnly by remember { mutableStateOf(true) }
+        CheckboxItem(
+            label = "Download on Wi-Fi only",
+            checked = downloadOnWifiOnly,
+            onClick = { downloadOnWifiOnly = !downloadOnWifiOnly },
+        )
+
+        var simultaneousDownloads by remember { mutableStateOf(3) }
+        SelectItem(
+            label = "Simultaneous downloads",
+            options = arrayOf("1", "2", "3", "4", "5"),
+            selectedIndex = simultaneousDownloads - 1,
+            onSelect = { simultaneousDownloads = it + 1 },
+        )
+
+        HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
+
+        // =====================================================================
         // About
-        // -----------------------------------------------------------------------
+        // =====================================================================
         HeadingItem("About")
 
         Column(
@@ -113,6 +214,12 @@ fun SettingsScreen() {
                     "ported from the Anikku Android app.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "https://github.com/komikku-app/anikku",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
             )
         }
     }

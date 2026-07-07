@@ -12,10 +12,10 @@ import org.koin.dsl.module
  * - Storage manager: file system operations (backups, downloads, mpv config)
  * - Custom anime repository: user-defined anime metadata edits
  *
- * Future Phase 4+ additions:
- * - Source repository
- * - Tracker repository
- * - Backup/restore services
+ * Future Phase 5+ additions (when domain/data modules are wired to macOS build):
+ * - AnimeRepository, CategoryRepository (data layer implementations)
+ * - GetLibraryAnime, GetCategories, GetHistory (domain interactors)
+ * - LibraryPreferences, SourceManager (domain services)
  */
 fun domainModule(app: AnikkuApplication) = module {
 

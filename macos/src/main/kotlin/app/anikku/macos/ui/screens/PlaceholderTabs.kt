@@ -1,41 +1,33 @@
 package app.anikku.macos.ui.screens
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Book
 import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import app.anikku.macos.ui.AnikkuScreen
+import app.anikku.macos.ui.screens.browse.BrowseTab
+import app.anikku.macos.ui.screens.history.HistoryTab
+import app.anikku.macos.ui.screens.library.LibraryTab
+import app.anikku.macos.ui.screens.updates.UpdatesTab
 import app.anikku.macos.ui.settings.SettingsScreen
 import cafe.adriel.voyager.navigator.tab.Tab
 import cafe.adriel.voyager.navigator.tab.TabOptions
 
+/**
+ * Tab declarations for the main navigation rail.
+ *
+ * Phase 5 — Each tab now renders a fully functional screen.
+ * Placeholder content has been replaced with real implementations.
+ */
 object LibraryScreen : AnikkuScreen(), Tab {
 
     @Composable
     override fun Content() {
-        PlaceholderTabContent(
-            title = "Library",
-            description = "Your anime library will appear here.\nBrowse, filter, and manage your collection.",
-            icon = Icons.Outlined.Book,
-        )
+        LibraryTab.Content()
     }
 
     override val options: TabOptions
@@ -51,11 +43,7 @@ object UpdatesScreen : AnikkuScreen(), Tab {
 
     @Composable
     override fun Content() {
-        PlaceholderTabContent(
-            title = "Updates",
-            description = "New episode updates will appear here.\nStay up to date with your favorite anime.",
-            icon = Icons.Outlined.Refresh,
-        )
+        UpdatesTab.Content()
     }
 
     override val options: TabOptions
@@ -71,11 +59,7 @@ object HistoryScreen : AnikkuScreen(), Tab {
 
     @Composable
     override fun Content() {
-        PlaceholderTabContent(
-            title = "History",
-            description = "Your watch history will appear here.\nPick up where you left off.",
-            icon = Icons.Outlined.History,
-        )
+        HistoryTab.Content()
     }
 
     override val options: TabOptions
@@ -91,11 +75,7 @@ object BrowseScreen : AnikkuScreen(), Tab {
 
     @Composable
     override fun Content() {
-        PlaceholderTabContent(
-            title = "Browse",
-            description = "Browse anime sources and extensions.\nDiscover new content from your favorite sources.",
-            icon = Icons.Outlined.Explore,
-        )
+        BrowseTab.Content()
     }
 
     override val options: TabOptions
@@ -121,41 +101,4 @@ object MoreScreen : AnikkuScreen(), Tab {
             title = "More",
             icon = rememberVectorPainter(Icons.Outlined.MoreVert),
         )
-}
-
-/**
- * Placeholder content for tabs that haven't been fully ported yet.
- * Each tab will be replaced with real content in Phase 5.
- */
-@Composable
-private fun PlaceholderTabContent(
-    title: String,
-    description: String,
-    icon: ImageVector,
-) {
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = title,
-            modifier = Modifier.size(64.dp),
-            tint = MaterialTheme.colorScheme.primary,
-        )
-        Spacer(Modifier.height(24.dp))
-        Text(
-            text = title,
-            fontSize = 28.sp,
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-        Spacer(Modifier.height(16.dp))
-        Text(
-            text = description,
-            fontSize = 14.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.bodyLarge,
-        )
-    }
 }
