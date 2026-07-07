@@ -1,7 +1,5 @@
 package app.anikku.macos.ui
 
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Row
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -11,6 +9,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import app.anikku.macos.ui.screens.BrowseScreen
@@ -24,8 +23,6 @@ import cafe.adriel.voyager.navigator.tab.CurrentTab
 import cafe.adriel.voyager.navigator.tab.LocalTabNavigator
 import cafe.adriel.voyager.navigator.tab.Tab
 import cafe.adriel.voyager.navigator.tab.TabNavigator
-import soup.compose.material.motion.animation.materialFadeThroughIn
-import soup.compose.material.motion.animation.materialFadeThroughOut
 
 /**
  * Main application window composable.
@@ -76,20 +73,12 @@ fun MainWindow() {
                     // Side Navigation Rail
                     NavigationRailSidebar()
 
-                    // Main content area with fade-through animation
-                    AnimatedContent(
-                        targetState = tabNavigator.current,
-                        transitionSpec = {
-                            materialFadeThroughIn(
-                                initialScale = 1f,
-                                durationMillis = 200,
-                            ) togetherWith materialFadeThroughOut(durationMillis = 200)
-                        },
-                        label = "tabContent",
-                    ) { tab ->
-                        tabNavigator.saveableState(key = "currentTab_${tab.key}", tab) {
-                            CurrentTab()
-                        }
+                    // Tab content — use key() so each tab gets its own
+                    // composition scope, avoiding Voyager saveable state key
+                    // conflicts that occur with AnimatedContent (which renders
+                    // both old and new tabs simultaneously during transitions).
+                    key(tabNavigator.current.key) {
+                        CurrentTab()
                     }
                 }
             }
