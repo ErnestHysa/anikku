@@ -32,6 +32,18 @@ dependencies {
     implementation(libs.sqldelight.jdbc.driver)
     implementation(libs.sqldelight.coroutines)
 
+    // Voyager navigation (desktop compatible)
+    implementation(libs.voyager.navigator)
+    implementation(libs.voyager.screenmodel)
+    implementation(libs.voyager.tab.navigator)
+    implementation(libs.voyager.transitions)
+
+    // Material Kolor - dynamic color scheme generation
+    implementation(libs.material.kolor)
+
+    // Material Motion - shared axis transitions
+    implementation(libs.material.motion)
+
     // Shared module dependencies (desktop-compatible)
     implementation(libs.rxjava)
     implementation(libs.okhttp.core)

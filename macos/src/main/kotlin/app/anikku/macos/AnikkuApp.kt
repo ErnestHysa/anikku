@@ -1,23 +1,25 @@
 package app.anikku.macos
 
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import app.anikku.macos.ui.MainWindow
+import app.anikku.macos.ui.theme.AnikkuTheme
+import app.anikku.macos.ui.theme.AnikkuTheme.Theme
+import androidx.compose.ui.unit.dp
 
+/**
+ * Anikku macOS — Entry Point.
+ *
+ * Launches the Compose Desktop application with:
+ * - macOS application initialization (logging, Koin DI, storage, database)
+ * - Material 3 theme system (18+ color schemes)
+ * - Voyager tab navigation with desktop sidebar rail
+ *
+ * Phase 4: UI Framework & Navigation
+ */
 fun main() = application {
-    // Initialize the macOS application (logging, Koin DI, storage, database)
+    // Initialize the macOS application (logging, Koin DI, storage, database, networking)
     val app = AnikkuApplication()
 
     Window(
@@ -28,23 +30,13 @@ fun main() = application {
         title = "Anikku",
         state = rememberWindowState(width = 1280.dp, height = 800.dp),
     ) {
-        MaterialTheme {
-            Box(
-                modifier = Modifier.fillMaxSize(),
-                contentAlignment = Alignment.Center,
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("Anikku macOS", fontSize = 32.sp)
-                    Spacer(Modifier.height(8.dp))
-                    Text("Phase 3 — Networking & Extensions Ready", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        "Storage: ${app.storageProvider.directory().absolutePath}",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
+        // Apply the Anikku theme system
+        AnikkuTheme(
+            theme = Theme.DEFAULT,
+            isAmoledOLED = false,
+        ) {
+            // Main window with Voyager TabNavigator + sidebar rail
+            MainWindow()
         }
     }
 }
