@@ -7,7 +7,6 @@ import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -17,8 +16,6 @@ import app.anikku.macos.ui.screens.HistoryScreen
 import app.anikku.macos.ui.screens.LibraryScreen
 import app.anikku.macos.ui.screens.MoreScreen
 import app.anikku.macos.ui.screens.UpdatesScreen
-import cafe.adriel.voyager.navigator.LocalNavigator
-import cafe.adriel.voyager.navigator.currentOrThrow
 import cafe.adriel.voyager.navigator.tab.CurrentTab
 import cafe.adriel.voyager.navigator.tab.LocalTabNavigator
 import cafe.adriel.voyager.navigator.tab.Tab
@@ -50,8 +47,6 @@ fun MainWindow() {
         tab = LibraryScreen,
         key = "MainWindowTabs",
     ) { tabNavigator ->
-        val navigator = LocalNavigator.currentOrThrow
-
         // Bridge ⌘1-4/⌘5 View menu shortcuts to Voyager tab switching
         DisposableEffect(tabNavigator) {
             TabSwitchHandler.onSwitchTab = { index ->
@@ -64,23 +59,23 @@ fun MainWindow() {
             }
         }
 
-        // Use a NavigationRail on desktop for side navigation
-        CompositionLocalProvider(LocalNavigator provides navigator) {
-            Surface(
-                color = MaterialTheme.colorScheme.background,
-            ) {
-                Row {
-                    // Side Navigation Rail
-                    NavigationRailSidebar()
+        // Use a NavigationRail on desktop for side navigation.
+        // Note: Voyager's TabNavigator already sets up the correct
+        // LocalNavigator scope for its children — do NOT override it.
+        // Pushing non-tab screens (e.g. AnimeDetailScreen) from within
+        // a tab must go onto the tab screen's own Navigator (which handles
+        // Screen instances), not the TabNavigator's internal stack (which
+        // expects Tab instances).
+        Surface(
+            color = MaterialTheme.colorScheme.background,
+        ) {
+            Row {
+                // Side Navigation Rail
+                NavigationRailSidebar()
 
-                    // Tab content with saveable-state-safe fade transition.
-                    // Uses key() + animated alpha so only ONE CurrentTab() is
-                    // ever in the composition tree at a time (avoids Voyager
-                    // saveable state key conflicts), yet the fade-in creates
-                    // a smooth visual transition between tabs.
-                    AnimatedTabFade(contentKey = tabNavigator.current.key) {
-                        CurrentTab()
-                    }
+                // Tab content with saveable-state-safe fade transition.
+                AnimatedTabFade(contentKey = tabNavigator.current.key) {
+                    CurrentTab()
                 }
             }
         }
