@@ -326,30 +326,34 @@ class PlayerViewModel {
     }
 
     /**
-     * Set volume (0–200).
+     * Set volume (0–200). Always updates local state even without mpv.
      */
     fun setVolume(vol: Int) {
-        val handle = mpvHandle ?: return
         val clamped = vol.coerceIn(0, 200)
-        try {
-            MPVLib.setPropertyInt(handle, "volume", clamped)
-            _volume.value = clamped
-        } catch (e: Exception) {
-            logger.warn(e) { "Failed to set volume" }
+        _volume.value = clamped
+        val handle = mpvHandle
+        if (handle != null) {
+            try {
+                MPVLib.setPropertyInt(handle, "volume", clamped)
+            } catch (e: Exception) {
+                logger.warn(e) { "Failed to set volume on mpv" }
+            }
         }
     }
 
     /**
-     * Set playback speed.
+     * Set playback speed (0.25–4.0). Always updates local state even without mpv.
      */
     fun setSpeed(speed: Double) {
-        val handle = mpvHandle ?: return
         val clamped = speed.coerceIn(0.25, 4.0)
-        try {
-            MPVLib.setPropertyDouble(handle, "speed", clamped)
-            _playbackSpeed.value = clamped
-        } catch (e: Exception) {
-            logger.warn(e) { "Failed to set speed" }
+        _playbackSpeed.value = clamped
+        val handle = mpvHandle
+        if (handle != null) {
+            try {
+                MPVLib.setPropertyDouble(handle, "speed", clamped)
+            } catch (e: Exception) {
+                logger.warn(e) { "Failed to set speed on mpv" }
+            }
         }
     }
 

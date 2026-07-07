@@ -80,19 +80,19 @@ fun MPVVideoSurface(
                         mpvHandle?.let { togglePause(it) }
                         true
                     }
-                    Key.Left -> {
+                    Key.DirectionLeft -> {
                         mpvHandle?.let { seekRelative(it, -5.0) }
                         true
                     }
-                    Key.Right -> {
+                    Key.DirectionRight -> {
                         mpvHandle?.let { seekRelative(it, 5.0) }
                         true
                     }
-                    Key.Up -> {
+                    Key.DirectionUp -> {
                         mpvHandle?.let { adjustVolume(it, 5) }
                         true
                     }
-                    Key.Down -> {
+                    Key.DirectionDown -> {
                         mpvHandle?.let { adjustVolume(it, -5) }
                         true
                     }

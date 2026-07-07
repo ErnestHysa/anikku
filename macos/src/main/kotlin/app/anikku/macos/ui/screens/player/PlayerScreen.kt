@@ -277,23 +277,23 @@ private fun PlayerContent(
                         isControlsVisible = true
                         true
                     }
-                    event.key == Key.Left -> {
+                    event.key == Key.DirectionLeft -> {
                         onSeekRelative(-10.0)
                         elapsedSeconds = (elapsedSeconds - 10).coerceAtLeast(0)
                         seekFraction = if (totalSeconds > 0) elapsedSeconds.toFloat() / totalSeconds else 0f
                         true
                     }
-                    event.key == Key.Right -> {
+                    event.key == Key.DirectionRight -> {
                         onSeekRelative(10.0)
                         elapsedSeconds = (elapsedSeconds + 10).coerceAtMost(totalSeconds)
                         seekFraction = if (totalSeconds > 0) elapsedSeconds.toFloat() / totalSeconds else 0f
                         true
                     }
-                    event.key == Key.Up -> {
+                    event.key == Key.DirectionUp -> {
                         onSetVolume((volume + 5).coerceAtMost(200))
                         true
                     }
-                    event.key == Key.Down -> {
+                    event.key == Key.DirectionDown -> {
                         onSetVolume((volume - 5).coerceAtLeast(0))
                         true
                     }

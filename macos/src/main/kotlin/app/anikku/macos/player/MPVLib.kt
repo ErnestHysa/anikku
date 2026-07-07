@@ -139,7 +139,7 @@ object MPVLib {
 
     /** Set an integer property at runtime. */
     fun setPropertyInt(handle: Pointer, name: String, value: Int): Int =
-        checkAvailable().mpv_set_property(handle, name, FORMAT_INT64, LongByReference(value.toLong()))
+        checkAvailable().mpv_set_property(handle, name, FORMAT_INT64, LongByReference(value.toLong()).pointer)
 
     /** Set a double property at runtime. */
     fun setPropertyDouble(handle: Pointer, name: String, value: Double): Int =
@@ -148,7 +148,7 @@ object MPVLib {
     /** Get a string property. */
     fun getPropertyString(handle: Pointer, name: String): String? {
         val ptr = PointerByReference()
-        val result = checkAvailable().mpv_get_property(handle, name, FORMAT_STRING, ptr)
+        val result = checkAvailable().mpv_get_property(handle, name, FORMAT_STRING, ptr.pointer)
         if (result >= 0 && ptr.value != null) {
             val str = ptr.value.getString(0)
             checkAvailable().mpv_free(ptr.value)
@@ -160,7 +160,7 @@ object MPVLib {
     /** Get an integer property. */
     fun getPropertyInt(handle: Pointer, name: String, default: Int = 0): Int {
         val ref = LongByReference()
-        val result = checkAvailable().mpv_get_property(handle, name, FORMAT_INT64, ref)
+        val result = checkAvailable().mpv_get_property(handle, name, FORMAT_INT64, ref.pointer)
         return if (result >= 0) ref.value.toInt() else default
     }
 
@@ -174,17 +174,12 @@ object MPVLib {
     /** Get a flag (boolean) property. */
     fun getPropertyFlag(handle: Pointer, name: String, default: Boolean = false): Boolean {
         val ref = LongByReference()
-        val result = checkAvailable().mpv_get_property(handle, name, FORMAT_FLAG, ref)
+        val result = checkAvailable().mpv_get_property(handle, name, FORMAT_FLAG, ref.pointer)
         return if (result >= 0) ref.value != 0L else default
     }
 
-    /** Send a command to mpv (varargs version). */
-    fun command(handle: Pointer, vararg args: String): Int {
-        return command(handle, args)
-    }
-
     /** Send a command to mpv. */
-    fun command(handle: Pointer, args: Array<out String>): Int {
+    fun command(handle: Pointer, vararg args: String): Int {
         // JNA requires null-terminated array of C strings
         val cArgs = args.map { it.ifEmpty { null } }.toTypedArray()
         return checkAvailable().mpv_command(handle, cArgs)
