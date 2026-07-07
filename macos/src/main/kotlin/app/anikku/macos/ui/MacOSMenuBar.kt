@@ -1,0 +1,219 @@
+package app.anikku.macos.ui
+
+import java.awt.Frame
+import java.awt.Menu
+import java.awt.MenuBar
+import java.awt.MenuItem
+import java.awt.MenuShortcut
+import java.awt.event.KeyEvent
+
+/**
+ * macOS native menu bar per AD-04 (Phase 9.1).
+ *
+ * Since Compose Desktop 1.11.x's `MenuBar`/`Menu`/`Item` composable API
+ * is not available (scope resolution issues prevent compilation), this
+ * implementation uses the standard `java.awt.MenuBar` API attached to
+ * the underlying AWT Frame of the Compose Window.
+ *
+ * **AWT MenuShortcut limitations:** Can only express ⌘ and ⇧⌘ shortcuts.
+ * AD-04 shortcuts using ⌃⌘ (ctrl+cmd) or ⌥⌘ (alt+cmd) are approximated:
+ * - ⌃⌘S → ⌘S (Toggle Sidebar), ⇧⌘S (Save Backup)
+ * - ⌃⌘F → ⌘F (Toggle Full Screen)
+ * - ⌥⌘H → ⇧⌘H (Hide Others)
+ *
+ * On macOS, the first AWT Menu automatically becomes the application menu
+ * (next to the Apple menu), and AWT MenuShortcuts render as ⌘-key shortcuts.
+ *
+ * Usage (inside Window content lambda):
+ * ```
+ * (window as? Frame)?.menuBar = createMacOSMenuBar(onQuit)
+ * ```
+ */
+object MacOSMenuBarFactory {
+
+    /**
+     * Creates the full macOS menu bar with all AD-04 menus.
+     *
+     * @param onQuit Called when Quit (⌘Q) or Close Window (⌘W) is selected
+     * @param onSettings Called when Settings... (⌘,) is selected
+     */
+    fun create(onQuit: () -> Unit, onSettings: () -> Unit = {}): MenuBar {
+        return MenuBar().apply {
+            // App menu (first menu becomes macOS application menu)
+            add(appMenu(onQuit, onSettings))
+            add(fileMenu(onQuit))
+            add(editMenu())
+            add(viewMenu())
+            add(playbackMenu())
+            add(windowMenu())
+            add(helpMenu())
+        }
+    }
+
+    /**
+     * Attaches the menu bar to the AWT Frame underlying a Compose Window.
+     * Call this inside the Window content lambda.
+     */
+    fun attach(frame: Frame, onQuit: () -> Unit, onSettings: () -> Unit = {}) {
+        frame.menuBar = create(onQuit, onSettings)
+    }
+
+    // ---------------------------------------------------------------------------
+    // macOS Application Menu
+    // ---------------------------------------------------------------------------
+    private fun appMenu(onQuit: () -> Unit, onSettings: () -> Unit): Menu {
+        return Menu("Anikku").apply {
+            add(MenuItem("About Anikku").also {
+                it.addActionListener { /* TODO: Phase 5 — About dialog */ }
+            })
+            addSeparator()
+            add(MenuItem("Settings...", MenuShortcut(KeyEvent.VK_COMMA, false)).also {
+                it.addActionListener { onSettings() }
+            })
+            addSeparator()
+            add(MenuItem("Hide Anikku", MenuShortcut(KeyEvent.VK_H, false)).also {
+                it.addActionListener { /* TODO: Phase 9.6 */ }
+            })
+            add(MenuItem("Hide Others", MenuShortcut(KeyEvent.VK_H, true)).also {
+                it.addActionListener { /* TODO: Phase 9.6 */ }
+            })
+            add(MenuItem("Show All").also {
+                it.addActionListener { /* TODO: Phase 9.6 */ }
+            })
+            addSeparator()
+            add(MenuItem("Quit Anikku", MenuShortcut(KeyEvent.VK_Q, false)).also {
+                it.addActionListener { onQuit() }
+            })
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // File Menu
+    // ---------------------------------------------------------------------------
+    private fun fileMenu(onQuit: () -> Unit): Menu {
+        return Menu("File").apply {
+            add(MenuItem("Open Backup...", MenuShortcut(KeyEvent.VK_O, false)).also {
+                it.addActionListener { /* TODO: Phase 7 */ }
+            })
+            add(MenuItem("Save Backup...", MenuShortcut(KeyEvent.VK_S, true)).also {
+                it.addActionListener { /* TODO: Phase 7 */ }
+                // ⇧⌘S — AD-04 specifies ⌃⌘S but AWT cannot express ctrl+cmd;
+                // using ⇧⌘S (Save As convention) to avoid conflict with Sidebar ⌘S
+            })
+            addSeparator()
+            add(MenuItem("Close Window", MenuShortcut(KeyEvent.VK_W, false)).also {
+                it.addActionListener { onQuit() }
+            })
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Edit Menu
+    // ---------------------------------------------------------------------------
+    private fun editMenu(): Menu {
+        return Menu("Edit").apply {
+            add(MenuItem("Undo", MenuShortcut(KeyEvent.VK_Z, false)).also {
+                it.addActionListener { /* TODO: Text field handling */ }
+            })
+            add(MenuItem("Redo", MenuShortcut(KeyEvent.VK_Z, true)).also {
+                it.addActionListener { /* TODO: Text field handling */ }
+            })
+            addSeparator()
+            add(MenuItem("Cut", MenuShortcut(KeyEvent.VK_X, false)).also {
+                it.addActionListener { /* TODO: Text field handling */ }
+            })
+            add(MenuItem("Copy", MenuShortcut(KeyEvent.VK_C, false)).also {
+                it.addActionListener { /* TODO: Text field handling */ }
+            })
+            add(MenuItem("Paste", MenuShortcut(KeyEvent.VK_V, false)).also {
+                it.addActionListener { /* TODO: Text field handling */ }
+            })
+            add(MenuItem("Select All", MenuShortcut(KeyEvent.VK_A, false)).also {
+                it.addActionListener { /* TODO: Text field handling */ }
+            })
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // View Menu
+    // ---------------------------------------------------------------------------
+    private fun viewMenu(): Menu {
+        return Menu("View").apply {
+            add(MenuItem("Library", MenuShortcut(KeyEvent.VK_1, false)).also {
+                it.addActionListener { /* TODO: Phase 5 — Switch to Library tab */ }
+            })
+            add(MenuItem("Updates", MenuShortcut(KeyEvent.VK_2, false)).also {
+                it.addActionListener { /* TODO: Phase 5 — Switch to Updates tab */ }
+            })
+            add(MenuItem("History", MenuShortcut(KeyEvent.VK_3, false)).also {
+                it.addActionListener { /* TODO: Phase 5 — Switch to History tab */ }
+            })
+            add(MenuItem("Browse", MenuShortcut(KeyEvent.VK_4, false)).also {
+                it.addActionListener { /* TODO: Phase 5 — Switch to Browse tab */ }
+            })
+            addSeparator()
+            add(MenuItem("Toggle Sidebar", MenuShortcut(KeyEvent.VK_S, false)).also {
+                it.addActionListener { /* TODO: Phase 5 */ }
+            })
+            add(MenuItem("Toggle Full Screen", MenuShortcut(KeyEvent.VK_F, false)).also {
+                it.addActionListener { /* TODO: Phase 5 */ }
+            })
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Playback Menu
+    // ---------------------------------------------------------------------------
+    private fun playbackMenu(): Menu {
+        return Menu("Playback").apply {
+            add(MenuItem("Play / Pause").also {
+                it.addActionListener { /* TODO: Phase 6 */ }
+            })
+            add(MenuItem("Skip Forward").also {
+                it.addActionListener { /* TODO: Phase 6 */ }
+            })
+            add(MenuItem("Skip Backward").also {
+                it.addActionListener { /* TODO: Phase 6 */ }
+            })
+            addSeparator()
+            add(MenuItem("Volume Up").also {
+                it.addActionListener { /* TODO: Phase 6 */ }
+            })
+            add(MenuItem("Volume Down").also {
+                it.addActionListener { /* TODO: Phase 6 */ }
+            })
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Window Menu
+    // ---------------------------------------------------------------------------
+    private fun windowMenu(): Menu {
+        return Menu("Window").apply {
+            add(MenuItem("Minimize", MenuShortcut(KeyEvent.VK_M, false)).also {
+                it.addActionListener { /* TODO: Phase 9.6 */ }
+            })
+            add(MenuItem("Zoom").also {
+                it.addActionListener { /* TODO: Phase 5 */ }
+            })
+            addSeparator()
+            add(MenuItem("Bring All to Front").also {
+                it.addActionListener { /* macOS handles this */ }
+            })
+        }
+    }
+
+    // ---------------------------------------------------------------------------
+    // Help Menu
+    // ---------------------------------------------------------------------------
+    private fun helpMenu(): Menu {
+        return Menu("Help").apply {
+            add(MenuItem("Anikku Help").also {
+                it.addActionListener { /* TODO: Phase 12 */ }
+            })
+            add(MenuItem("Report Issue...").also {
+                it.addActionListener { /* TODO: Phase 12 */ }
+            })
+        }
+    }
+}
