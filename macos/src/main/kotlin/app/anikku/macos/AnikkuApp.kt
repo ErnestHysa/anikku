@@ -36,7 +36,7 @@ fun main() = application {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("Anikku macOS", fontSize = 32.sp)
                     Spacer(Modifier.height(8.dp))
-                    Text("Phase 1 — Core Infrastructure Ready", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Phase 3 — Networking & Extensions Ready", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(16.dp))
                     Text(
                         "Storage: ${app.storageProvider.directory().absolutePath}",
