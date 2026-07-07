@@ -45,7 +45,6 @@ dependencies {
     implementation(libs.material.motion)
 
     // Coil 3 - image loading (Compose Desktop compatible)
-    // coil-gif is Android-only (AAR) — excluded
     implementation(platform("io.coil-kt.coil3:coil-bom:3.3.0"))
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
@@ -92,7 +91,6 @@ compose.desktop {
         jvmArgs += listOf(
             "-Xmx2G",
             "-Dapple.awt.application.appearance=system",
-            // Allow access to internal AWT APIs for JNA native window bridging
             "--add-exports", "java.desktop/sun.lwawt=ALL-UNNAMED",
             "--add-exports", "java.desktop/sun.lwawt.macosx=ALL-UNNAMED",
             "--add-opens", "java.desktop/sun.lwawt=ALL-UNNAMED",
@@ -106,7 +104,6 @@ compose.desktop {
 
             macOS {
                 bundleID = "app.anikku.macos"
-                // TODO Phase 10.1: Add iconFile.set(project.file("src/main/resources/icons/app.icns"))
                 minimumSystemVersion = "12.0"
             }
         }
