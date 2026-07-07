@@ -1,5 +1,8 @@
 package app.anikku.macos.ui
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -9,8 +12,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.style.TextOverflow
 import app.anikku.macos.ui.screens.BrowseScreen
 import app.anikku.macos.ui.screens.HistoryScreen
@@ -73,15 +82,53 @@ fun MainWindow() {
                     // Side Navigation Rail
                     NavigationRailSidebar()
 
-                    // Tab content — use key() so each tab gets its own
-                    // composition scope, avoiding Voyager saveable state key
-                    // conflicts that occur with AnimatedContent (which renders
-                    // both old and new tabs simultaneously during transitions).
-                    key(tabNavigator.current.key) {
+                    // Tab content with saveable-state-safe fade transition.
+                    // Uses key() + animated alpha so only ONE CurrentTab() is
+                    // ever in the composition tree at a time (avoids Voyager
+                    // saveable state key conflicts), yet the fade-in creates
+                    // a smooth visual transition between tabs.
+                    AnimatedTabFade(tabKey = tabNavigator.current.key) {
                         CurrentTab()
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * Saveable-state-safe tab fade transition.
+ *
+ * When [tabKey] changes, the content fades in (alpha 0 → 1) over 200ms.
+ * Unlike AnimatedContent/Crossfade, this only ever has ONE content
+ * composable in the tree at a time, which avoids Voyager's saveable
+ * state key conflicts that caused the "Key used multiple times" crash.
+ *
+ * @param tabKey The unique key for the current tab (drives recomposition).
+ * @param content The tab content to render (typically a CurrentTab()).
+ */
+@Composable
+private fun AnimatedTabFade(
+    tabKey: String,
+    content: @Composable () -> Unit,
+) {
+    val alpha = remember { Animatable(0f) }
+    var isFirstRender by remember { mutableStateOf(true) }
+
+    // When the tab key changes (except the very first render), fade in
+    LaunchedEffect(tabKey) {
+        if (isFirstRender) {
+            isFirstRender = false
+            alpha.snapTo(1f) // First tab appears immediately
+        } else {
+            alpha.snapTo(0f)
+            alpha.animateTo(1f, animationSpec = tween(durationMillis = 200))
+        }
+    }
+
+    Box(modifier = Modifier.graphicsLayer { this.alpha = alpha.value }) {
+        key(tabKey) {
+            content()
         }
     }
 }
