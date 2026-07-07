@@ -65,7 +65,7 @@ fun MainWindow() {
                         },
                         label = "tabContent",
                     ) { tab ->
-                        tabNavigator.saveableState(key = "currentTab", tab) {
+                        tabNavigator.saveableState(key = "currentTab_${tab.key}", tab) {
                             CurrentTab()
                         }
                     }
