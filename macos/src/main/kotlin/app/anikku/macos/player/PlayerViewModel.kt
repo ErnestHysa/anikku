@@ -103,6 +103,22 @@ class PlayerViewModel {
     private val _selectedSubtitleTrack = MutableStateFlow(-1)
     val selectedSubtitleTrack: StateFlow<Int> = _selectedSubtitleTrack.asStateFlow()
 
+    // -------------------------------------------------------------------------
+    // Video equalizer state
+    // -------------------------------------------------------------------------
+
+    private val _brightness = MutableStateFlow(0f)
+    val brightness: StateFlow<Float> = _brightness.asStateFlow()
+
+    private val _contrast = MutableStateFlow(1f)
+    val contrast: StateFlow<Float> = _contrast.asStateFlow()
+
+    private val _saturation = MutableStateFlow(1f)
+    val saturation: StateFlow<Float> = _saturation.asStateFlow()
+
+    private val _gamma = MutableStateFlow(1f)
+    val gamma: StateFlow<Float> = _gamma.asStateFlow()
+
     /** Whether mpv is available on this system. */
     val isMPVAvailable: Boolean get() = MPVLib.isAvailable
 
@@ -458,6 +474,128 @@ class PlayerViewModel {
      */
     fun disableSubtitles() {
         selectSubtitleTrack(-1)
+    }
+
+    private val _subtitleDelay = MutableStateFlow(0.0)
+    val subtitleDelay: StateFlow<Double> = _subtitleDelay.asStateFlow()
+
+    private val _audioDelay = MutableStateFlow(0.0)
+    val audioDelay: StateFlow<Double> = _audioDelay.asStateFlow()
+
+    // -------------------------------------------------------------------------
+    // Video equalizer controls
+    // -------------------------------------------------------------------------
+
+    /**
+     * Set video brightness.
+     * UI range: -1.0..1.0 (default 0). Mapped to mpv range: -100..100.
+     */
+    fun setBrightness(value: Float) {
+        val clamped = value.coerceIn(-1f, 1f)
+        _brightness.value = clamped
+        val handle = mpvHandle
+        if (handle != null) {
+            try {
+                MPVLib.setPropertyDouble(handle, "brightness", (clamped * 100).toDouble())
+            } catch (e: Exception) {
+                logger.warn(e) { "Failed to set brightness" }
+            }
+        }
+    }
+
+    /**
+     * Set video contrast.
+     * UI range: 0.0..2.0 (default 1.0). Mapped to mpv range: -100..100.
+     */
+    fun setContrast(value: Float) {
+        val clamped = value.coerceIn(0f, 2f)
+        _contrast.value = clamped
+        val handle = mpvHandle
+        if (handle != null) {
+            try {
+                MPVLib.setPropertyDouble(handle, "contrast", ((clamped - 1f) * 100).toDouble())
+            } catch (e: Exception) {
+                logger.warn(e) { "Failed to set contrast" }
+            }
+        }
+    }
+
+    /**
+     * Set video saturation.
+     * UI range: 0.0..2.0 (default 1.0). Mapped to mpv range: -100..100.
+     */
+    fun setSaturation(value: Float) {
+        val clamped = value.coerceIn(0f, 2f)
+        _saturation.value = clamped
+        val handle = mpvHandle
+        if (handle != null) {
+            try {
+                MPVLib.setPropertyDouble(handle, "saturation", ((clamped - 1f) * 100).toDouble())
+            } catch (e: Exception) {
+                logger.warn(e) { "Failed to set saturation" }
+            }
+        }
+    }
+
+    /**
+     * Set video gamma.
+     * UI range: 0.1..2.0 (default 1.0). Mapped to mpv range: -100..100.
+     */
+    fun setGamma(value: Float) {
+        val clamped = value.coerceIn(0.1f, 2f)
+        _gamma.value = clamped
+        val handle = mpvHandle
+        if (handle != null) {
+            try {
+                MPVLib.setPropertyDouble(handle, "gamma", ((clamped - 1f) * 100).toDouble())
+            } catch (e: Exception) {
+                logger.warn(e) { "Failed to set gamma" }
+            }
+        }
+    }
+
+    /**
+     * Reset all equalizer values to defaults.
+     */
+    fun resetEqualizer() {
+        setBrightness(0f)
+        setContrast(1f)
+        setSaturation(1f)
+        setGamma(1f)
+    }
+
+    /**
+     * Set subtitle delay in seconds. Negative = earlier, positive = later.
+     * UI range: -10.0..10.0 (default 0.0). Maps directly to mpv sub-delay.
+     */
+    fun setSubtitleDelay(delay: Double) {
+        val clamped = delay.coerceIn(-10.0, 10.0)
+        _subtitleDelay.value = clamped
+        val handle = mpvHandle
+        if (handle != null) {
+            try {
+                MPVLib.setPropertyDouble(handle, "sub-delay", clamped)
+            } catch (e: Exception) {
+                logger.warn(e) { "Failed to set subtitle delay" }
+            }
+        }
+    }
+
+    /**
+     * Set audio delay in seconds. Negative = audio plays earlier, positive = later.
+     * UI range: -10.0..10.0 (default 0.0). Maps directly to mpv audio-delay.
+     */
+    fun setAudioDelay(delay: Double) {
+        val clamped = delay.coerceIn(-10.0, 10.0)
+        _audioDelay.value = clamped
+        val handle = mpvHandle
+        if (handle != null) {
+            try {
+                MPVLib.setPropertyDouble(handle, "audio-delay", clamped)
+            } catch (e: Exception) {
+                logger.warn(e) { "Failed to set audio delay" }
+            }
+        }
     }
 
     // -------------------------------------------------------------------------

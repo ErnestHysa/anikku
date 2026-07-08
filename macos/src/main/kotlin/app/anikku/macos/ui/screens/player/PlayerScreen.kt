@@ -106,6 +106,12 @@ data class PlayerScreen(
         val isPaused by playerViewModel.isPaused.collectAsState()
         val volume by playerViewModel.volume.collectAsState()
         val playbackSpeed by playerViewModel.playbackSpeed.collectAsState()
+        val brightness by playerViewModel.brightness.collectAsState()
+        val contrast by playerViewModel.contrast.collectAsState()
+        val saturation by playerViewModel.saturation.collectAsState()
+        val gamma by playerViewModel.gamma.collectAsState()
+        val subtitleDelay by playerViewModel.subtitleDelay.collectAsState()
+        val audioDelay by playerViewModel.audioDelay.collectAsState()
 
         // Look up data from MockData
         val anime = remember { MockData.sampleAnime.find { it.id == animeId } }
@@ -140,6 +146,12 @@ data class PlayerScreen(
             isPaused = isPaused,
             volume = volume,
             playbackSpeed = playbackSpeed,
+            brightness = brightness,
+            contrast = contrast,
+            saturation = saturation,
+            gamma = gamma,
+            subtitleDelay = subtitleDelay,
+            audioDelay = audioDelay,
             isMPVAvailable = playerViewModel.isMPVAvailable,
             onBack = { navigator.pop() },
             onNavigateEpisode = { index ->
@@ -186,6 +198,12 @@ private fun PlayerContent(
     isPaused: Boolean = true,
     volume: Int = 100,
     playbackSpeed: Double = 1.0,
+    brightness: Float = 0f,
+    contrast: Float = 1f,
+    saturation: Float = 1f,
+    gamma: Float = 1f,
+    subtitleDelay: Double = 0.0,
+    audioDelay: Double = 0.0,
     isMPVAvailable: Boolean = false,
     onBack: () -> Unit,
     onNavigateEpisode: (Int) -> Unit,
@@ -598,7 +616,9 @@ private fun PlayerContent(
             PlayerAudioTrackPanel(
                 tracks = playerViewModel?.audioTracks?.value?.map { it.title } ?: emptyList(),
                 currentTrackIndex = playerViewModel?.selectedAudioTrack?.value ?: -1,
+                audioDelay = audioDelay,
                 onTrackSelected = { playerViewModel?.selectAudioTrack(it) },
+                onDelayChange = { playerViewModel?.setAudioDelay(it) },
                 onDismiss = { showAudioPanel = false },
             )
         }
@@ -613,9 +633,9 @@ private fun PlayerContent(
             PlayerSubtitleTrackPanel(
                 tracks = playerViewModel?.subtitleTracks?.value?.map { it.title } ?: emptyList(),
                 currentTrackIndex = playerViewModel?.selectedSubtitleTrack?.value ?: -1,
-                subtitleDelay = 0.0,
+                subtitleDelay = subtitleDelay,
                 onTrackSelected = { playerViewModel?.selectSubtitleTrack(it) },
-                onDelayChange = { },
+                onDelayChange = { playerViewModel?.setSubtitleDelay(it) },
                 onDismiss = { showSubtitlePanel = false },
             )
         }
@@ -628,6 +648,15 @@ private fun PlayerContent(
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
             PlayerEqualizerPanel(
+                brightness = brightness,
+                contrast = contrast,
+                saturation = saturation,
+                gamma = gamma,
+                onBrightnessChange = { playerViewModel?.setBrightness(it) },
+                onContrastChange = { playerViewModel?.setContrast(it) },
+                onSaturationChange = { playerViewModel?.setSaturation(it) },
+                onGammaChange = { playerViewModel?.setGamma(it) },
+                onReset = { playerViewModel?.resetEqualizer() },
                 onDismiss = { showEqualizerPanel = false },
             )
         }

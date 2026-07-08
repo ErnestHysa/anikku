@@ -168,9 +168,13 @@ fun PlayerSpeedPanel(
 fun PlayerAudioTrackPanel(
     tracks: List<String> = emptyList(),
     currentTrackIndex: Int = 0,
+    audioDelay: Double = 0.0,
     onTrackSelected: (Int) -> Unit,
+    onDelayChange: (Double) -> Unit = {},
     onDismiss: () -> Unit,
 ) {
+    var sliderDelay by remember(audioDelay) { mutableFloatStateOf(audioDelay.toFloat()) }
+
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -225,6 +229,29 @@ fun PlayerAudioTrackPanel(
                     }
                 }
             }
+
+            Spacer(Modifier.height(8.dp))
+
+            // Audio delay slider
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            Text(
+                text = "Audio Delay (${"%.1f".format(sliderDelay)}s)",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Slider(
+                value = sliderDelay,
+                onValueChange = { sliderDelay = it },
+                onValueChangeFinished = { onDelayChange(sliderDelay.toDouble()) },
+                valueRange = -10f..10f,
+                steps = 40,
+                colors = SliderDefaults.colors(
+                    thumbColor = MaterialTheme.colorScheme.primary,
+                    activeTrackColor = MaterialTheme.colorScheme.primary,
+                ),
+            )
 
             Spacer(Modifier.height(12.dp))
 
