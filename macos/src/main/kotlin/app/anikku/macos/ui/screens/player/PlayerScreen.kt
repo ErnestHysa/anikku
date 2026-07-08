@@ -8,33 +8,25 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.SkipNext
-import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material.icons.outlined.FastForward
-import androidx.compose.material.icons.outlined.FastRewind
-import androidx.compose.material.icons.outlined.PauseCircle
 import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.CameraAlt
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -50,7 +42,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.key
@@ -62,7 +53,6 @@ import app.anikku.macos.player.MPVLib
 import app.anikku.macos.player.MPVVideoSurface
 import app.anikku.macos.player.PlaybackState
 import app.anikku.macos.player.PlayerViewModel
-import app.anikku.macos.player.formatDuration
 import app.anikku.macos.ui.AnikkuScreen
 import app.anikku.macos.ui.components.LocalToastHost
 import app.anikku.macos.ui.components.ToastDuration
@@ -115,6 +105,7 @@ data class PlayerScreen(
         val duration by playerViewModel.duration.collectAsState()
         val isPaused by playerViewModel.isPaused.collectAsState()
         val volume by playerViewModel.volume.collectAsState()
+        val playbackSpeed by playerViewModel.playbackSpeed.collectAsState()
 
         // Look up data from MockData
         val anime = remember { MockData.sampleAnime.find { it.id == animeId } }
@@ -148,6 +139,7 @@ data class PlayerScreen(
             duration = duration,
             isPaused = isPaused,
             volume = volume,
+            playbackSpeed = playbackSpeed,
             isMPVAvailable = playerViewModel.isMPVAvailable,
             onBack = { navigator.pop() },
             onNavigateEpisode = { index ->
@@ -193,6 +185,7 @@ private fun PlayerContent(
     duration: Double = 0.0,
     isPaused: Boolean = true,
     volume: Int = 100,
+    playbackSpeed: Double = 1.0,
     isMPVAvailable: Boolean = false,
     onBack: () -> Unit,
     onNavigateEpisode: (Int) -> Unit,
@@ -208,6 +201,13 @@ private fun PlayerContent(
     var elapsedSeconds by remember { mutableLongStateOf(currentEpisode?.lastSecondSeen ?: 0L) }
     var totalSeconds by remember { mutableLongStateOf(currentEpisode?.totalSeconds?.coerceAtLeast(1) ?: 1440L) }
     var seekFraction by remember { mutableFloatStateOf(0f) }
+
+    // Settings panel visibility
+    var showSettingsMenu by remember { mutableStateOf(false) }
+    var showSpeedPanel by remember { mutableStateOf(false) }
+    var showAudioPanel by remember { mutableStateOf(false) }
+    var showSubtitlePanel by remember { mutableStateOf(false) }
+    var showEqualizerPanel by remember { mutableStateOf(false) }
 
     // Sync with mpv state when available
     LaunchedEffect(isPaused) {
@@ -424,9 +424,50 @@ private fun PlayerContent(
                     }
                 },
                 actions = {
+                    // Settings button with dropdown menu
+                    Box {
+                        TransportIconButton(
+                            icon = Icons.Outlined.Settings,
+                            description = "Settings",
+                            onClick = { showSettingsMenu = true },
+                        )
+                        DropdownMenu(
+                            expanded = showSettingsMenu,
+                            onDismissRequest = { showSettingsMenu = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Playback Speed") },
+                                onClick = {
+                                    showSettingsMenu = false
+                                    showSpeedPanel = true
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Audio Track") },
+                                onClick = {
+                                    showSettingsMenu = false
+                                    showAudioPanel = true
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Subtitles") },
+                                onClick = {
+                                    showSettingsMenu = false
+                                    showSubtitlePanel = true
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Equalizer") },
+                                onClick = {
+                                    showSettingsMenu = false
+                                    showEqualizerPanel = true
+                                },
+                            )
+                        }
+                    }
                     // Screenshot button
                     if (isMPVAvailable) {
-                        PlayerIconButton(
+                        TransportIconButton(
                             icon = Icons.Outlined.CameraAlt,
                             description = "Take screenshot",
                             onClick = onTakeScreenshot,
@@ -463,180 +504,39 @@ private fun PlayerContent(
             }
         }
 
-        // === Bottom controls ===
+        // === Bottom controls — delegated to PlayerTransportControls ===
         AnimatedVisibility(
             visible = isControlsVisible,
             enter = slideInVertically { it } + fadeIn(),
             exit = slideOutVertically { it } + fadeOut(),
             modifier = Modifier.align(Alignment.BottomCenter),
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 24.dp, vertical = 16.dp),
-            ) {
-                // Seek bar
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = formatDuration(elapsedSeconds),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color.White.copy(alpha = 0.8f),
-                        modifier = Modifier.width(48.dp),
-                    )
-
-                    Slider(
-                        value = seekFraction,
-                        onValueChange = { seekFraction = it },
-                        onValueChangeFinished = {
-                            val newSeconds = (seekFraction * totalSeconds).toLong()
-                            elapsedSeconds = newSeconds
-                            onSeekTo(newSeconds.toDouble())
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(horizontal = 8.dp),
-                        colors = SliderDefaults.colors(
-                            thumbColor = Color.White,
-                            activeTrackColor = MaterialTheme.colorScheme.primary,
-                            inactiveTrackColor = Color.White.copy(alpha = 0.3f),
-                        ),
-                    )
-
-                    Text(
-                        text = formatDuration(totalSeconds),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color.White.copy(alpha = 0.8f),
-                        modifier = Modifier.width(48.dp),
-                    )
-                }
-
-                // Volume indicator
-                if (isMPVAvailable) {
-                    Text(
-                        text = "Volume: $volume",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.White.copy(alpha = 0.5f),
-                        modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
-                    )
-                }
-
-                Spacer(Modifier.height(8.dp))
-
-                // Transport controls row
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    // Previous episode
-                    PlayerIconButton(
-                        icon = Icons.Filled.SkipPrevious,
-                        description = "Previous episode",
-                        enabled = currentEpisodeIndex > 0,
-                        onClick = { onNavigateEpisode(currentEpisodeIndex - 1) },
-                    )
-
-                    Spacer(Modifier.width(16.dp))
-
-                    // Rewind 10s
-                    PlayerIconButton(
-                        icon = Icons.Outlined.FastRewind,
-                        description = "Rewind 10 seconds",
-                        onClick = {
-                            onSeekRelative(-10.0)
-                            elapsedSeconds = (elapsedSeconds - 10).coerceAtLeast(0)
-                            seekFraction = if (totalSeconds > 0) elapsedSeconds.toFloat() / totalSeconds else 0f
-                        },
-                    )
-
-                    Spacer(Modifier.width(24.dp))
-
-                    // Play / Pause
-                    IconButton(
-                        onClick = {
-                            onTogglePlay()
-                            isPlaying = !isPlaying
-                        },
-                        modifier = Modifier.size(56.dp),
-                    ) {
-                        Icon(
-                            imageVector = if (isPlaying) Icons.Outlined.PauseCircle else Icons.Outlined.PlayCircle,
-                            contentDescription = if (isPlaying) "Pause" else "Play",
-                            tint = Color.White,
-                            modifier = Modifier.fillMaxSize(),
-                        )
-                    }
-
-                    Spacer(Modifier.width(24.dp))
-
-                    // Forward 10s
-                    PlayerIconButton(
-                        icon = Icons.Outlined.FastForward,
-                        description = "Forward 10 seconds",
-                        onClick = {
-                            onSeekRelative(10.0)
-                            elapsedSeconds = (elapsedSeconds + 10).coerceAtMost(totalSeconds)
-                            seekFraction = if (totalSeconds > 0) elapsedSeconds.toFloat() / totalSeconds else 0f
-                        },
-                    )
-
-                    Spacer(Modifier.width(16.dp))
-
-                    // Next episode
-                    PlayerIconButton(
-                        icon = Icons.Filled.SkipNext,
-                        description = "Next episode",
-                        enabled = currentEpisodeIndex < episodes.size - 1,
-                        onClick = { onNavigateEpisode(currentEpisodeIndex + 1) },
-                    )
-                }
-
-                Spacer(Modifier.height(12.dp))
-
-                // Episode pill selector
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Center,
-                ) {
-                    episodes.forEachIndexed { index, _ ->
-                        val isSelected = index == currentEpisodeIndex
-                        Box(
-                            modifier = Modifier
-                                .padding(horizontal = 2.dp)
-                                .size(
-                                    width = if (isSelected) 24.dp else 8.dp,
-                                    height = 4.dp,
-                                )
-                                .clip(RoundedCornerShape(2.dp))
-                                .background(
-                                    if (isSelected) MaterialTheme.colorScheme.primary
-                                    else Color.White.copy(alpha = 0.3f),
-                                )
-                                .clickable { onNavigateEpisode(index) },
-                        )
-                    }
-                }
-
-                // Playback status
-                if (isMPVAvailable) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        text = when (playbackState) {
-                            PlaybackState.LOADING -> "Loading..."
-                            PlaybackState.BUFFERING -> "Buffering..."
-                            PlaybackState.ERROR -> "Playback error"
-                            PlaybackState.ENDED -> "Episode ended"
-                            else -> ""
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.White.copy(alpha = 0.4f),
-                        modifier = Modifier.align(Alignment.CenterHorizontally),
-                    )
-                }
-            }
+            PlayerTransportControls(
+                currentPositionSeconds = elapsedSeconds,
+                totalDurationSeconds = totalSeconds,
+                isPlaying = isPlaying,
+                playbackState = playbackState,
+                currentEpisodeIndex = currentEpisodeIndex,
+                episodeCount = episodes.size,
+                volume = volume,
+                showVolume = isMPVAvailable,
+                onTogglePlay = {
+                    onTogglePlay()
+                    isPlaying = !isPlaying
+                },
+                onSeek = { seekFraction = it },
+                onSeekEnd = { fraction ->
+                    val newSeconds = (fraction * totalSeconds).toLong()
+                    elapsedSeconds = newSeconds
+                    onSeekTo(newSeconds.toDouble())
+                },
+                onSeekRelative = { offset ->
+                    onSeekRelative(offset)
+                    elapsedSeconds = (elapsedSeconds + offset.toLong()).coerceIn(0, totalSeconds)
+                    seekFraction = if (totalSeconds > 0) elapsedSeconds.toFloat() / totalSeconds else 0f
+                },
+                onNavigateEpisode = onNavigateEpisode,
+            )
         }
 
         // === Keyboard shortcut hint ===
@@ -652,30 +552,85 @@ private fun PlayerContent(
                 color = Color.White.copy(alpha = 0.4f),
             )
         }
-    }
-}
 
-/**
- * Small circular icon button for transport controls.
- */
-@Composable
-private fun PlayerIconButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    description: String,
-    enabled: Boolean = true,
-    onClick: () -> Unit,
-) {
-    IconButton(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = Modifier.size(40.dp),
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = description,
-            tint = if (enabled) Color.White else Color.White.copy(alpha = 0.3f),
-            modifier = Modifier.size(24.dp),
-        )
+        // === Settings panel overlays ===
+        val isAnyPanelOpen = showSpeedPanel || showAudioPanel || showSubtitlePanel || showEqualizerPanel
+
+        // Scrim
+        if (isAnyPanelOpen) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.5f))
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) {
+                        showSpeedPanel = false
+                        showAudioPanel = false
+                        showSubtitlePanel = false
+                        showEqualizerPanel = false
+                    }
+            )
+        }
+
+        // Speed panel
+        AnimatedVisibility(
+            visible = showSpeedPanel,
+            enter = slideInVertically { it } + fadeIn(),
+            exit = slideOutVertically { it } + fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            PlayerSpeedPanel(
+                currentSpeed = playbackSpeed.toFloat(),
+                onSpeedChange = { playerViewModel?.setSpeed(it.toDouble()) },
+                onDismiss = { showSpeedPanel = false },
+            )
+        }
+
+        // Audio track panel
+        AnimatedVisibility(
+            visible = showAudioPanel,
+            enter = slideInVertically { it } + fadeIn(),
+            exit = slideOutVertically { it } + fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            PlayerAudioTrackPanel(
+                tracks = playerViewModel?.audioTracks?.value?.map { it.title } ?: emptyList(),
+                currentTrackIndex = playerViewModel?.selectedAudioTrack?.value ?: -1,
+                onTrackSelected = { playerViewModel?.selectAudioTrack(it) },
+                onDismiss = { showAudioPanel = false },
+            )
+        }
+
+        // Subtitle panel
+        AnimatedVisibility(
+            visible = showSubtitlePanel,
+            enter = slideInVertically { it } + fadeIn(),
+            exit = slideOutVertically { it } + fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            PlayerSubtitleTrackPanel(
+                tracks = playerViewModel?.subtitleTracks?.value?.map { it.title } ?: emptyList(),
+                currentTrackIndex = playerViewModel?.selectedSubtitleTrack?.value ?: -1,
+                subtitleDelay = 0.0,
+                onTrackSelected = { playerViewModel?.selectSubtitleTrack(it) },
+                onDelayChange = { },
+                onDismiss = { showSubtitlePanel = false },
+            )
+        }
+
+        // Equalizer panel
+        AnimatedVisibility(
+            visible = showEqualizerPanel,
+            enter = slideInVertically { it } + fadeIn(),
+            exit = slideOutVertically { it } + fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            PlayerEqualizerPanel(
+                onDismiss = { showEqualizerPanel = false },
+            )
+        }
     }
 }
 
