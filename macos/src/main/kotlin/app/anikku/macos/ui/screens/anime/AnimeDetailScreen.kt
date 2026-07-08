@@ -73,6 +73,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import app.anikku.macos.platform.MacOSShareUtil
+import app.anikku.macos.platform.data.LibraryRepository
+import app.anikku.macos.platform.data.LocalLibraryRepository
 import app.anikku.macos.platform.extension.MacOSExtensionManager
 import app.anikku.macos.platform.preference.LocalBookmarkStore
 import app.anikku.macos.ui.AnikkuScreen
@@ -126,6 +128,7 @@ data class AnimeDetailScreen(
         val navigator = LocalNavigator.currentOrThrow
         val toastHost = LocalToastHost.current
         val bookmarkStore = LocalBookmarkStore.current
+        val libraryRepo = LocalLibraryRepository.current
         val focusRequester = remember { FocusRequester() }
 
         // State for source-backed data
@@ -234,13 +237,30 @@ data class AnimeDetailScreen(
                         usingFallback = usingFallback,
                         isFavorite = anime?.favorite ?: false,
                         onToggleFavorite = {
-                            val updated = anime?.copy(favorite = !anime!!.favorite)
-                            if (updated != null) {
-                                anime = updated
-                                toastHost.show(
-                                    if (updated.favorite) "Added to favorites" else "Removed from favorites",
-                                    ToastDuration.SHORT,
-                                )
+                            val currentAnime = anime
+                            if (currentAnime != null) {
+                                val isNowFavorite = !currentAnime.favorite
+                                anime = currentAnime.copy(favorite = isNowFavorite)
+                                if (isNowFavorite) {
+                                    libraryRepo.add(
+                                        LibraryRepository.LibraryEntry(
+                                            animeId = currentAnime.id,
+                                            title = currentAnime.title,
+                                            sourceId = sourceId ?: currentAnime.source,
+                                            url = currentAnime.url,
+                                            thumbnailUrl = currentAnime.thumbnailUrl,
+                                            author = currentAnime.author,
+                                            artist = currentAnime.artist,
+                                            description = currentAnime.description,
+                                            genre = currentAnime.genre,
+                                            status = currentAnime.status,
+                                        )
+                                    )
+                                    toastHost.show("Added to library", ToastDuration.SHORT)
+                                } else {
+                                    libraryRepo.remove(currentAnime.id)
+                                    toastHost.show("Removed from library", ToastDuration.SHORT)
+                                }
                             }
                         },
                         onToggleBookmark = { episodeId ->

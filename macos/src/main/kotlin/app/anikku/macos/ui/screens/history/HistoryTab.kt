@@ -25,7 +25,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -33,11 +36,11 @@ import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.anikku.macos.platform.data.HistoryRepository
+import app.anikku.macos.platform.data.LocalHistoryRepository
 import app.anikku.macos.ui.AnikkuScreen
 import app.anikku.macos.ui.components.LocalToastHost
 import app.anikku.macos.ui.components.ToastDuration
-import app.anikku.macos.ui.screens.models.HistoryEntryModel
-import app.anikku.macos.ui.screens.models.MockData
 import cafe.adriel.voyager.navigator.tab.Tab
 import cafe.adriel.voyager.navigator.tab.TabOptions
 import java.text.SimpleDateFormat
@@ -48,19 +51,31 @@ import java.util.Locale
  * History screen tab — Phase 5.
  *
  * Shows the user's episode watch history chronologically.
- * Uses local [HistoryEntryModel] data until domain layer is connected.
- *
- * TODO: Connect to GetHistory interactor when domain modules are available.
+ * Reads entries from [HistoryRepository], which persists history to a JSON file.
  */
 object HistoryTab : AnikkuScreen(), Tab {
 
     @Composable
     override fun Content() {
         val toastHost = LocalToastHost.current
-        val history = remember { MockData.sampleHistory }
+        val historyRepo = LocalHistoryRepository.current
+        var history by remember { mutableStateOf(historyRepo.getAll()) }
+
         HistoryContent(
-            history = history,
-            onClearAll = { toastHost.show("History cleared", ToastDuration.SHORT) },
+            history = history.map { entry ->
+                HistoryItemData(
+                    id = entry.episodeId,
+                    animeTitle = entry.animeTitle,
+                    episodeName = entry.episodeName,
+                    episodeNumber = entry.episodeNumber,
+                    seenAt = entry.seenAt,
+                )
+            },
+            onClearAll = {
+                historyRepo.clearAll()
+                history = emptyList()
+                toastHost.show("History cleared", ToastDuration.SHORT)
+            },
         )
     }
 
@@ -73,9 +88,17 @@ object HistoryTab : AnikkuScreen(), Tab {
         )
 }
 
+data class HistoryItemData(
+    val id: Long,
+    val animeTitle: String,
+    val episodeName: String,
+    val episodeNumber: Double,
+    val seenAt: Long,
+)
+
 @Composable
 private fun HistoryContent(
-    history: List<HistoryEntryModel>,
+    history: List<HistoryItemData>,
     onClearAll: () -> Unit = {},
 ) {
     if (history.isEmpty()) {
@@ -138,7 +161,7 @@ private fun HistoryContent(
 }
 
 @Composable
-private fun HistoryItem(entry: HistoryEntryModel) {
+private fun HistoryItem(entry: HistoryItemData) {
     val dateFormat = remember { SimpleDateFormat("MMM d, yyyy 'at' HH:mm", Locale.getDefault()) }
 
     Card(

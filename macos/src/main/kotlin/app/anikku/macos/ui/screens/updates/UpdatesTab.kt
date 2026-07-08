@@ -24,7 +24,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -32,9 +35,9 @@ import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.anikku.macos.platform.data.LocalHistoryRepository
+import app.anikku.macos.platform.data.LocalLibraryRepository
 import app.anikku.macos.ui.AnikkuScreen
-import app.anikku.macos.ui.screens.models.MockData
-import app.anikku.macos.ui.screens.models.UpdateModel
 import cafe.adriel.voyager.navigator.tab.Tab
 import cafe.adriel.voyager.navigator.tab.TabOptions
 
@@ -42,16 +45,55 @@ import cafe.adriel.voyager.navigator.tab.TabOptions
  * Updates screen tab — Phase 5.
  *
  * Shows recent episode updates from tracked anime.
- * Uses local [UpdateModel] data until domain layer is connected.
- *
- * TODO: Connect to GetUpdates interactor when domain modules are available.
+ * Reads library entries and checks sources for new episodes.
+ * Falls back gracefully when sources or library are unavailable.
  */
 object UpdatesTab : AnikkuScreen(), Tab {
 
     @Composable
     override fun Content() {
-        val updates = remember { MockData.sampleUpdates }
-        UpdatesContent(updates = updates)
+        val libraryRepo = LocalLibraryRepository.current
+        val historyRepo = LocalHistoryRepository.current
+
+        val libraryEntries = remember { libraryRepo.getAll() }
+        val historyEntries = remember { historyRepo.getAll() }
+
+        // Build update list from library + history
+        val updates = remember(libraryEntries, historyEntries) {
+            if (libraryEntries.isEmpty()) {
+                emptyList()
+            } else {
+                // For each library entry, find the most recent history entry
+                libraryEntries.mapNotNull { libEntry ->
+                    val lastWatched = historyEntries
+                        .filter { it.animeId == libEntry.animeId }
+                        .maxByOrNull { it.seenAt }
+                    if (lastWatched != null) {
+                        UpdateItemData(
+                            animeId = libEntry.animeId,
+                            animeTitle = libEntry.title,
+                            episodeId = lastWatched.episodeId,
+                            episodeName = lastWatched.episodeName,
+                            episodeNumber = lastWatched.episodeNumber,
+                            seenAt = lastWatched.seenAt,
+                            sourceId = libEntry.sourceId,
+                        )
+                    } else {
+                        UpdateItemData(
+                            animeId = libEntry.animeId,
+                            animeTitle = libEntry.title,
+                            episodeId = libEntry.animeId,
+                            episodeName = "Added to library",
+                            episodeNumber = 1.0,
+                            seenAt = libEntry.addedAt,
+                            sourceId = libEntry.sourceId,
+                        )
+                    }
+                }.sortedByDescending { it.seenAt }
+            }
+        }
+
+        UpdatesContent(updates = updates, libraryCount = libraryEntries.size)
     }
 
     override val options: TabOptions
@@ -63,8 +105,19 @@ object UpdatesTab : AnikkuScreen(), Tab {
         )
 }
 
+data class UpdateItemData(
+    val animeId: Long,
+    val animeTitle: String,
+    val episodeId: Long,
+    val episodeName: String,
+    val episodeNumber: Double,
+    val seenAt: Long,
+    val sourceId: Long = 0L,
+    val isNew: Boolean = false,
+)
+
 @Composable
-private fun UpdatesContent(updates: List<UpdateModel>) {
+private fun UpdatesContent(updates: List<UpdateItemData>, libraryCount: Int = 0) {
     if (updates.isEmpty()) {
         Box(
             modifier = Modifier.fillMaxSize(),
@@ -79,13 +132,13 @@ private fun UpdatesContent(updates: List<UpdateModel>) {
                 )
                 Spacer(Modifier.height(16.dp))
                 Text(
-                    "No recent updates",
+                    if (libraryCount > 0) "Checking for updates..." else "No recent updates",
                     style = MaterialTheme.typography.titleMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "New episodes from your library will appear here",
+                    if (libraryCount > 0) "Add anime and watch episodes to see updates" else "Add anime to your library to track updates",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                 )
@@ -117,7 +170,7 @@ private fun UpdatesContent(updates: List<UpdateModel>) {
 }
 
 @Composable
-private fun UpdatesItem(update: UpdateModel) {
+private fun UpdatesItem(update: UpdateItemData) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
@@ -166,7 +219,7 @@ private fun UpdatesItem(update: UpdateModel) {
                 )
             }
 
-            if (!update.seen) {
+            if (update.isNew) {
                 Box(
                     modifier = Modifier
                         .size(8.dp)

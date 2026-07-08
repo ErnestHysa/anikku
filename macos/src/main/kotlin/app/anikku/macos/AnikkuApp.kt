@@ -20,6 +20,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import app.anikku.macos.ui.MainWindow
 import app.anikku.macos.ui.TabSwitchHandler
+import app.anikku.macos.platform.data.LibraryRepository
+import app.anikku.macos.platform.data.HistoryRepository
+import app.anikku.macos.platform.data.LocalLibraryRepository
+import app.anikku.macos.platform.data.LocalHistoryRepository
 import app.anikku.macos.platform.preference.BookmarkStore
 import app.anikku.macos.platform.preference.LocalBookmarkStore
 import app.anikku.macos.ui.components.LocalToastHost
@@ -70,6 +74,8 @@ fun main() = application {
     ) {
         val settingsState = remember { SettingsState(app.preferenceStore) }
         val bookmarkStore = remember { BookmarkStore(app.preferenceStore) }
+        val libraryRepository = remember { app.libraryRepository }
+        val historyRepository = remember { app.historyRepository }
         val toastHostState = remember { ToastHostState() }
 
         var showAboutDialog by remember { mutableStateOf(false) }
@@ -112,6 +118,8 @@ fun main() = application {
         CompositionLocalProvider(
             LocalSettingsState provides settingsState,
             LocalBookmarkStore provides bookmarkStore,
+            LocalLibraryRepository provides libraryRepository,
+            LocalHistoryRepository provides historyRepository,
             LocalToastHost provides toastHostState,
         ) {
             AnikkuTheme(

@@ -1,9 +1,20 @@
 package app.anikku.macos.platform.data
 
+import androidx.compose.runtime.compositionLocalOf
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
+
+/**
+ * CompositionLocal providing the [LibraryRepository] to the Compose tree.
+ */
+val LocalLibraryRepository = compositionLocalOf { LibraryRepository(java.io.File("")) }
+
+/**
+ * CompositionLocal providing the [HistoryRepository] to the Compose tree.
+ */
+val LocalHistoryRepository = compositionLocalOf { HistoryRepository(java.io.File("")) }
 
 /**
  * macOS-specific custom anime info repository.

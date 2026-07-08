@@ -55,6 +55,8 @@ import app.anikku.macos.player.MPVLib
 import app.anikku.macos.player.MPVVideoSurface
 import app.anikku.macos.player.PlaybackState
 import app.anikku.macos.player.PlayerViewModel
+import app.anikku.macos.platform.data.HistoryRepository
+import app.anikku.macos.platform.data.LocalHistoryRepository
 import app.anikku.macos.platform.extension.MacOSExtensionManager
 import app.anikku.macos.ui.AnikkuScreen
 import app.anikku.macos.ui.components.LocalToastHost
@@ -107,6 +109,7 @@ data class PlayerScreen(
     override fun Content() {
         val navigator = LocalNavigator.currentOrThrow
         val toastHost = LocalToastHost.current
+        val historyRepo = LocalHistoryRepository.current
 
         // Initialize the player view model (Phase 6)
         val playerViewModel = remember { PlayerViewModel() }
@@ -202,9 +205,30 @@ data class PlayerScreen(
             }
         }
 
-        // Clean up when the screen is removed
+        // Record history when episode finishes or screen is dismissed
+        fun recordHistory(episode: EpisodeModel?) {
+            if (episode != null) {
+                historyRepo.add(
+                    HistoryRepository.HistoryEntry(
+                        animeId = animeId,
+                        episodeId = episode.id,
+                        animeTitle = animeTitle,
+                        episodeName = episode.name,
+                        episodeNumber = episode.episodeNumber,
+                        sourceId = sourceId ?: 0L,
+                        episodeUrl = episode.url,
+                        seenAt = System.currentTimeMillis(),
+                        watchDuration = 0L,
+                    )
+                )
+            }
+        }
+
+        // Clean up when the screen is removed — record history
         DisposableEffect(Unit) {
             onDispose {
+                val ep = allEpisodes.getOrNull(currentEpisodeIndex)
+                recordHistory(ep)
                 playerViewModel.shutdown()
             }
         }
@@ -241,6 +265,10 @@ data class PlayerScreen(
             onBack = { navigator.pop() },
             onNavigateEpisode = { index ->
                 if (index in allEpisodes.indices) {
+                    // Record history for current episode before switching
+                    val oldEpisode = allEpisodes.getOrNull(currentEpisodeIndex)
+                    recordHistory(oldEpisode)
+
                     val oldIndex = currentEpisodeIndex
                     currentEpisodeIndex = index
                     val episode = allEpisodes[index]

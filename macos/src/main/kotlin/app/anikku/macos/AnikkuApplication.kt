@@ -4,6 +4,8 @@ import app.anikku.macos.di.appModule
 import app.anikku.macos.di.domainModule
 import app.anikku.macos.di.platformModule
 import app.anikku.macos.platform.BackgroundTaskScheduler
+import app.anikku.macos.platform.data.LibraryRepository
+import app.anikku.macos.platform.data.HistoryRepository
 import app.anikku.macos.platform.data.MacOSCustomAnimeRepository
 import app.anikku.macos.platform.database.MacOSDatabaseDriver
 import app.anikku.macos.platform.discord.DiscordRPC
@@ -49,6 +51,8 @@ class AnikkuApplication {
     // Phase 2: Storage & Data
     val storageManager: MacOSStorageManager
     val customAnimeRepository: MacOSCustomAnimeRepository
+    val libraryRepository: LibraryRepository
+    val historyRepository: HistoryRepository
 
     // Phase 3: Networking
     val networkHelper: MacOSNetworkHelper
@@ -89,6 +93,10 @@ class AnikkuApplication {
 
         // 8. Initialize custom anime repo (Phase 2.2)
         customAnimeRepository = MacOSCustomAnimeRepository(storageProvider.dataDirectory)
+
+        // 8b. Initialize library and history repos
+        libraryRepository = LibraryRepository(storageProvider.dataDirectory)
+        historyRepository = HistoryRepository(storageProvider.dataDirectory)
 
         // 9. Initialize Phase 7: Advanced Features
         // 9a. Discord Rich Presence

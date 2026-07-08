@@ -40,12 +40,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import app.anikku.macos.platform.data.LibraryRepository
+import app.anikku.macos.platform.data.LocalLibraryRepository
 import app.anikku.macos.ui.AnikkuScreen
 import app.anikku.macos.ui.components.AnimeGrid
 import app.anikku.macos.ui.components.AnimeList
 import app.anikku.macos.ui.screens.anime.AnimeDetailScreen
 import app.anikku.macos.ui.screens.models.AnimeModel
-import app.anikku.macos.ui.screens.models.MockData
 import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.currentOrThrow
 import cafe.adriel.voyager.navigator.tab.Tab
@@ -54,11 +55,8 @@ import cafe.adriel.voyager.navigator.tab.TabOptions
 /**
  * Library screen tab — Phase 5.
  *
- * Shows the user's anime library in either grid or list mode with mock data.
- * When the domain/data modules are wired into the macOS build, this will
- * connect to [GetLibraryAnime] for real library data.
- *
- * TODO: Connect to GetLibraryAnime interactor when domain modules are available.
+ * Shows the user's anime library in either grid or list mode.
+ * Reads entries from [LibraryRepository], which persists favorites to a JSON file.
  */
 object LibraryTab : AnikkuScreen(), Tab {
 
@@ -69,12 +67,34 @@ object LibraryTab : AnikkuScreen(), Tab {
     @Composable
     override fun Content() {
         val navigator = LocalNavigator.currentOrThrow
+        val libraryRepo = LocalLibraryRepository.current
+
         var displayMode by remember { mutableStateOf(DisplayMode.Grid) }
         var searchQuery by remember { mutableStateOf("") }
         var sortMode by remember { mutableStateOf(SortMode.Title) }
         var showSortMenu by remember { mutableStateOf(false) }
 
-        val allAnime = remember { MockData.sampleAnime }
+        // Read library entries and convert to AnimeModel for rendering
+        val libraryEntries = remember { libraryRepo.getAll() }
+        val allAnime = remember(libraryEntries) {
+            libraryEntries.map { entry ->
+                AnimeModel(
+                    id = entry.animeId,
+                    title = entry.title,
+                    source = entry.sourceId,
+                    author = entry.author,
+                    artist = entry.artist,
+                    description = entry.description,
+                    genre = entry.genre,
+                    status = entry.status,
+                    thumbnailUrl = entry.thumbnailUrl,
+                    url = entry.url,
+                    favorite = true,
+                    coverLastModified = entry.lastUpdatedAt,
+                )
+            }
+        }
+
         val filteredAnime = remember(allAnime, searchQuery, sortMode) {
             val filtered = if (searchQuery.isBlank()) allAnime
             else allAnime.filter {
@@ -85,12 +105,13 @@ object LibraryTab : AnikkuScreen(), Tab {
             when (sortMode) {
                 SortMode.Title -> filtered.sortedBy { it.title }
                 SortMode.Status -> filtered.sortedBy { it.status }
-                SortMode.LastUpdated -> filtered.reversed()
+                SortMode.LastUpdated -> filtered.sortedByDescending { it.coverLastModified }
             }
         }
 
         LibraryContent(
             libraryAnime = filteredAnime,
+            libraryCount = libraryRepo.count(),
             displayMode = displayMode,
             searchQuery = searchQuery,
             sortMode = sortMode,
@@ -103,7 +124,12 @@ object LibraryTab : AnikkuScreen(), Tab {
             onToggleSortMenu = { showSortMenu = !showSortMenu },
             onDismissSortMenu = { showSortMenu = false },
             onAnimeClick = { anime ->
-                navigator.push(AnimeDetailScreen(anime.id))
+                navigator.push(AnimeDetailScreen(
+                    animeId = anime.id,
+                    sourceId = anime.source.takeIf { it != 0L },
+                    animeUrl = anime.url,
+                    animeTitle = anime.title,
+                ))
             },
         )
     }
@@ -121,6 +147,7 @@ object LibraryTab : AnikkuScreen(), Tab {
 @Composable
 private fun LibraryContent(
     libraryAnime: List<AnimeModel>,
+    libraryCount: Int = 0,
     displayMode: LibraryTab.DisplayMode,
     searchQuery: String,
     sortMode: LibraryTab.SortMode,
@@ -135,7 +162,9 @@ private fun LibraryContent(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Library") },
+                title = {
+                    Text("Library")
+                },
                 actions = {
                     Box {
                         IconButton(onClick = onToggleSortMenu) {
