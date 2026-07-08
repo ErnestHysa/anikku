@@ -9,18 +9,18 @@ import java.io.File
  * Base directory: ~/Library/Application Support/Anikku/
  * Subdirectories: downloads/, backups/, extensions/, logs/, covers/, data/
  */
-class MacOSStorageProvider : FolderProvider {
+open class MacOSStorageProvider : FolderProvider {
 
-    override fun directory(): File = baseDirectory
+    override open fun directory(): File = baseDirectory
 
-    override fun path(): String = baseDirectory.toURI().toString()
+    override fun path(): String = directory().toURI().toString()
 
-    val downloadsDirectory: File get() = File(baseDirectory, "downloads")
-    val backupsDirectory: File get() = File(baseDirectory, "backups")
-    val extensionsDirectory: File get() = File(baseDirectory, "extensions")
-    val logsDirectory: File get() = File(baseDirectory, "logs")
-    val coversDirectory: File get() = File(baseDirectory, "covers")
-    val dataDirectory: File get() = File(baseDirectory, "data")
+    val downloadsDirectory: File get() = File(directory(), "downloads")
+    val backupsDirectory: File get() = File(directory(), "backups")
+    val extensionsDirectory: File get() = File(directory(), "extensions")
+    val logsDirectory: File get() = File(directory(), "logs")
+    val coversDirectory: File get() = File(directory(), "covers")
+    val dataDirectory: File get() = File(directory(), "data")
 
     fun ensureDirectories() {
         downloadsDirectory.mkdirs()
