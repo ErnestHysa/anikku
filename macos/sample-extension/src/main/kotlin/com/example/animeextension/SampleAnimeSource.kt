@@ -1,27 +1,32 @@
 package com.example.animeextension
 
-import eu.kanade.tachiyomi.source.CatalogueSource
+import eu.kanade.tachiyomi.animesource.AnimeCatalogueSource
+import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+import eu.kanade.tachiyomi.animesource.model.AnimesPage
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
-import eu.kanade.tachiyomi.animesource.model.AnimePage
 import rx.Observable
-import java.io.Serializable
 
 /**
  * Sample anime source for testing the macOS extension loading pipeline.
  *
- * This source is compiled against the macOS stub interfaces and demonstrates
- * the full lifecycle: browse → detail → episode list → video playback.
+ * This source implements the real [AnimeCatalogueSource] interface from the
+ * source-api module (compiled against source-api-jvm.jar). It provides hardcoded
+ * sample anime data with real playable video URLs so the pipeline can be tested
+ * end-to-end without network scraping.
  *
- * Provides hardcoded sample anime data with real playable video URLs so the
- * pipeline can be tested end-to-end without network scraping.
+ * Unlike real extension JARs (which bundle their own copy of source-api types),
+ * this sample is compiled against the same types as the host application. The
+ * pre-built source-api JARs are expected at `../libs/source-api-jvm.jar` and
+ * `../libs/common-jvm.jar`.
  */
-class SampleAnimeSource : CatalogueSource {
+class SampleAnimeSource : AnimeCatalogueSource {
 
     override val id: Long = 999002L
     override val name: String = "SampleSource"
     override val lang: String = "en"
+    override val supportsLatest: Boolean = false
 
     // ── Sample data ────────────────────────────────────────────────
 
@@ -145,9 +150,9 @@ class SampleAnimeSource : CatalogueSource {
         )
     }
 
-    override suspend fun getPopularAnime(page: Int): AnimePage {
-        return AnimePage(
-            animeList = sampleAnime.map { data ->
+    override suspend fun getPopularAnime(page: Int): AnimesPage {
+        return AnimesPage(
+            animes = sampleAnime.map { data ->
                 SAnime.create().apply {
                     url = data.url
                     title = data.title
@@ -160,15 +165,15 @@ class SampleAnimeSource : CatalogueSource {
         )
     }
 
-    override suspend fun getSearchAnime(page: Int, query: String): AnimePage {
+    override suspend fun getSearchAnime(page: Int, query: String, filters: AnimeFilterList): AnimesPage {
         val filtered = sampleAnime.filter {
             it.title.contains(query, ignoreCase = true) ||
                 it.author.contains(query, ignoreCase = true) ||
                 it.genre.contains(query, ignoreCase = true)
         }
 
-        return AnimePage(
-            animeList = filtered.map { data ->
+        return AnimesPage(
+            animes = filtered.map { data ->
                 SAnime.create().apply {
                     url = data.url
                     title = data.title
@@ -181,13 +186,19 @@ class SampleAnimeSource : CatalogueSource {
         )
     }
 
-    // ── RxJava stubs (required by CatalogueSource) ────────────────
+    override fun getFilterList(): AnimeFilterList = AnimeFilterList()
+
+    // ── RxJava stubs (required by AnimeCatalogueSource) ────────────
 
     @Deprecated("Use suspend API", ReplaceWith("getPopularAnime"))
-    override fun fetchPopularAnime(page: Int): Observable<AnimePage> =
+    override fun fetchPopularAnime(page: Int): Observable<AnimesPage> =
         throw UnsupportedOperationException("Use suspend API instead")
 
     @Deprecated("Use suspend API", ReplaceWith("getSearchAnime"))
-    override fun fetchSearchAnime(page: Int, query: String): Observable<AnimePage> =
+    override fun fetchSearchAnime(page: Int, query: String, filters: AnimeFilterList): Observable<AnimesPage> =
+        throw UnsupportedOperationException("Use suspend API instead")
+
+    @Deprecated("Use suspend API", ReplaceWith("getLatestUpdates"))
+    override fun fetchLatestUpdates(page: Int): Observable<AnimesPage> =
         throw UnsupportedOperationException("Use suspend API instead")
 }

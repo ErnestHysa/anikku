@@ -117,7 +117,6 @@ class ExtensionRepoIntegrationTest {
         }
     }
 
-    @org.junit.Ignore("Depends on SampleExtensionIntegrationTest which has CatalogueSource typealias conflict.")
     @Test
     fun `full pipeline fetch download install trust browse`() = runBlocking {
         val sampleJar = File(sampleJarPath)

@@ -81,7 +81,6 @@ class SampleExtensionIntegrationTest {
         Assert.assertEquals("Aniyomi: SampleSource", untrusted.extension.name)
     }
 
-    @org.junit.Ignore("Sample extension uses its own CatalogueSource interface stub that conflicts with source-api module's typealias. See build-test-pipeline for JVM-compiled extension workflow.")
     @Suppress("UNCHECKED_CAST")
     @Test
     fun `loadExtension succeeds with correct trust entry`() {
@@ -122,7 +121,6 @@ class SampleExtensionIntegrationTest {
         Assert.assertTrue("Expected Untrusted with wrong hash", result is LoadResult.Untrusted)
     }
 
-    @org.junit.Ignore("Same CatalogueSource typealias conflict — sample extension stubs don't match source-api module.")
     @Suppress("UNCHECKED_CAST")
     @Test
     fun `loaded source returns hardcoded sample data`() = runBlocking {
