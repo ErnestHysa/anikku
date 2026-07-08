@@ -195,7 +195,11 @@ object BrowseTab : AnikkuScreen(), Tab {
                         sourceName = source.name,
                         sourceLang = source.lang,
                         onClick = {
-                            navigator.push(SourceBrowseScreen(sourceId = source.id, sourceName = source.name))
+                            navigator.push(SourceBrowseScreen(
+                                sourceId = source.id,
+                                sourceName = source.name,
+                                extensionManager = extensionManager,
+                            ))
                         },
                     )
                 }

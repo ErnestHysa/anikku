@@ -400,6 +400,23 @@ class MacOSExtensionManager(
     }
 
     // -------------------------------------------------------------------------
+    // Source lookup
+    // -------------------------------------------------------------------------
+
+    /**
+     * Look up a source by its ID across all installed extensions.
+     *
+     * @param sourceId The source ID to find.
+     * @return The source if found, null otherwise.
+     */
+    fun getSource(sourceId: Long): eu.kanade.tachiyomi.source.Source? {
+        return installedExtensionsMapFlow.value.values
+            .flatMap { it.sources }
+            .filterIsInstance<eu.kanade.tachiyomi.source.Source>()
+            .find { it.id == sourceId }
+    }
+
+    // -------------------------------------------------------------------------
     // Lifecycle
     // -------------------------------------------------------------------------
 

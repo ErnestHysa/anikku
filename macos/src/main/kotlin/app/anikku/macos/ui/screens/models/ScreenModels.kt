@@ -31,6 +31,7 @@ data class EpisodeModel(
     val animeId: Long,
     val name: String,
     val episodeNumber: Double,
+    val url: String? = null,
     val seen: Boolean = false,
     val bookmark: Boolean = false,
     val dateUpload: Long = 0,
