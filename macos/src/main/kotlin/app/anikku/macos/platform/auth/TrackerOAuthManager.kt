@@ -1,5 +1,6 @@
 package app.anikku.macos.platform.auth
 
+import app.anikku.macos.platform.web.BrowserLauncher
 import io.github.oshai.kotlinlogging.KotlinLogging
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
@@ -246,6 +247,123 @@ class TrackerOAuthManager(
         } catch (e: Exception) {
             false
         }
+    }
+
+    /**
+     * Initiate the OAuth authorization code flow.
+     *
+     * Starts a local HTTP server, opens the system browser to the tracker's
+     * authorization URL via [BrowserLauncher], and waits for the callback.
+     *
+     * @param tracker The tracker name (e.g., "myanimelist", "anilist").
+     * @param clientId OAuth client ID.
+     * @param callbackPath The callback path to listen on.
+     * @param timeout Maximum time to wait for the callback.
+     * @param unit Time unit for the timeout.
+     * @return The authorization code, or null if the flow failed or timed out.
+     */
+    fun initiateLogin(
+        tracker: String,
+        clientId: String,
+        callbackPath: String = "/callback",
+        timeout: Long = 120,
+        unit: TimeUnit = TimeUnit.SECONDS,
+    ): String? {
+        val config = oauthConfigs[tracker] ?: run {
+            logger.warn { "Unknown tracker: $tracker" }
+            return null
+        }
+
+        val oauthServer = OAuthServer()
+        val authUrl = oauthServer.buildAuthorizationUrl(
+            authEndpoint = config.authorizeUrl,
+            clientId = clientId,
+            useCallbackPath = callbackPath,
+            scope = config.scope.ifEmpty { null },
+        )
+
+        logger.info { "Initiating OAuth login for $tracker on ${authUrl.take(80)}..." }
+
+        // BrowserLauncher opens the system browser (Safari/Chrome) with proper EDT dispatch
+        BrowserLauncher.openSafe(authUrl)
+
+        logger.info { "Waiting for OAuth callback on $callbackPath..." }
+        val params = oauthServer.awaitCallback(timeout, unit)
+        oauthServer.stop()
+
+        val code = params?.get("code")
+        if (code != null) {
+            logger.info { "OAuth authorization code received for $tracker" }
+        } else {
+            logger.warn { "OAuth callback for $tracker received but no authorization code found" }
+        }
+
+        return code
+    }
+
+    /**
+     * Complete the full OAuth login flow:
+     * 1. Creates an [OAuthServer] to handle the callback
+     * 2. Builds the authorization URL with the tracker's config
+     * 3. Opens the system browser via [BrowserLauncher]
+     * 4. Waits for the OAuth callback
+     * 5. Exchanges the authorization code for access/refresh tokens
+     *
+     * The same [OAuthServer] instance and redirect URI are used for both
+     * the authorization request and the token exchange, ensuring consistency
+     * that OAuth providers require.
+     *
+     * @param tracker The tracker name (e.g., "myanimelist", "anilist").
+     * @param clientId OAuth client ID.
+     * @param clientSecret OAuth client secret.
+     * @param codeVerifier Optional PKCE code verifier.
+     * @param callbackPath The callback path to listen on.
+     * @param timeout Maximum time to wait for user to complete OAuth in browser.
+     * @param unit Time unit for the timeout.
+     * @return Token response with access/refresh tokens, or null on failure.
+     */
+    fun completeLogin(
+        tracker: String,
+        clientId: String,
+        clientSecret: String,
+        codeVerifier: String? = null,
+        callbackPath: String = "/callback",
+        timeout: Long = 120,
+        unit: TimeUnit = TimeUnit.SECONDS,
+    ): TokenResponse? {
+        val config = oauthConfigs[tracker] ?: run {
+            logger.warn { "Unknown tracker: $tracker" }
+            return null
+        }
+
+        // Start server once — use the same redirect URI for auth + token exchange
+        val oauthServer = OAuthServer()
+        val redirectUri = oauthServer.start(port = 0, callbackPath = callbackPath)
+
+        val authUrl = oauthServer.buildAuthorizationUrl(
+            authEndpoint = config.authorizeUrl,
+            clientId = clientId,
+            useCallbackPath = callbackPath,
+            scope = config.scope.ifEmpty { null },
+        )
+
+        logger.info { "Initiating OAuth login for $tracker via BrowserLauncher..." }
+        BrowserLauncher.openSafe(authUrl)
+
+        logger.info { "Waiting for OAuth callback on $redirectUri..." }
+        val params = oauthServer.awaitCallback(timeout, unit)
+        oauthServer.stop()
+
+        val code = params?.get("code") ?: return null
+
+        return exchangeAuthorizationCode(
+            tracker = tracker,
+            code = code,
+            clientId = clientId,
+            clientSecret = clientSecret,
+            redirectUri = redirectUri,
+            codeVerifier = codeVerifier,
+        )
     }
 
     /**

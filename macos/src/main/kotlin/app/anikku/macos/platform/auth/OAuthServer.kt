@@ -2,6 +2,7 @@ package app.anikku.macos.platform.auth
 
 import fi.iki.elonen.NanoHTTPD
 import io.github.oshai.kotlinlogging.KotlinLogging
+import app.anikku.macos.platform.web.BrowserLauncher
 import java.net.URI
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
@@ -22,7 +23,7 @@ private val logger = KotlinLogging.logger {}
  * val oauth = OAuthServer()
  * val callbackUrl = oauth.start(8080, "/callback")
  * val fullUrl = "https://example.com/auth?client_id=...&redirect_uri=$callbackUrl"
- * Desktop.getDesktop().browse(URI(fullUrl))
+ * BrowserLauncher.open(fullUrl)
  * val code = oauth.awaitCallback(60, TimeUnit.SECONDS)
  * oauth.stop()
  * ```
@@ -132,13 +133,11 @@ class OAuthServer(
 
     /**
      * Open the system browser to an OAuth authorization URL.
+     * Delegates to [BrowserLauncher.open] for consistent browser launching
+     * with proper EDT dispatch.
      */
     fun openBrowser(url: String) {
-        try {
-            java.awt.Desktop.getDesktop().browse(URI(url))
-        } catch (e: Exception) {
-            logger.error(e) { "Failed to open browser for OAuth: $url" }
-        }
+        BrowserLauncher.openSafe(url)
     }
 
     /**

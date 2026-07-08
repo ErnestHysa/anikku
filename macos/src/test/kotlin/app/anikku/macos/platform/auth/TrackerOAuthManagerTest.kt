@@ -14,6 +14,7 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import java.util.concurrent.TimeUnit
 
 class TrackerOAuthManagerTest {
 
@@ -111,6 +112,38 @@ class TrackerOAuthManagerTest {
         )
 
         assertNull(token)
+    }
+
+    @Test
+    fun `initiateLogin returns null for unknown tracker`() {
+        val result = manager.initiateLogin(
+            tracker = "unknown",
+            clientId = "client_123",
+        )
+        assertNull(result, "Should return null for unknown tracker")
+    }
+
+    @Test
+    fun `initiateLogin times out and returns null when no callback received`() {
+        // In headless CI, BrowserLauncher.openSafe is a no-op,
+        // so the callback never arrives and the method times out.
+        val result = manager.initiateLogin(
+            tracker = "myanimelist",
+            clientId = "client_123",
+            timeout = 1,
+            unit = TimeUnit.SECONDS,
+        )
+        assertNull(result, "Should return null after timeout since no browser callback")
+    }
+
+    @Test
+    fun `completeLogin returns null for unknown tracker`() {
+        val result = manager.completeLogin(
+            tracker = "unknown",
+            clientId = "client_123",
+            clientSecret = "secret_456",
+        )
+        assertNull(result, "Should return null for unknown tracker")
     }
 
     @Test
