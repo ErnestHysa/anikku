@@ -257,15 +257,30 @@ object MacOSExtensionLoader {
                 val instance = clazz.getDeclaredConstructor().newInstance()
 
                 when (instance) {
-                    is eu.kanade.tachiyomi.source.Source -> listOf(instance)
-                    is eu.kanade.tachiyomi.source.SourceFactory -> instance.createSources()
+                    is eu.kanade.tachiyomi.source.Source -> {
+                        logger.info { "Loaded Source directly: $fullClassName" }
+                        listOf(instance)
+                    }
+                    is eu.kanade.tachiyomi.source.SourceFactory -> {
+                        logger.info { "Loaded SourceFactory: $fullClassName — creating sources..." }
+                        instance.createSources()
+                    }
                     is AnimeSource -> {
-                        logger.warn { "Class $fullClassName implements AnimeSource but not Source. Wrapping." }
+                        logger.warn { "Class $fullClassName implements AnimeSource but not Source. Wrapping via SourceAdapter." }
                         listOf(SourceAdapter(instance))
                     }
-                    else -> throw IllegalStateException(
-                        "Unknown source class type for $fullClassName: ${instance.javaClass.name}"
-                    )
+                    else -> {
+                        // Try reflection-based wrapping for real extension JARs
+                        val wrapped = wrapAsSource(instance)
+                        if (wrapped != null) {
+                            logger.info { "Wrapped ${instance.javaClass.name} via reflection as CatalogueSource" }
+                            listOf(wrapped)
+                        } else {
+                            throw IllegalStateException(
+                                "Unknown source class type for $fullClassName: ${instance.javaClass.name}"
+                            )
+                        }
+                    }
                 }
             } catch (e: Exception) {
                 logger.error(e) { "Failed to instantiate source class: $className" }
