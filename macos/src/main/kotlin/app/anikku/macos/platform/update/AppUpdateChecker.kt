@@ -1,5 +1,6 @@
 package app.anikku.macos.platform.update
 
+import app.anikku.macos.platform.web.BrowserLauncher
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -8,8 +9,6 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import java.awt.Desktop
-import java.net.URI
 import java.util.concurrent.TimeUnit
 
 private val logger = KotlinLogging.logger {}
@@ -136,25 +135,17 @@ class AppUpdateChecker(
     }
 
     /**
-     * Open the download URL in the system browser.
+     * Open the download URL in the system browser via BrowserLauncher.
      */
     fun openDownloadPage(updateInfo: UpdateInfo) {
-        try {
-            Desktop.getDesktop().browse(URI(updateInfo.downloadUrl))
-        } catch (e: Exception) {
-            logger.error(e) { "Failed to open download page" }
-        }
+        BrowserLauncher.openSafe(updateInfo.downloadUrl)
     }
 
     /**
-     * Open the release page in the system browser.
+     * Open the release page in the system browser via BrowserLauncher.
      */
     fun openReleasePage(updateInfo: UpdateInfo) {
-        try {
-            Desktop.getDesktop().browse(URI(updateInfo.htmlUrl))
-        } catch (e: Exception) {
-            logger.error(e) { "Failed to open release page" }
-        }
+        BrowserLauncher.openSafe(updateInfo.htmlUrl)
     }
 
     /**

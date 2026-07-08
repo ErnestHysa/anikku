@@ -108,10 +108,31 @@ compose.desktop {
             targetFormats(TargetFormat.Dmg, TargetFormat.Pkg)
             packageName = "Anikku"
             packageVersion = "1.0.0"
+            description = "A native macOS anime watching application"
+            vendor = "Anikku"
+            licenseFile.set(project.file("../LICENSE"))
 
             macOS {
                 bundleID = "app.anikku.macos"
+                iconFile.set(project.file("src/main/resources/icons/app.icns"))
                 minimumSystemVersion = "12.0"
+
+                // Code signing (requires Apple Developer account)
+                // To enable, uncomment and configure your signing identity:
+                // signing {
+                //     sign.set(true)
+                //     identity.set("Developer ID Application: Your Name (TEAMID)")
+                // }
+
+                // Notarization (requires Apple Developer account)
+                // To enable, uncomment and configure your Apple ID credentials:
+                // notarization {
+                //     appleID.set("your@email.com")
+                //     appleIDPassword.set("@keychain:AC_PASSWORD")
+                // }
+
+                // Entitlements for sandbox and hardened runtime
+                entitlementsFile.set(project.file("src/main/resources/entitlements.plist"))
             }
         }
     }

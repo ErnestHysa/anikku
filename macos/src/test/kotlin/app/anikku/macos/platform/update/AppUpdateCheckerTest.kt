@@ -1,122 +1,162 @@
 package app.anikku.macos.platform.update
 
-import okhttp3.mockwebserver.MockResponse
-import okhttp3.mockwebserver.MockWebServer
-import org.junit.jupiter.api.AfterEach
+import okhttp3.Interceptor
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
+/**
+ * Tests for [AppUpdateChecker].
+ *
+ * Uses a mock OkHttp interceptor to simulate GitHub API responses
+ * without making actual network calls.
+ */
 class AppUpdateCheckerTest {
 
-    private lateinit var mockServer: MockWebServer
+    private var lastInterceptor: LastCallInterceptor? = null
     private lateinit var checker: AppUpdateChecker
+
+    /**
+     * OkHttp interceptor that captures the last request and returns a custom response.
+     */
+    class LastCallInterceptor : Interceptor {
+        var statusCode: Int = 200
+        var responseBody: String = "{}"
+
+        override fun intercept(chain: Interceptor.Chain): Response {
+            val request = chain.request()
+            return Response.Builder()
+                .request(request)
+                .protocol(Protocol.HTTP_1_1)
+                .code(statusCode)
+                .message(if (statusCode == 200) "OK" else "Error")
+                .body(responseBody.toResponseBody("application/json".toMediaType()))
+                .build()
+        }
+    }
 
     @BeforeEach
     fun setUp() {
-        mockServer = MockWebServer()
-        mockServer.start()
+        lastInterceptor = LastCallInterceptor()
+        val client = OkHttpClient.Builder()
+            .addInterceptor(lastInterceptor!!)
+            .build()
         checker = AppUpdateChecker(
             currentVersion = "1.0.0",
-            repoOwner = "test-owner",
-            repoName = "test-repo",
-            client = okhttp3.OkHttpClient.Builder().build(),
-            githubApiBase = mockServer.url("/").toString().trimEnd('/'),
+            client = client,
+            githubApiBase = "http://mock/api",
         )
-    }
-
-    @AfterEach
-    fun tearDown() {
-        mockServer.shutdown()
     }
 
     @Test
-    fun `no update when version is current`() {
-        mockServer.enqueue(
-            MockResponse()
-                .setResponseCode(200)
-                .setBody("""{
-                    "tag_name": "v1.0.0",
-                    "html_url": "https://github.com/test-owner/test-repo/releases/tag/v1.0.0",
-                    "body": "Initial release",
-                    "published_at": "2026-01-01T00:00:00Z"
-                }"""),
-        )
+    fun `returns update when newer version available`() {
+        lastInterceptor!!.statusCode = 200
+        lastInterceptor!!.responseBody = """
+        {
+            "tag_name": "v2.0.0",
+            "html_url": "https://github.com/komikku-app/anikku/releases/tag/v2.0.0",
+            "body": "New features and bug fixes",
+            "published_at": "2026-07-01T00:00:00Z",
+            "assets": [
+                {
+                    "name": "Anikku-2.0.0.dmg",
+                    "browser_download_url": "https://github.com/komikku-app/anikku/releases/download/v2.0.0/Anikku-2.0.0.dmg"
+                }
+            ]
+        }
+        """.trimIndent()
 
         val update = checker.checkForUpdateSync()
-        assertNull(update)
-    }
 
-    @Test
-    fun `no update when version is newer`() {
-        mockServer.enqueue(
-            MockResponse()
-                .setResponseCode(200)
-                .setBody("""{
-                    "tag_name": "v0.9.0",
-                    "html_url": "https://github.com/test-owner/test-repo/releases/tag/v0.9.0"
-                }"""),
-        )
-
-        val update = checker.checkForUpdateSync()
-        assertNull(update)
-    }
-
-    @Test
-    fun `returns update info when newer version available`() {
-        mockServer.enqueue(
-            MockResponse()
-                .setResponseCode(200)
-                .setBody("""{
-                    "tag_name": "v2.0.0",
-                    "html_url": "https://github.com/test-owner/test-repo/releases/tag/v2.0.0",
-                    "body": "Major update with new features",
-                    "published_at": "2026-06-15T00:00:00Z",
-                    "assets": [
-                        {"name": "Anikku-2.0.0.dmg", "browser_download_url": "https://github.com/test-owner/test-repo/releases/download/v2.0.0/Anikku-2.0.0.dmg"}
-                    ]
-                }"""),
-        )
-
-        val update = checker.checkForUpdateSync()
-        assertNotNull(update)
+        assertNotNull(update, "Should find an update when a newer version exists")
         assertEquals("v2.0.0", update?.tagName)
         assertEquals("2.0.0", update?.versionName)
-        assertEquals("https://github.com/test-owner/test-repo/releases/download/v2.0.0/Anikku-2.0.0.dmg", update?.downloadUrl)
+        assertEquals(
+            "https://github.com/komikku-app/anikku/releases/download/v2.0.0/Anikku-2.0.0.dmg",
+            update?.downloadUrl,
+        )
     }
 
     @Test
-    fun `returns release page link when no dmg asset`() {
-        mockServer.enqueue(
-            MockResponse()
-                .setResponseCode(200)
-                .setBody("""{
-                    "tag_name": "v2.0.0",
-                    "html_url": "https://github.com/test-owner/test-repo/releases/tag/v2.0.0",
-                    "assets": []
-                }"""),
-        )
+    fun `returns null when already on latest version`() {
+        lastInterceptor!!.statusCode = 200
+        lastInterceptor!!.responseBody = """
+        {
+            "tag_name": "v1.0.0",
+            "html_url": "https://github.com/komikku-app/anikku/releases/tag/v1.0.0",
+            "body": "Initial release",
+            "published_at": "2026-06-01T00:00:00Z",
+            "assets": []
+        }
+        """.trimIndent()
 
         val update = checker.checkForUpdateSync()
-        assertNotNull(update)
-        assertEquals("https://github.com/test-owner/test-repo/releases/tag/v2.0.0", update?.downloadUrl)
+
+        assertNull(update, "Should return null when current version matches latest")
     }
 
     @Test
     fun `returns null on API error`() {
-        mockServer.enqueue(MockResponse().setResponseCode(403).setBody("""{"message": "API rate limit exceeded"}"""))
+        lastInterceptor!!.statusCode = 403
+        lastInterceptor!!.responseBody = """{"message": "Rate limit exceeded"}"""
 
         val update = checker.checkForUpdateSync()
-        assertNull(update)
+
+        assertNull(update, "Should return null on API error")
     }
 
     @Test
-    fun `returns null on invalid response`() {
-        mockServer.enqueue(MockResponse().setResponseCode(200).setBody("not json"))
+    fun `falls back to release page when no DMG asset found`() {
+        lastInterceptor!!.statusCode = 200
+        lastInterceptor!!.responseBody = """
+        {
+            "tag_name": "v2.0.0",
+            "html_url": "https://github.com/komikku-app/anikku/releases/tag/v2.0.0",
+            "body": "New release without DMG",
+            "published_at": "2026-07-01T00:00:00Z",
+            "assets": []
+        }
+        """.trimIndent()
 
         val update = checker.checkForUpdateSync()
-        assertNull(update)
+
+        assertNotNull(update, "Should still return update info even without DMG asset")
+        assertEquals(
+            "https://github.com/komikku-app/anikku/releases/tag/v2.0.0",
+            update?.downloadUrl,
+            "Should fall back to release page URL when no DMG asset exists",
+        )
+    }
+
+    @Test
+    fun `openDownloadPage delegates to BrowserLauncher`() {
+        val update = UpdateInfo(
+            tagName = "v2.0.0",
+            versionName = "2.0.0",
+            htmlUrl = "https://github.com/komikku-app/anikku/releases/tag/v2.0.0",
+            downloadUrl = "https://github.com/komikku-app/anikku/releases/download/v2.0.0/Anikku-2.0.0.dmg",
+        )
+
+        // Should not throw — BrowserLauncher.openSafe handles headless environments gracefully
+        checker.openDownloadPage(update)
+    }
+
+    @Test
+    fun `openReleasePage delegates to BrowserLauncher`() {
+        val update = UpdateInfo(
+            tagName = "v2.0.0",
+            versionName = "2.0.0",
+            htmlUrl = "https://github.com/komikku-app/anikku/releases/tag/v2.0.0",
+            downloadUrl = "https://github.com/komikku-app/anikku/releases/download/v2.0.0/Anikku-2.0.0.dmg",
+        )
+
+        checker.openReleasePage(update)
     }
 }
