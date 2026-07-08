@@ -1,14 +1,13 @@
 package app.anikku.macos.ui
 
 import app.anikku.macos.platform.MacOSFullScreen
-import java.awt.Desktop
+import app.anikku.macos.platform.web.BrowserLauncher
 import java.awt.Frame
 import java.awt.Menu
 import java.awt.MenuBar
 import java.awt.MenuItem
 import java.awt.MenuShortcut
 import java.awt.event.KeyEvent
-import java.net.URI
 
 /**
  * macOS native menu bar per AD-04 (Phase 9.1).
@@ -243,11 +242,7 @@ object MacOSMenuBarFactory {
 
     /** Opens the Anikku GitHub issues page in the system browser. */
     private fun openGitHubIssues() {
-        try {
-            Desktop.getDesktop().browse(URI("https://github.com/komikku-app/anikku/issues/new"))
-        } catch (_: Exception) {
-            // Browser not available (headless environments)
-        }
+        BrowserLauncher.openSafe("https://github.com/komikku-app/anikku/issues/new")
     }
 
     /** Toggles the frame between maximized and normal state. */
