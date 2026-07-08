@@ -44,7 +44,7 @@ private val logger = KotlinLogging.logger {}
  * manager.enqueue(animeId, sourceId, "Attack on Titan", "Episode 3", 3.0, "episode-url")
  * ```
  */
-class MacOSDownloadManager(
+open class MacOSDownloadManager(
     private val repository: DownloadRepository,
     private val extensionManager: MacOSExtensionManager,
     private val storageProvider: MacOSStorageProvider,
@@ -55,7 +55,7 @@ class MacOSDownloadManager(
     private val httpClient = OkHttpClient()
 
     private val _downloads = MutableStateFlow(repository.getAll())
-    val downloads: StateFlow<List<DownloadRepository.DownloadEntry>> = _downloads.asStateFlow()
+    open val downloads: StateFlow<List<DownloadRepository.DownloadEntry>> = _downloads.asStateFlow()
 
     private var activeJobs = mutableMapOf<Long, Job>()
     private val concurrencySemaphore = Semaphore(MAX_CONCURRENT_DOWNLOADS)
@@ -98,7 +98,7 @@ class MacOSDownloadManager(
     /**
      * Pause an active download.
      */
-    fun pause(id: Long) {
+    open fun pause(id: Long) {
         activeJobs[id]?.cancel()
         activeJobs.remove(id)
         repository.update(id, status = DownloadRepository.DownloadStatus.PAUSED)
@@ -109,7 +109,7 @@ class MacOSDownloadManager(
     /**
      * Resume a paused download.
      */
-    fun resume(id: Long) {
+    open fun resume(id: Long) {
         val entry = repository.get(id) ?: return
         if (entry.status != DownloadRepository.DownloadStatus.PAUSED) return
 
@@ -121,7 +121,7 @@ class MacOSDownloadManager(
     /**
      * Cancel and remove a download (including partial file).
      */
-    fun cancel(id: Long) {
+    open fun cancel(id: Long) {
         activeJobs[id]?.cancel()
         activeJobs.remove(id)
         concurrencySemaphore.release()
@@ -137,7 +137,7 @@ class MacOSDownloadManager(
     /**
      * Cancel all active downloads.
      */
-    fun cancelAll() {
+    open fun cancelAll() {
         activeJobs.values.forEach { it.cancel() }
         activeJobs.clear()
         repository.getAll().forEach { entry ->
@@ -152,7 +152,7 @@ class MacOSDownloadManager(
     /**
      * Retry a failed download.
      */
-    fun retry(id: Long) {
+    open fun retry(id: Long) {
         val entry = repository.get(id) ?: return
         if (entry.status != DownloadRepository.DownloadStatus.ERROR) return
 
