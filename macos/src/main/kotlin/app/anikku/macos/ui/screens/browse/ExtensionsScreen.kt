@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -78,8 +79,9 @@ data class ExtensionsScreen(
 
         val installedExtensions by (extensionManager?.installedExtensionsFlow?.collectAsState() ?: remember { mutableStateOf(emptyList()) })
         val availableExtensions by (extensionManager?.availableExtensionsFlow?.collectAsState() ?: remember { mutableStateOf(emptyList()) })
+        val untrustedExtensions by (extensionManager?.untrustedExtensionsFlow?.collectAsState() ?: remember { mutableStateOf(emptyList()) })
 
-        var selectedTab by remember { mutableStateOf(0) } // 0=Installed, 1=Available, 2=Repos
+        var selectedTab by remember { mutableStateOf(0) } // 0=Installed, 1=Available, 2=Repos, 3=Untrusted
         var repoUrl by remember { mutableStateOf("https://raw.githubusercontent.com/keiyoushi/extensions/repo/") }
         var isFetching by remember { mutableStateOf(false) }
         var installingPkg by remember { mutableStateOf<String?>(null) }
@@ -107,7 +109,7 @@ data class ExtensionsScreen(
             // Tab switcher
             item {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("Installed", "Available", "Repos").forEachIndexed { i, label ->
+                    listOf("Installed", "Available", "Repos", "Untrusted").forEachIndexed { i, label ->
                         Button(
                             onClick = { selectedTab = i },
                             shape = RoundedCornerShape(8.dp),
@@ -223,6 +225,67 @@ data class ExtensionsScreen(
                     }
                 }
 
+                3 -> {
+                    // Untrusted extensions
+                    item {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Outlined.Warning,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(20.dp),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                "Untrusted Extensions",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "These extensions are not trusted by the app. Review them and tap Trust to enable.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                    }
+
+                    if (untrustedExtensions.isEmpty()) {
+                        item {
+                            Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(
+                                        Icons.Outlined.CheckCircle,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(48.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                                    )
+                                    Spacer(Modifier.height(12.dp))
+                                    Text(
+                                        "All extensions are trusted",
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        "Untrusted extensions will appear here after you add extension JARs to the extensions directory",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        items(untrustedExtensions, key = { it.pkgName }) { ext ->
+                            UntrustedExtensionCard(
+                                extension = ext,
+                                onTrust = { extensionManager?.trustExtension(ext) },
+                            )
+                        }
+                    }
+                }
+
                 2 -> {
                     // Repos management
                     item {
@@ -302,6 +365,71 @@ private fun InstalledExtensionCard(
                     contentDescription = "Remove",
                     tint = MaterialTheme.colorScheme.error,
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun UntrustedExtensionCard(
+    extension: Extension.Untrusted,
+    onTrust: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f),
+        ),
+    ) {
+        Column(
+            Modifier.fillMaxWidth().padding(12.dp),
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    Icons.Outlined.Warning,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(28.dp),
+                )
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(extension.name, fontWeight = FontWeight.Medium)
+                    Text(
+                        "v${extension.versionName} · ${extension.pkgName}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "Signed: ${extension.signatureHash.take(16)}…",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Button(
+                    onClick = onTrust,
+                    shape = RoundedCornerShape(6.dp),
+                    colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError,
+                    ),
+                    contentPadding = PaddingValues(12.dp, 6.dp),
+                ) {
+                    Icon(Icons.Outlined.CheckCircle, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Trust", style = MaterialTheme.typography.labelSmall)
+                }
             }
         }
     }
