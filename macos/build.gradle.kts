@@ -188,44 +188,37 @@ echo "Downloaded $(wc -c < "${D}OUT_DIR/${D}APK_NAME") bytes — APK for referen
 }
 
 /**
- * Download a keiyoushi extension source from GitHub and build it as a loadable JVM JAR.
- *
- * Downloads the extension source from keiyoushi/extensions-source (GitHub),
- * creates a standalone JVM Gradle project, compiles against source-api JARs,
- * generates META-INF/extension.json, and deploys to the app's extensions dir.
- *
- * Usage:
- *   ./macos/gradlew -p macos buildKeiyoushiExtension -Pext=allanime
- *
- * Parameters:
- *   -Pext=<name>     Extension directory name (required, e.g. allanime)
- *   -PextLang=<code> Language code (default: en)
- *   -PextDir=<path>  Use local extension source directory instead of GitHub
- *
- * Examples:
- *   # Download and build from GitHub
- *   ./macos/gradlew -p macos buildKeiyoushiExtension -Pext=allanime
- *
- *   # Build from a local copy of the source
- *   ./macos/gradlew -p macos buildKeiyoushiExtension -Pext=allanime -PextDir=/tmp/keiyoushi-source/src/en/allanime
- */
-val buildKeiyoushiExtName: String? by project
-val buildKeiyoushiExtLang: String by project
-
-/**
  * Build a keiyoushi extension from source as a loadable JVM JAR.
  *
  * Downloads the extension source from keiyoushi/extensions-source (GitHub),
- * creates a standalone JVM Gradle project, compiles against source-api JARs,
- * generates META-INF/extension.json, and deploys to the app's extensions dir.
+ * compiles against source-api JARs, generates META-INF/extension.json,
+ * and deploys to the app's extensions directory.
+ *
+ * This is the RECOMMENDED approach for making extensions available on macOS.
+ * Unlike the APK conversion approach, this compiles from original Kotlin
+ * source, producing clean JVM bytecode with proper class names.
  *
  * Usage:
  *   ./macos/gradlew -p macos buildKeiyoushiExtension -PbuildKeiyoushiExtName=allanime
  *
  * Parameters:
- *   -PbuildKeiyoushiExtName=<name>  Extension directory name (required)
+ *   -PbuildKeiyoushiExtName=<name>  Extension directory name (required, e.g. allanime)
  *   -PbuildKeiyoushiExtLang=<code>  Language code (default: en)
+ *
+ * Examples:
+ *   # Build allanime extension
+ *   ./macos/gradlew -p macos buildKeiyoushiExtension -PbuildKeiyoushiExtName=allanime
+ *
+ *   # Build nineanime extension
+ *   ./macos/gradlew -p macos buildKeiyoushiExtension -PbuildKeiyoushiExtName=nineanime
+ *
+ * Requirements:
+ *   - kotlinc must be installed: brew install kotlin
+ *   - source-api JARs must be built
  */
+val buildKeiyoushiExtName: String? by project
+val buildKeiyoushiExtLang: String by project
+
 tasks.register<Exec>("buildKeiyoushiExtension") {
     description = "Download keiyoushi extension source and build as loadable JVM JAR"
     group = "extension"
@@ -234,10 +227,15 @@ tasks.register<Exec>("buildKeiyoushiExtension") {
         val extName = buildKeiyoushiExtName
             ?: throw GradleException("Usage: -PbuildKeiyoushiExtName=<name> (e.g., -PbuildKeiyoushiExtName=allanime)")
         val extLang = buildKeiyoushiExtLang.ifBlank { "en" }
-        val scriptPath = "${project.projectDir}/scripts/convert-keiyoushi-extension.sh"
+        val scriptPath = "${project.projectDir}/scripts/build-keiyoushi-from-source.sh"
 
         logger.lifecycle("Building extension: $extName (lang: $extLang)")
         logger.lifecycle("Script: $scriptPath")
+        logger.lifecycle("")
+        logger.lifecycle("This pipeline compiles keiyoushi extension sources from GitHub")
+        logger.lifecycle("as JVM JARs, bypassing the Android DEX/APK format entirely.")
+        logger.lifecycle("")
+        logger.lifecycle("Requirements: kotlinc (brew install kotlin)")
 
         exec {
             commandLine(
