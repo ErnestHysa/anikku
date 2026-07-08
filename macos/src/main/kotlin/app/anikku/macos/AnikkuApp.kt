@@ -1,7 +1,10 @@
 package app.anikku.macos
 
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
@@ -10,6 +13,7 @@ import androidx.compose.ui.window.rememberWindowState
 import app.anikku.macos.ui.MacOSMenuBarFactory
 import app.anikku.macos.platform.MacOSDockManager
 import app.anikku.macos.ui.GlobalKeyboardShortcuts
+import app.anikku.macos.ui.components.AboutDialog
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import app.anikku.macos.ui.MainWindow
@@ -68,6 +72,9 @@ fun main() = application {
         val bookmarkStore = remember { BookmarkStore(app.preferenceStore) }
         val toastHostState = remember { ToastHostState() }
 
+        // About dialog visibility — toggled from the menu bar's "About Anikku" item
+        var showAboutDialog by remember { mutableStateOf(false) }
+
         // Set up the macOS native menu bar via java.awt
         // (Compose Desktop MenuBar/Menu/Item composable API unavailable in 1.11.x)
         val onQuit = {
@@ -76,8 +83,9 @@ fun main() = application {
         }
         val onSettings = { TabSwitchHandler.switchTo(4) }
         val onOpenBackup = { /* Future: open file picker for .tachibk backup */ }
+        val onAbout = { showAboutDialog = true }
         (window as? Frame)?.let { frame ->
-            MacOSMenuBarFactory.attach(frame, onQuit, onSettings, onOpenBackup)
+            MacOSMenuBarFactory.attach(frame, onQuit, onSettings, onOpenBackup, onAbout)
         }
 
         // Phase 9.2: Initialize global keyboard shortcuts
@@ -104,6 +112,11 @@ fun main() = application {
                 Box(modifier = androidx.compose.ui.Modifier.fillMaxSize()) {
                     MainWindow()
                     ToastHost(state = toastHostState)
+                }
+
+                // About dialog — shown when triggered from menu bar
+                if (showAboutDialog) {
+                    AboutDialog(onCloseRequest = { showAboutDialog = false })
                 }
             }
         }

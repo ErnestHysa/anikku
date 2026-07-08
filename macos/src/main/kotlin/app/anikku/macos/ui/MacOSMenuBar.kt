@@ -41,16 +41,18 @@ object MacOSMenuBarFactory {
      * @param frame The AWT Frame (needed for minimize/zoom/fullscreen actions)
      * @param onQuit Called when Quit (⌘Q) or Close Window (⌘W) is selected
      * @param onSettings Called when Settings... (⌘,) is selected
+     * @param onAbout Called when About Anikku is selected
      */
     fun create(
         frame: Frame,
         onQuit: () -> Unit,
         onSettings: () -> Unit = {},
         onOpenBackup: () -> Unit = {},
+        onAbout: () -> Unit = {},
     ): MenuBar {
         return MenuBar().apply {
             // App menu (first menu becomes macOS application menu)
-            add(appMenu(frame, onQuit, onSettings))
+            add(appMenu(frame, onQuit, onSettings, onAbout))
             add(fileMenu(onQuit, onOpenBackup))
             add(editMenu())
             add(viewMenu(frame))
@@ -73,17 +75,18 @@ object MacOSMenuBarFactory {
         onQuit: () -> Unit,
         onSettings: () -> Unit = {},
         onOpenBackup: () -> Unit = {},
+        onAbout: () -> Unit = {},
     ) {
-        frame.menuBar = create(frame, onQuit, onSettings, onOpenBackup)
+        frame.menuBar = create(frame, onQuit, onSettings, onOpenBackup, onAbout)
     }
 
     // ---------------------------------------------------------------------------
     // macOS Application Menu
     // ---------------------------------------------------------------------------
-    private fun appMenu(frame: Frame, onQuit: () -> Unit, onSettings: () -> Unit): Menu {
+    private fun appMenu(frame: Frame, onQuit: () -> Unit, onSettings: () -> Unit, onAbout: () -> Unit): Menu {
         return Menu("Anikku").apply {
             add(MenuItem("About Anikku").also {
-                it.addActionListener { /* TODO: Phase 5 — About dialog */ }
+                it.addActionListener { onAbout() }
             })
             addSeparator()
             add(MenuItem("Settings...", MenuShortcut(KeyEvent.VK_COMMA, false)).also {

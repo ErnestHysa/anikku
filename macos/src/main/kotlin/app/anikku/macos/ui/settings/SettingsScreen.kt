@@ -35,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import app.anikku.macos.platform.web.BrowserLauncher
 import app.anikku.macos.ui.components.CheckboxItem
 import app.anikku.macos.ui.components.HeadingItem
 import app.anikku.macos.ui.components.LocalToastHost
@@ -306,6 +307,9 @@ fun SettingsScreen() {
                 text = "https://github.com/komikku-app/anikku",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.clickable {
+                    BrowserLauncher.openSafe("https://github.com/komikku-app/anikku")
+                },
             )
         }
     }
