@@ -55,6 +55,7 @@ import cafe.adriel.voyager.core.screen.ScreenKey
 import cafe.adriel.voyager.core.screen.uniqueScreenKey
 import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.currentOrThrow
+import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.source.CatalogueSource
 import kotlinx.coroutines.delay
 
@@ -96,7 +97,7 @@ data class SourceBrowseScreen(
             if (source is CatalogueSource) {
                 try {
                     val page = source.getPopularAnime(page = 1)
-                    animeList = page.animeList.map { it.toAnimeModel(sourceId) }
+                    animeList = page.animes.map { it.toAnimeModel(sourceId) }
                 } catch (e: Exception) {
                     errorMessage = "Source API error: ${e.message}"
                     animeList = MockData.sampleAnime
@@ -127,7 +128,7 @@ data class SourceBrowseScreen(
                         try {
                             isLoading = true
                             val page = source.getPopularAnime(page = 1)
-                            animeList = page.animeList.map { it.toAnimeModel(sourceId) }
+                            animeList = page.animes.map { it.toAnimeModel(sourceId) }
                         } catch (_: Exception) { }
                         isLoading = false
                     }
@@ -145,8 +146,8 @@ data class SourceBrowseScreen(
                 hasSearched = true
                 errorMessage = null
                 try {
-                    val page = source.getSearchAnime(page = 1, query = searchQuery)
-                    animeList = page.animeList.map { it.toAnimeModel(sourceId) }
+                    val page = source.getSearchAnime(page = 1, query = searchQuery, filters = AnimeFilterList())
+                    animeList = page.animes.map { it.toAnimeModel(sourceId) }
                 } catch (e: Exception) {
                     errorMessage = "Search error: ${e.message}"
                 }

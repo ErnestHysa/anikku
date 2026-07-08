@@ -36,6 +36,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.anikku.macos.player.PlaybackState
+import app.anikku.macos.ui.components.PlaybackStateBadge
 
 /**
  * Transport controls for the mpv player (Phase 5.8).
@@ -217,20 +218,11 @@ fun PlayerTransportControls(
             }
         }
 
-        // Playback status
+        // Playback state badge
         if (playbackState != PlaybackState.IDLE && playbackState != PlaybackState.PLAYING) {
             Spacer(Modifier.height(8.dp))
-            Text(
-                text = when (playbackState) {
-                    PlaybackState.LOADING -> "Loading..."
-                    PlaybackState.BUFFERING -> "Buffering..."
-                    PlaybackState.ERROR -> "Playback error"
-                    PlaybackState.ENDED -> "Episode ended"
-                    PlaybackState.PAUSED -> "Paused"
-                    else -> ""
-                },
-                style = MaterialTheme.typography.labelSmall,
-                color = Color.White.copy(alpha = 0.4f),
+            PlaybackStateBadge(
+                playbackState = playbackState,
                 modifier = Modifier.align(Alignment.CenterHorizontally),
             )
         }

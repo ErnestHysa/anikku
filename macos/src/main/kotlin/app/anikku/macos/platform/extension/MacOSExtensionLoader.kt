@@ -69,6 +69,10 @@ object MacOSExtensionLoader {
 
     /**
      * Load all extensions from the extensions directory.
+     *
+     * Supports both JAR files (native JVM extensions with META-INF/extension.json)
+     * and APK files (keiyoushi Android extensions, automatically converted via
+     * [DexClassLoader] when jadx is available).
      */
     fun loadExtensions(
         extensionsDir: File,
@@ -77,14 +81,67 @@ object MacOSExtensionLoader {
     ): List<LoadResult> {
         if (!extensionsDir.isDirectory) return emptyList()
 
-        val jarFiles = extensionsDir.listFiles()
-            ?.filter { it.isFile && (it.extension == "jar" || it.extension == "ext") }
-            ?: emptyList()
+        val files = extensionsDir.listFiles()?.filter { it.isFile } ?: emptyList()
 
-        logger.info { "Loading ${jarFiles.size} extensions from ${extensionsDir.absolutePath}" }
+        // Separate JAR/EXT files from APK files
+        val jarFiles = files.filter { it.extension == "jar" || it.extension == "ext" }
+        val apkFiles = files.filter { it.extension == "apk" }
 
-        return jarFiles.map { jarFile ->
-            loadExtension(jarFile, extensionsDir, trustStore, loadNsfw)
+        logger.info { "Loading ${jarFiles.size} JAR extensions, ${apkFiles.size} APK extensions from ${extensionsDir.absolutePath}" }
+
+        val results = mutableListOf<LoadResult>()
+
+        // Load native JVM extensions
+        results.addAll(jarFiles.map { loadExtension(it, extensionsDir, trustStore, loadNsfw) })
+
+        // Convert and load APK (keiyoushi) extensions
+        if (apkFiles.isNotEmpty()) {
+            convertAndLoadApks(apkFiles, extensionsDir, results, trustStore, loadNsfw)
+        }
+
+        return results
+    }
+
+    /**
+     * Convert keiyoushi APK files to JARs and load them.
+     * Uses [DexClassLoader] to decompile DEX bytecode via jadx + javac.
+     *
+     * Limitations:
+     * - Requires jadx to be installed (`brew install jadx`)
+     * - Obfuscated extensions (R8/ProGuard) produce decompiled code with
+     *   meaningless class names — conversion may fail or produce unusable results
+     * - Source-api JAR paths are resolved by DexClassLoader internally or
+     *   must be provided in the extensions directory's parent structure
+     */
+    private fun convertAndLoadApks(
+        apkFiles: List<File>,
+        extensionsDir: File,
+        results: MutableList<LoadResult>,
+        trustStore: Map<String, List<TrustEntry>> = emptyMap(),
+        loadNsfw: Boolean = false,
+    ) {
+        if (!DexClassLoader.isAvailable()) {
+            logger.warn { "jadx not available — cannot convert ${apkFiles.size} APK extension(s). Install: brew install jadx" }
+            apkFiles.forEach { apk ->
+                results.add(LoadResult.Error)
+            }
+            return
+        }
+
+        for (apkFile in apkFiles) {
+            val jarName = apkFile.nameWithoutExtension + ".jar"
+            val jarFile = File(extensionsDir, jarName)
+
+            logger.info { "Converting APK extension: ${apkFile.name} → ${jarFile.name}" }
+            val success = DexClassLoader.convertToJar(apkFile, jarFile, null, null)
+
+            if (success && jarFile.isFile) {
+                logger.info { "Loading converted extension: ${jarFile.name}" }
+                results.add(loadExtension(jarFile, extensionsDir, trustStore, loadNsfw))
+            } else {
+                logger.error { "Failed to convert APK extension: ${apkFile.name}" }
+                results.add(LoadResult.Error)
+            }
         }
     }
 

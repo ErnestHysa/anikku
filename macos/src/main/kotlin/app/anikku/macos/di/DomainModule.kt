@@ -1,7 +1,9 @@
 package app.anikku.macos.di
 
 import app.anikku.macos.AnikkuApplication
+import app.anikku.macos.platform.data.DownloadRepository
 import app.anikku.macos.platform.data.MacOSCustomAnimeRepository
+import app.anikku.macos.platform.download.MacOSDownloadManager
 import app.anikku.macos.platform.storage.MacOSStorageManager
 import org.koin.dsl.module
 
@@ -11,15 +13,22 @@ import org.koin.dsl.module
  * Registers business logic and data repository implementations:
  * - Storage manager: file system operations (backups, downloads, mpv config)
  * - Custom anime repository: user-defined anime metadata edits
- *
- * Future Phase 5+ additions (when domain/data modules are wired to macOS build):
- * - AnimeRepository, CategoryRepository (data layer implementations)
- * - GetLibraryAnime, GetCategories, GetHistory (domain interactors)
- * - LibraryPreferences, SourceManager (domain services)
+ * - Download repository + manager: offline episode downloads
  */
 fun domainModule(app: AnikkuApplication) = module {
 
     // Phase 2: Storage & Data
     single<MacOSStorageManager> { app.storageManager }
     single<MacOSCustomAnimeRepository> { app.customAnimeRepository }
+
+    // Phase 7: Download pipeline
+    single { DownloadRepository(app.storageProvider.dataDirectory) }
+    single {
+        MacOSDownloadManager(
+            repository = get(),
+            extensionManager = app.extensionManager,
+            storageProvider = app.storageProvider,
+            notifier = app.notificationManager,
+        )
+    }
 }

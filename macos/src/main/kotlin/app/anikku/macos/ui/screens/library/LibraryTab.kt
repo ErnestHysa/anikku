@@ -4,14 +4,20 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ViewList
@@ -19,6 +25,8 @@ import androidx.compose.material.icons.outlined.Book
 import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Sort
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -40,6 +48,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import app.anikku.macos.platform.data.CATEGORY_DEFAULT_ID
+import app.anikku.macos.platform.data.CategoryEntry
 import app.anikku.macos.platform.data.LibraryRepository
 import app.anikku.macos.platform.data.LocalLibraryRepository
 import app.anikku.macos.ui.AnikkuScreen
@@ -55,8 +65,8 @@ import cafe.adriel.voyager.navigator.tab.TabOptions
 /**
  * Library screen tab — Phase 5.
  *
- * Shows the user's anime library in either grid or list mode.
- * Reads entries from [LibraryRepository], which persists favorites to a JSON file.
+ * Shows the user's anime library with category filter chips,
+ * search, and sort. Reads entries from [LibraryRepository].
  */
 object LibraryTab : AnikkuScreen(), Tab {
 
@@ -73,9 +83,12 @@ object LibraryTab : AnikkuScreen(), Tab {
         var searchQuery by remember { mutableStateOf("") }
         var sortMode by remember { mutableStateOf(SortMode.Title) }
         var showSortMenu by remember { mutableStateOf(false) }
+        var selectedCategoryId by remember { mutableStateOf<Long?>(null) } // null = All
 
-        // Read library entries and convert to AnimeModel for rendering
+        // Read library entries and categories
         val libraryEntries = remember { libraryRepo.getAll() }
+        val categories = remember { libraryRepo.getCategories() }
+
         val allAnime = remember(libraryEntries) {
             libraryEntries.map { entry ->
                 AnimeModel(
@@ -95,13 +108,28 @@ object LibraryTab : AnikkuScreen(), Tab {
             }
         }
 
-        val filteredAnime = remember(allAnime, searchQuery, sortMode) {
-            val filtered = if (searchQuery.isBlank()) allAnime
-            else allAnime.filter {
-                it.title.contains(searchQuery, ignoreCase = true) ||
-                    it.author?.contains(searchQuery, ignoreCase = true) == true ||
-                    it.genre?.any { g -> g.contains(searchQuery, ignoreCase = true) } == true
+        // Filter by category + search query, then sort
+        val filteredAnime = remember(allAnime, searchQuery, sortMode, selectedCategoryId) {
+            var filtered = allAnime
+
+            // Filter by category
+            if (selectedCategoryId != null) {
+                val categoryEntryIds = libraryEntries
+                    .filter { it.categoryId == selectedCategoryId }
+                    .map { it.animeId }
+                    .toSet()
+                filtered = filtered.filter { it.id in categoryEntryIds }
             }
+
+            // Filter by search
+            if (searchQuery.isNotBlank()) {
+                filtered = filtered.filter {
+                    it.title.contains(searchQuery, ignoreCase = true) ||
+                        it.author?.contains(searchQuery, ignoreCase = true) == true ||
+                        it.genre?.any { g -> g.contains(searchQuery, ignoreCase = true) } == true
+                }
+            }
+
             when (sortMode) {
                 SortMode.Title -> filtered.sortedBy { it.title }
                 SortMode.Status -> filtered.sortedBy { it.status }
@@ -111,6 +139,8 @@ object LibraryTab : AnikkuScreen(), Tab {
 
         LibraryContent(
             libraryAnime = filteredAnime,
+            categories = categories,
+            selectedCategoryId = selectedCategoryId,
             libraryCount = libraryRepo.count(),
             displayMode = displayMode,
             searchQuery = searchQuery,
@@ -123,6 +153,7 @@ object LibraryTab : AnikkuScreen(), Tab {
             onSortModeChange = { sortMode = it },
             onToggleSortMenu = { showSortMenu = !showSortMenu },
             onDismissSortMenu = { showSortMenu = false },
+            onCategorySelect = { selectedCategoryId = it },
             onAnimeClick = { anime ->
                 navigator.push(AnimeDetailScreen(
                     animeId = anime.id,
@@ -147,6 +178,8 @@ object LibraryTab : AnikkuScreen(), Tab {
 @Composable
 private fun LibraryContent(
     libraryAnime: List<AnimeModel>,
+    categories: List<CategoryEntry> = emptyList(),
+    selectedCategoryId: Long? = null,
     libraryCount: Int = 0,
     displayMode: LibraryTab.DisplayMode,
     searchQuery: String,
@@ -157,6 +190,7 @@ private fun LibraryContent(
     onSortModeChange: (LibraryTab.SortMode) -> Unit,
     onToggleSortMenu: () -> Unit,
     onDismissSortMenu: () -> Unit,
+    onCategorySelect: (Long?) -> Unit,
     onAnimeClick: (AnimeModel) -> Unit,
 ) {
     Scaffold(
@@ -220,6 +254,38 @@ private fun LibraryContent(
         },
     ) { padding ->
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
+            // Category filter chips
+            if (categories.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    FilterChip(
+                        selected = selectedCategoryId == null,
+                        onClick = { onCategorySelect(null) },
+                        label = { Text("All") },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                        ),
+                    )
+                    categories.forEach { category ->
+                        if (!category.hidden) {
+                            FilterChip(
+                                selected = selectedCategoryId == category.id,
+                                onClick = { onCategorySelect(category.id) },
+                                label = { Text(category.name) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
+
             if (libraryAnime.isNotEmpty() || searchQuery.isNotEmpty()) {
                 OutlinedTextField(
                     value = searchQuery,

@@ -18,10 +18,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CloudDownload
+import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.DownloadDone
+import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.PauseCircle
 import androidx.compose.material.icons.outlined.PlayArrow
-import androidx.compose.material3.Button
+import androidx.compose.material.icons.outlined.Replay
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -29,30 +32,35 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.anikku.macos.platform.data.DownloadRepository
+import app.anikku.macos.platform.data.LocalDownloadManager
+import app.anikku.macos.platform.download.MacOSDownloadManager
 import app.anikku.macos.ui.AnikkuScreen
 import app.anikku.macos.ui.components.LocalToastHost
+import app.anikku.macos.ui.components.OfflineBadge
 import app.anikku.macos.ui.components.ToastDuration
 import cafe.adriel.voyager.core.screen.ScreenKey
 import cafe.adriel.voyager.core.screen.uniqueScreenKey
 
 /**
- * Download queue screen — Phase 5.10 UI shell.
+ * Download queue screen — Phase 7: Real Download Pipeline.
  *
- * Shows ongoing and completed downloads with progress bars.
- * Supports pause/resume and cancellation of individual downloads.
- *
- * TODO Phase 7: Connect to real DownloadManager when domain layer is wired.
+ * Shows ongoing and completed downloads with live progress bars.
+ * Supports pause/resume, cancellation, and retry of individual downloads.
+ * Uses MacOSDownloadManager for the actual download logic.
  */
 class DownloadQueueScreen : AnikkuScreen() {
 
@@ -60,92 +68,62 @@ class DownloadQueueScreen : AnikkuScreen() {
 
     @Composable
     override fun Content() {
-        // Mock download items for display
-        val downloads = remember {
-            listOf(
-                DownloadItem(
-                    id = 1L,
-                    animeTitle = "Attack on Titan",
-                    episodeName = "Episode 3 - A Dim Light Amid Despair",
-                    progress = 0.45f,
-                    status = DownloadStatus.Downloading,
-                    totalBytes = 250_000_000L,
-                    downloadedBytes = 112_500_000L,
-                ),
-                DownloadItem(
-                    id = 2L,
-                    animeTitle = "Jujutsu Kaisen",
-                    episodeName = "Episode 22 - The Origin of Obedience (Part 2)",
-                    progress = 0.78f,
-                    status = DownloadStatus.Downloading,
-                    totalBytes = 180_000_000L,
-                    downloadedBytes = 140_400_000L,
-                ),
-                DownloadItem(
-                    id = 3L,
-                    animeTitle = "One Piece",
-                    episodeName = "Episode 1092 - A Night to Remember",
-                    progress = 1.0f,
-                    status = DownloadStatus.Completed,
-                ),
-                DownloadItem(
-                    id = 4L,
-                    animeTitle = "Spy x Family",
-                    episodeName = "Episode 38 - Enjoy the Resort to the Fullest",
-                    progress = 0.0f,
-                    status = DownloadStatus.Paused,
-                ),
-                DownloadItem(
-                    id = 5L,
-                    animeTitle = "Demon Slayer",
-                    episodeName = "Episode 5 - Final Selection",
-                    progress = 1.0f,
-                    status = DownloadStatus.Completed,
-                ),
-            )
-        }
-
+        val downloadManager = LocalDownloadManager.current
         val toastHost = LocalToastHost.current
 
+        // Collect real download data
+        val downloads by if (downloadManager != null) {
+            downloadManager.downloads.collectAsState()
+        } else {
+            remember { mutableStateOf(emptyList<DownloadRepository.DownloadEntry>()) }
+        }
+
+        val data = DownloadQueueData(downloads, downloadManager)
+
         DownloadQueueContent(
-            downloads = downloads,
+            data = data,
             onPauseResume = { id ->
-                val item = downloads.find { it.id == id }
-                if (item != null) {
-                    val action = if (item.status == DownloadStatus.Paused) "Resumed" else "Paused"
-                    toastHost.show("$action: ${item.animeTitle}", ToastDuration.SHORT)
+                val item = downloads.find { it.id == id } ?: return@DownloadQueueContent
+                if (item.status == DownloadRepository.DownloadStatus.PAUSED) {
+                    downloadManager?.resume(id)
+                } else if (item.status == DownloadRepository.DownloadStatus.DOWNLOADING) {
+                    downloadManager?.pause(id)
                 }
             },
             onCancel = { id ->
-                val item = downloads.find { it.id == id }
-                if (item != null) {
-                    toastHost.show("Cancelled: ${item.animeTitle}", ToastDuration.SHORT)
-                }
+                val item = downloads.find { it.id == id } ?: return@DownloadQueueContent
+                downloadManager?.cancel(id)
+                toastHost.show("Cancelled: ${item.animeTitle}", ToastDuration.SHORT)
+            },
+            onRetry = { id ->
+                downloadManager?.retry(id)
+                toastHost.show("Retrying download", ToastDuration.SHORT)
+            },
+            onClearAll = {
+                downloadManager?.cancelAll()
+                toastHost.show("All downloads cancelled", ToastDuration.SHORT)
             },
         )
     }
 }
 
-private data class DownloadItem(
-    val id: Long,
-    val animeTitle: String,
-    val episodeName: String,
-    val progress: Float,
-    val status: DownloadStatus,
-    val totalBytes: Long = 0L,
-    val downloadedBytes: Long = 0L,
+private data class DownloadQueueData(
+    val downloads: List<DownloadRepository.DownloadEntry>,
+    val manager: MacOSDownloadManager?,
 )
-
-private enum class DownloadStatus { Downloading, Paused, Completed, Error }
 
 @Composable
 private fun DownloadQueueContent(
-    downloads: List<DownloadItem>,
+    data: DownloadQueueData,
     onPauseResume: (Long) -> Unit,
     onCancel: (Long) -> Unit,
+    onRetry: (Long) -> Unit,
+    onClearAll: () -> Unit,
 ) {
-    val activeDownloads = downloads.count { it.status == DownloadStatus.Downloading }
-    val completedDownloads = downloads.count { it.status == DownloadStatus.Completed }
+    val downloads = data.downloads
+    val activeDownloads = downloads.count { it.isActive }
+    val completedDownloads = downloads.count { it.status == DownloadRepository.DownloadStatus.COMPLETED }
+    val errorDownloads = downloads.count { it.status == DownloadRepository.DownloadStatus.ERROR }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -153,18 +131,33 @@ private fun DownloadQueueContent(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item {
-            Text(
-                text = "Downloads",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(bottom = 4.dp),
-            )
-            Text(
-                text = "$activeDownloads active · $completedDownloads completed",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = 12.dp),
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column {
+                    Text(
+                        text = "Downloads",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        text = buildString {
+                            if (activeDownloads > 0) append("$activeDownloads active · ")
+                            append("$completedDownloads completed")
+                            if (errorDownloads > 0) append(" · $errorDownloads failed")
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (downloads.isNotEmpty()) {
+                    TextButton(onClick = onClearAll) {
+                        Text("Clear all", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
         }
 
         if (downloads.isEmpty()) {
@@ -190,7 +183,8 @@ private fun DownloadQueueContent(
                         )
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            "Downloaded episodes will appear here",
+                            if (data.manager == null) "Download manager not initialized"
+                            else "Tap the download button on any episode to save for offline viewing",
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                         )
@@ -206,6 +200,7 @@ private fun DownloadQueueContent(
                     item = item,
                     onPauseResume = { onPauseResume(item.id) },
                     onCancel = { onCancel(item.id) },
+                    onRetry = { onRetry(item.id) },
                 )
             }
         }
@@ -214,15 +209,20 @@ private fun DownloadQueueContent(
 
 @Composable
 private fun DownloadItemCard(
-    item: DownloadItem,
+    item: DownloadRepository.DownloadEntry,
     onPauseResume: () -> Unit,
     onCancel: () -> Unit,
+    onRetry: () -> Unit,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            containerColor = when (item.status) {
+                DownloadRepository.DownloadStatus.COMPLETED -> MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.7f)
+                DownloadRepository.DownloadStatus.ERROR -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)
+                else -> MaterialTheme.colorScheme.surfaceContainerHigh
+            },
         ),
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
@@ -256,18 +256,33 @@ private fun DownloadItemCard(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    Text(
-                        text = item.episodeName,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    if (item.status == DownloadRepository.DownloadStatus.COMPLETED) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = item.episodeName,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false),
+                            )
+                            OfflineBadge()
+                        }
+                    } else {
+                        Text(
+                            text = item.episodeName,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
 
-                // Status icon
+                // Status / action buttons
                 when (item.status) {
-                    DownloadStatus.Downloading -> {
+                    DownloadRepository.DownloadStatus.QUEUED,
+                    DownloadRepository.DownloadStatus.DOWNLOADING -> {
                         IconButton(onClick = onPauseResume, modifier = Modifier.size(32.dp)) {
                             Icon(
                                 imageVector = Icons.Outlined.PauseCircle,
@@ -277,7 +292,7 @@ private fun DownloadItemCard(
                             )
                         }
                     }
-                    DownloadStatus.Paused -> {
+                    DownloadRepository.DownloadStatus.PAUSED -> {
                         IconButton(onClick = onPauseResume, modifier = Modifier.size(32.dp)) {
                             Icon(
                                 imageVector = Icons.Outlined.PlayArrow,
@@ -287,25 +302,22 @@ private fun DownloadItemCard(
                             )
                         }
                     }
-                    DownloadStatus.Completed -> {
-                        Icon(
-                            imageVector = Icons.Outlined.CloudDownload,
-                            contentDescription = "Completed",
-                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
-                            modifier = Modifier.size(20.dp),
-                        )
+                    DownloadRepository.DownloadStatus.COMPLETED -> {
+                        // Badge shown inline with episode name above
                     }
-                    DownloadStatus.Error -> {
-                        Icon(
-                            imageVector = Icons.Outlined.CloudDownload,
-                            contentDescription = "Error",
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(20.dp),
-                        )
+                    DownloadRepository.DownloadStatus.ERROR -> {
+                        IconButton(onClick = onRetry, modifier = Modifier.size(32.dp)) {
+                            Icon(
+                                imageVector = Icons.Outlined.Replay,
+                                contentDescription = "Retry",
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
                     }
                 }
 
-                if (item.status != DownloadStatus.Completed) {
+                if (item.status != DownloadRepository.DownloadStatus.COMPLETED) {
                     Spacer(Modifier.width(4.dp))
                     IconButton(onClick = onCancel, modifier = Modifier.size(32.dp)) {
                         Icon(
@@ -318,8 +330,11 @@ private fun DownloadItemCard(
                 }
             }
 
-            // Progress bar for downloading items
-            if (item.status == DownloadStatus.Downloading || item.status == DownloadStatus.Paused) {
+            // Progress bar for active downloads
+            if (item.status == DownloadRepository.DownloadStatus.QUEUED ||
+                item.status == DownloadRepository.DownloadStatus.DOWNLOADING ||
+                item.status == DownloadRepository.DownloadStatus.PAUSED
+            ) {
                 Spacer(Modifier.height(8.dp))
                 LinearProgressIndicator(
                     progress = { item.progress },
@@ -327,19 +342,48 @@ private fun DownloadItemCard(
                         .fillMaxWidth()
                         .height(4.dp)
                         .clip(RoundedCornerShape(2.dp)),
-                    color = if (item.status == DownloadStatus.Paused)
-                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                    else
-                        MaterialTheme.colorScheme.primary,
+                    color = when (item.status) {
+                        DownloadRepository.DownloadStatus.PAUSED ->
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        DownloadRepository.DownloadStatus.QUEUED ->
+                            MaterialTheme.colorScheme.tertiary.copy(alpha = 0.6f)
+                        else -> MaterialTheme.colorScheme.primary
+                    },
                     trackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
                 )
                 Spacer(Modifier.height(4.dp))
+                val statusText = when (item.status) {
+                    DownloadRepository.DownloadStatus.QUEUED -> "Queued"
+                    DownloadRepository.DownloadStatus.DOWNLOADING ->
+                        formatBytes(item.downloadedBytes) + " / " + formatBytes(item.totalBytes) +
+                            " (${(item.progress * 100).toInt()}%)"
+                    DownloadRepository.DownloadStatus.PAUSED -> "Paused"
+                    else -> ""
+                }
                 Text(
-                    text = formatBytes(item.downloadedBytes) + " / " + formatBytes(item.totalBytes) +
-                        " (${(item.progress * 100).toInt()}%)",
+                    text = statusText,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                 )
+            }
+
+            // Error message
+            if (item.status == DownloadRepository.DownloadStatus.ERROR) {
+                Spacer(Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Outlined.CloudOff,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp),
+                        tint = MaterialTheme.colorScheme.error,
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        "Download failed",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             }
         }
     }

@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
@@ -11,6 +12,8 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
+import app.anikku.macos.platform.data.LibraryRepository
+import app.anikku.macos.platform.data.LocalLibraryRepository
 import app.anikku.macos.platform.preference.BookmarkStore
 import app.anikku.macos.platform.preference.LocalBookmarkStore
 import app.anikku.macos.platform.preference.MacOSPreferenceStore
@@ -70,8 +73,15 @@ class AnimeDetailScreenTest {
     private fun RenderAnimeDetail(
         toastHostState: ToastHostState = ToastHostState(),
     ) {
+        val libraryRepo = remember {
+            val tmpDir = File.createTempFile("anikku_test_library_", "").apply {
+                delete(); mkdirs(); deleteOnExit()
+            }
+            LibraryRepository(tmpDir)
+        }
         CompositionLocalProvider(
             LocalBookmarkStore provides BookmarkStore(MacOSPreferenceStore(File.createTempFile("bookmark_ui_", ".json").apply { deleteOnExit() })),
+            LocalLibraryRepository provides libraryRepo,
             LocalToastHost provides toastHostState,
         ) {
             AnikkuTheme {

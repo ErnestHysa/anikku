@@ -1,79 +1,111 @@
 package app.anikku.macos.player
 
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import com.sun.jna.Pointer
 import io.github.oshai.kotlinlogging.KotlinLogging
-import java.awt.Canvas
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 
 private val logger = KotlinLogging.logger {}
 
 /**
- * Compose Desktop video surface that embeds mpv video output.
+ * Default render interval in milliseconds (~30 fps).
+ */
+private const val FRAME_INTERVAL_MS = 33L
+
+/**
+ * Compose Desktop video surface for mpv software-rendered frames.
  *
- * This composable renders mpv's video frames using an offscreen rendering
- * approach compatible with Compose Desktop, avoiding the complexity of
- * Metal/CAMetalLayer JNA bridging.
+ * Uses [MPVSoftwareRenderer] to pull decoded frames from libmpv and
+ * renders them onto a Compose [Canvas] as [ImageBitmap]s.
  *
- * ## Rendering Architecture
+ * Replaces the earlier SwingPanel + AWT Canvas approach with a pure
+ * Compose solution that works reliably on macOS without platform-specific
+ * native window embedding.
  *
- * Two rendering strategies are attempted in order:
+ * ## Rendering Flow
  *
- * 1. **Render API (preferred):** Uses `mpv_render_context` with software
- *    rendering (`--vo=libmpv` + sw-renderer). Renders frames into a
- *    offscreen buffer that is copied into a Compose ImageBitmap via Skia.
- *
- * 2. **SwingPanel + AWT Canvas (fallback):** Embeds an AWT Canvas via
- *    SwingPanel and passes its native window handle to mpv. This uses
- *    the legacy `wid` property approach which works on macOS for basic
- *    rendering.
- *
- * ## Usage
- *
- * ```kotlin
- * MPVVideoSurface(
- *     mpvHandle = mpvHandle,
- *     modifier = Modifier.fillMaxSize(),
- *     onDoubleClick = { toggleFullScreen() },
- * )
+ * ```
+ * LaunchedEffect(renderer) ─► [MPVSoftwareRenderer.render()]
+ *                                      │
+ *                                      ▼
+ *                              BufferedImage (ARGB)
+ *                                      │
+ *                                      ▼
+ *                            .toComposeImageBitmap()
+ *                                      │
+ *                                      ▼
+ *                              Canvas.drawImage()
  * ```
  *
- * @param mpvHandle The mpv core handle created via [MPVLib.create].
+ * @param mpvHandle The mpv core handle (null if mpv is unavailable).
+ * @param renderer The [MPVSoftwareRenderer] instance, or null if not ready.
  * @param modifier Standard Compose modifier.
- * @param onSizeChanged Called when the surface size changes (e.g., on resize).
  */
 @Composable
 fun MPVVideoSurface(
     mpvHandle: Pointer?,
+    renderer: MPVSoftwareRenderer?,
     modifier: Modifier = Modifier,
-    onSizeChanged: ((IntSize) -> Unit)? = null,
 ) {
-    var surfaceSize by remember { mutableStateOf(IntSize(0, 0)) }
+    val mpvAvailable = mpvHandle != null && MPVLib.isAvailable
 
-    DisposableEffect(mpvHandle) {
-        onDispose {
-            // Clean up render context if active
+    // Current rendered frame as a Compose ImageBitmap
+    var currentFrame by remember { mutableStateOf<ImageBitmap?>(null) }
+
+    // Surface size for aspect-ratio-aware rendering
+    var surfaceSize by remember { mutableStateOf(IntSize.Zero) }
+
+    // Periodic render loop: pull frames from the software renderer
+    LaunchedEffect(renderer, mpvAvailable) {
+        if (renderer == null || !mpvAvailable) return@LaunchedEffect
+
+        while (isActive) {
+            val bufferedImage = renderer.render()
+            if (bufferedImage != null) {
+                val composeBitmap = bufferedImage.toComposeImageBitmap()
+                currentFrame = composeBitmap
+            }
+            delay(FRAME_INTERVAL_MS)
         }
     }
 
-    // Use SwingPanel to embed an AWT Canvas for video rendering
-    // This is the fallback approach that works reliably on macOS
-    androidx.compose.ui.awt.SwingPanel(
+    // Clean up the bitmap reference on dispose
+    DisposableEffect(renderer) {
+        onDispose {
+            currentFrame = null
+        }
+    }
+
+    Box(
         modifier = modifier
-            .onSizeChanged { size ->
-                surfaceSize = size
-                onSizeChanged?.invoke(size)
-            }
+            .fillMaxSize()
+            .background(Color.Black)
+            .onSizeChanged { size -> surfaceSize = size }
             .onKeyEvent { event ->
                 when (event.key) {
                     Key.Spacebar -> {
@@ -99,55 +131,49 @@ fun MPVVideoSurface(
                     else -> false
                 }
             },
-        factory = {
-            Canvas().also { canvas ->
-                // Configure the canvas for video rendering
-                canvas.isFocusable = true
-                canvas.requestFocus()
-
-                // If mpv is available and initialized, try to attach
-                if (mpvHandle != null && MPVLib.isAvailable) {
-                    try {
-                        setupMPVRendering(mpvHandle, canvas)
-                    } catch (e: Exception) {
-                        logger.warn(e) { "Failed to attach mpv to canvas" }
-                    }
-                }
+        contentAlignment = Alignment.Center,
+    ) {
+        val bitmap = currentFrame
+        if (bitmap != null) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                drawVideoFrame(bitmap)
             }
-        },
-        update = { canvas ->
-            // Handle updates (e.g., resize)
-            if (surfaceSize.width > 0 && surfaceSize.height > 0) {
-                canvas.setSize(surfaceSize.width, surfaceSize.height)
-            }
-        },
-    )
+        }
+    }
 }
 
 /**
- * Configure mpv rendering on the AWT Canvas.
- *
- * This sets up the `wid` property on the mpv handle, pointing it to the
- * native window handle of the AWT Canvas. mpv will render directly into
- * the Canvas's NSView on macOS.
- *
- * Note: The `wid` approach has known limitations on macOS (see AD-03).
- * If rendering fails, the application should fall back to the software
- * renderer approach.
- */private fun setupMPVRendering(handle: Pointer, canvas: Canvas) {
-    try {
-        // Configure software rendering for the AWT Canvas
-        // Uses the software renderer as the primary approach since the `wid`
-        // property has known limitations on macOS (see AD-03).
-        MPVLib.setOptionString(handle, "vo", "libmpv")
-        MPVLib.setOptionString(handle, "gpu-context", "none")
-        MPVLib.setOptionString(handle, "sws-scaler", "bilinear")
+ * Draw the video frame centered and scaled to fit the canvas,
+ * maintaining the original aspect ratio.
+ */
+private fun DrawScope.drawVideoFrame(bitmap: ImageBitmap) {
+    val frameWidth = bitmap.width.toFloat()
+    val frameHeight = bitmap.height.toFloat()
+    val canvasWidth = size.width
+    val canvasHeight = size.height
 
-        logger.info { "MPV rendering configured for AWT Canvas" }
-    } catch (e: Exception) {
-        logger.error(e) { "Failed to configure MPV rendering on Canvas" }
-    }
+    if (frameWidth <= 0f || frameHeight <= 0f || canvasWidth <= 0f || canvasHeight <= 0f) return
+
+    val scaleX = canvasWidth / frameWidth
+    val scaleY = canvasHeight / frameHeight
+    val scale = minOf(scaleX, scaleY)
+
+    val drawWidth = (frameWidth * scale).toInt()
+    val drawHeight = (frameHeight * scale).toInt()
+
+    val offsetX = ((canvasWidth - drawWidth) / 2f).toInt()
+    val offsetY = ((canvasHeight - drawHeight) / 2f).toInt()
+
+    drawImage(
+        image = bitmap,
+        dstOffset = IntOffset(offsetX, offsetY),
+        dstSize = IntSize(drawWidth, drawHeight),
+    )
 }
+
+// ---------------------------------------------------------------------------
+// MPV utility functions (used by MPVVideoSurface and others)
+// ---------------------------------------------------------------------------
 
 /**
  * Toggle playback between play and pause.

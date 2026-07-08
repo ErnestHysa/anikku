@@ -125,6 +125,7 @@ fun PipWindow(
             if (MPVLib.isAvailable && mpvHandle != null) {
                 MPVVideoSurface(
                     mpvHandle = mpvHandle,
+                    renderer = null,
                     modifier = Modifier.fillMaxSize(),
                 )
             }

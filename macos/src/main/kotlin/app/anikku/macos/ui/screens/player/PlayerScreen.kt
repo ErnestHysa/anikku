@@ -10,12 +10,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.PlayCircle
@@ -27,6 +29,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -52,14 +55,22 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.anikku.macos.player.MPVLib
+import app.anikku.macos.player.MPVSoftwareRenderer
 import app.anikku.macos.player.MPVVideoSurface
 import app.anikku.macos.player.PlaybackState
 import app.anikku.macos.player.PlayerViewModel
 import app.anikku.macos.platform.data.HistoryRepository
+import app.anikku.macos.platform.data.LocalDownloadManager
 import app.anikku.macos.platform.data.LocalHistoryRepository
+import app.anikku.macos.platform.download.MacOSDownloadManager
 import app.anikku.macos.platform.extension.MacOSExtensionManager
+import app.anikku.macos.platform.media.MacOSHttpServer
 import app.anikku.macos.ui.AnikkuScreen
 import app.anikku.macos.ui.components.LocalToastHost
+import app.anikku.macos.ui.components.OfflineBadge
+import app.anikku.macos.ui.components.OfflineCheckmarkAnimation
+import app.anikku.macos.ui.components.PlaybackStateBadge
+import app.anikku.macos.ui.components.VideoQualityBadge
 import app.anikku.macos.ui.components.ToastDuration
 import app.anikku.macos.ui.screens.models.EpisodeModel
 import app.anikku.macos.ui.screens.models.MockData
@@ -71,9 +82,10 @@ import cafe.adriel.voyager.navigator.currentOrThrow
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.File
 
 /**
- * Player screen — Phase 6: mpv Integration.
+ * Player screen — Phase 6: mpv Integration + Phase 7: Offline playback.
  *
  * Full-screen video player with:
  * - MPV video surface (via JNA libmpv bindings)
@@ -84,9 +96,12 @@ import kotlinx.coroutines.launch
  * - Volume control
  * - Screenshot support
  * - Keyboard shortcuts (space, arrows, +/- for volume)
+ * - **Offline playback**: if the episode is downloaded, serves it from
+ *   local storage via [MacOSHttpServer] instead of fetching from source.
  *
  * When [sourceId] and [extensionManager] are provided, fetches video URLs
  * from the extension source API and loads them into mpv for real playback.
+ * If [downloadManager] is provided, checks for local downloads first.
  * Falls back to mock simulation when source is not available.
  *
  * @param animeId     The anime these episodes belong to.
@@ -94,6 +109,7 @@ import kotlinx.coroutines.launch
  * @param sourceId    Source ID for extension API lookup (optional).
  * @param episodeUrl  The episode URL on the source (required for source API).
  * @param extensionManager Extension manager for source lookup (optional).
+ * @param downloadManager Download manager for offline playback (optional).
  */
 data class PlayerScreen(
     val animeId: Long,
@@ -101,9 +117,55 @@ data class PlayerScreen(
     val sourceId: Long? = null,
     val episodeUrl: String? = null,
     val extensionManager: MacOSExtensionManager? = null,
+    val downloadManager: MacOSDownloadManager? = null,
 ) : AnikkuScreen() {
 
     override val key: ScreenKey = uniqueScreenKey
+
+    /**
+     * Resolve the video URL for a given episode.
+     * Priority:
+     * 1. Local file (if downloaded) → serve via MacOSHttpServer
+     * 2. Source API (if extension is available)
+     * 3. null (mock/fallback mode)
+     */
+    private suspend fun resolveVideoUrl(
+        episodeUrl: String?,
+        episodeNumber: Double,
+        httpServer: MacOSHttpServer?,
+        onQuality: (resolution: Int?, label: String?) -> Unit = { _, _ -> },
+    ): String? {
+        // Priority 1: Local download
+        if (downloadManager != null && episodeNumber > 0) {
+            val localFile = downloadManager.getLocalFile(animeId, episodeNumber)
+            if (localFile != null && httpServer != null && httpServer.isRunning) {
+                val streamUrl = httpServer.getStreamUrl(localFile)
+                if (streamUrl != null) {
+                    return streamUrl
+                }
+            }
+        }
+
+        // Priority 2: Source API
+        if (sourceId != null && episodeUrl != null) {
+            val source = extensionManager?.getSource(sourceId)
+            if (source != null) {
+                try {
+                    val sEpisode = SEpisode.create().apply { url = episodeUrl }
+                    val videos = source.getVideoList(sEpisode)
+                    if (videos.isNotEmpty()) {
+                        val best = videos.firstOrNull { it.preferred } ?: videos.first()
+                        onQuality(best.resolution, best.videoTitle.takeIf { it.isNotBlank() })
+                        return best.videoUrl
+                    }
+                } catch (_: Exception) {
+                    // Fall through
+                }
+            }
+        }
+
+        return null
+    }
 
     @Composable
     override fun Content() {
@@ -114,8 +176,28 @@ data class PlayerScreen(
         // Initialize the player view model (Phase 6)
         val playerViewModel = remember { PlayerViewModel() }
 
+        // Create and manage the local HTTP server for serving downloaded files
+        // Derive the downloads directory from the first completed download's parent dir,
+        // or fall back to a reasonable default.
+        val httpServer = remember {
+            val videosDir = downloadManager?.let { dm ->
+                dm.getLocalFile(animeId, 1.0)?.parentFile
+            } ?: File(System.getProperty("user.home"), "Library/Application Support/Anikku/downloads/videos")
+            MacOSHttpServer(
+                downloadsDir = videosDir,
+            ).apply { startServer() }
+        }
+
+        // Stop the HTTP server when the screen is disposed
+        DisposableEffect(httpServer) {
+            onDispose {
+                httpServer.stopServer()
+            }
+        }
+
         // Collect player state
         val mpvHandle by playerViewModel.handle.collectAsState()
+        val softwareRenderer by playerViewModel.renderer.collectAsState()
         val playbackState by playerViewModel.playbackState.collectAsState()
         val currentPosition by playerViewModel.currentPosition.collectAsState()
         val duration by playerViewModel.duration.collectAsState()
@@ -138,53 +220,62 @@ data class PlayerScreen(
         var currentEpisodeIndex by remember { mutableIntStateOf(0) }
         var animeTitle by remember { mutableStateOf("Unknown") }
         var videoUrlToLoad by remember { mutableStateOf<String?>(null) }
+        var videoQualityResolution by remember { mutableStateOf<Int?>(null) }
+        var videoQualityLabel by remember { mutableStateOf<String?>(null) }
         var isLoading by remember { mutableStateOf(true) }
-        var usingFallback by remember { mutableStateOf(true) }
+        var isOfflinePlayback by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
 
         // On mount: initialize mpv and fetch episode data
         LaunchedEffect(Unit) {
             playerViewModel.initialize()
 
-            // Try to load episode data from source API
+            // Step 1: Try to fetch episodes from the source
+            var usedSource = false
             if (sourceId != null && episodeUrl != null) {
-                val source = extensionManager?.getSource(sourceId)
-                if (source != null) {
-                    try {
-                        // Create SEpisode for this URL
-                        val sEpisode = SEpisode.create().apply { url = episodeUrl }
-
-                        // Fetch video URLs
-                        val videos = source.getVideoList(sEpisode)
-                        if (videos.isNotEmpty()) {
-                            videoUrlToLoad = videos.first().videoUrl
-                        }
-
-                        // Fetch episode list for navigation
+                try {
+                    val source = extensionManager?.getSource(sourceId)
+                    if (source != null) {
                         val sAnime = eu.kanade.tachiyomi.animesource.model.SAnime.create().apply {
                             url = episodeUrl.substringBeforeLast("/")
                         }
                         val sourceEpisodes = source.getEpisodeList(sAnime)
-
-                        // Find the index of the current episode
-                        val episodeIdx = sourceEpisodes.indexOfFirst { it.url == episodeUrl }
-                        if (episodeIdx >= 0) currentEpisodeIndex = episodeIdx
-
-                        // Convert episodes to models
                         allEpisodes = sourceEpisodes.map { it.toEpisodeModel(animeId) }.toMutableList()
-                        usingFallback = false
-                    } catch (_: Exception) {
-                        // Fall through to MockData fallback
+                        val idx = sourceEpisodes.indexOfFirst { it.url == episodeUrl }
+                        if (idx >= 0) currentEpisodeIndex = idx
+                        usedSource = true
                     }
-                }
+                } catch (_: Exception) { }
             }
 
-            // Fallback to MockData
-            if (allEpisodes.isEmpty()) {
+            // Step 2: Determine starting episode number for local-file check
+            val currentEpisodeNumber = allEpisodes.getOrNull(currentEpisodeIndex)?.episodeNumber ?: 0.0
+
+            // Step 3: Resolve video URL — checks local files first, then source
+            val resolvedUrl = resolveVideoUrl(
+                episodeUrl = episodeUrl,
+                episodeNumber = currentEpisodeNumber,
+                httpServer = httpServer,
+                onQuality = { res, label ->
+                    videoQualityResolution = res
+                    videoQualityLabel = label
+                },
+            )
+
+            // Determine if this is offline playback
+            isOfflinePlayback = downloadManager != null && currentEpisodeNumber > 0 &&
+                downloadManager.isDownloaded(animeId, currentEpisodeNumber)
+
+            if (resolvedUrl != null) {
+                videoUrlToLoad = resolvedUrl
+            } else if (!usedSource && allEpisodes.isEmpty()) {
+                // Fallback: no local file, no source — use MockData
                 allEpisodes = MockData.sampleEpisodes.filter { it.animeId == animeId }.toMutableList()
                 currentEpisodeIndex = allEpisodes.indexOfFirst { it.id == episodeId }.coerceAtLeast(0)
                 animeTitle = MockData.sampleAnime.find { it.id == animeId }?.title ?: "Unknown"
-                videoUrlToLoad = null // no real video URL in mock mode
+            } else if (resolvedUrl == null) {
+                // File is downloaded but transfer to httpServer failed — still mark as downloaded
+                videoUrlToLoad = null
             }
 
             isLoading = false
@@ -198,37 +289,45 @@ data class PlayerScreen(
             }
         }
 
-        // Update anime title when episodes change
+        // Update anime title from MockData if unknown
         LaunchedEffect(allEpisodes) {
-            if (usingFallback && animeTitle == "Unknown") {
+            if (animeTitle == "Unknown" && allEpisodes.isNotEmpty()) {
                 animeTitle = MockData.sampleAnime.find { it.id == animeId }?.title ?: "Unknown"
             }
         }
 
-        // Record history when episode finishes or screen is dismissed
-        fun recordHistory(episode: EpisodeModel?) {
-            if (episode != null) {
-                historyRepo.add(
-                    HistoryRepository.HistoryEntry(
-                        animeId = animeId,
-                        episodeId = episode.id,
-                        animeTitle = animeTitle,
-                        episodeName = episode.name,
-                        episodeNumber = episode.episodeNumber,
-                        sourceId = sourceId ?: 0L,
-                        episodeUrl = episode.url,
-                        seenAt = System.currentTimeMillis(),
-                        watchDuration = 0L,
-                    )
+        // Save resume position to history
+        fun saveResumePosition(episode: EpisodeModel?, position: Long, total: Long) {
+            if (episode == null || position <= 0) return
+            historyRepo.add(
+                HistoryRepository.HistoryEntry(
+                    animeId = animeId,
+                    episodeId = episode.id,
+                    animeTitle = animeTitle,
+                    episodeName = episode.name,
+                    episodeNumber = episode.episodeNumber,
+                    sourceId = sourceId ?: 0L,
+                    episodeUrl = episode.url,
+                    seenAt = System.currentTimeMillis(),
+                    watchDuration = position,
+                    lastSecondSeen = position,
+                    totalSeconds = total,
                 )
+            )
+        }
+
+        // Save resume position on shutdown
+        fun saveCurrentPosition() {
+            val ep = allEpisodes.getOrNull(currentEpisodeIndex)
+            if (ep != null && duration > 0 && currentPosition > 0) {
+                saveResumePosition(ep, currentPosition.toLong(), duration.toLong())
             }
         }
 
-        // Clean up when the screen is removed — record history
+        // Clean up when the screen is removed — save position + record history
         DisposableEffect(Unit) {
             onDispose {
-                val ep = allEpisodes.getOrNull(currentEpisodeIndex)
-                recordHistory(ep)
+                saveCurrentPosition()
                 playerViewModel.shutdown()
             }
         }
@@ -240,6 +339,7 @@ data class PlayerScreen(
         PlayerContent(
             playerViewModel = playerViewModel,
             mpvHandle = mpvHandle,
+            softwareRenderer = softwareRenderer,
             animeTitle = animeTitle,
             episodes = allEpisodes,
             currentEpisodeIndex = currentEpisodeIndex,
@@ -261,13 +361,18 @@ data class PlayerScreen(
             isHflip = isHflip,
             isVflip = isVflip,
             isMPVAvailable = playerViewModel.isMPVAvailable,
+            isOfflinePlayback = isOfflinePlayback,
+            videoQualityResolution = videoQualityResolution,
+            videoQualityLabel = videoQualityLabel,
             isLoading = isLoading,
             onBack = { navigator.pop() },
             onNavigateEpisode = { index ->
                 if (index in allEpisodes.indices) {
-                    // Record history for current episode before switching
+                    // Save resume position for current episode before switching
                     val oldEpisode = allEpisodes.getOrNull(currentEpisodeIndex)
-                    recordHistory(oldEpisode)
+                    if (oldEpisode != null && currentPosition > 0 && duration > 0) {
+                        saveResumePosition(oldEpisode, currentPosition.toLong(), duration.toLong())
+                    }
 
                     val oldIndex = currentEpisodeIndex
                     currentEpisodeIndex = index
@@ -275,13 +380,29 @@ data class PlayerScreen(
                     val direction = if (index > oldIndex) "next" else "previous"
                     toastHost.show("$direction episode: ${String.format("%.0f", episode.episodeNumber)}", ToastDuration.SHORT)
 
-                    // If we have source data, load the new episode's video
-                    if (sourceId != null && !usingFallback) {
-                        scope.launch {
+                    // Resolve new episode's video URL — check local first, then source
+                    scope.launch {
+                        isOfflinePlayback = downloadManager != null &&
+                            episode.episodeNumber > 0 &&
+                            downloadManager.isDownloaded(animeId, episode.episodeNumber)
+
+                        val resolvedUrl = resolveVideoUrl(
+                            episodeUrl = episode.url,
+                            episodeNumber = episode.episodeNumber,
+                            httpServer = httpServer,
+                            onQuality = { res, label ->
+                                videoQualityResolution = res
+                                videoQualityLabel = label
+                            },
+                        )
+                        if (resolvedUrl != null) {
+                            videoUrlToLoad = resolvedUrl
+                        } else if (sourceId != null && episode.url != null) {
+                            // Fall back to source API
                             val source = extensionManager?.getSource(sourceId)
                             if (source != null) {
                                 try {
-                                    val sEpisode = SEpisode.create().apply { url = episode.url ?: "" }
+                                    val sEpisode = SEpisode.create().apply { url = episode.url }
                                     val videos = source.getVideoList(sEpisode)
                                     if (videos.isNotEmpty()) {
                                         videoUrlToLoad = videos.first().videoUrl
@@ -290,6 +411,8 @@ data class PlayerScreen(
                                     toastHost.show("Failed to load episode", ToastDuration.SHORT)
                                 }
                             }
+                        } else {
+                            toastHost.show("No video source available", ToastDuration.SHORT)
                         }
                     }
                 } else if (index > currentEpisodeIndex) {
@@ -319,6 +442,7 @@ data class PlayerScreen(
 private fun PlayerContent(
     playerViewModel: PlayerViewModel? = null,
     mpvHandle: com.sun.jna.Pointer? = null,
+    softwareRenderer: MPVSoftwareRenderer? = null,
     animeTitle: String,
     episodes: List<EpisodeModel>,
     currentEpisodeIndex: Int,
@@ -340,6 +464,10 @@ private fun PlayerContent(
     isHflip: Boolean = false,
     isVflip: Boolean = false,
     isMPVAvailable: Boolean = false,
+    isOfflinePlayback: Boolean = false,
+    isLive: Boolean = false,
+    videoQualityResolution: Int? = null,
+    videoQualityLabel: String? = null,
     isLoading: Boolean = true,
     onBack: () -> Unit,
     onNavigateEpisode: (Int) -> Unit,
@@ -467,7 +595,11 @@ private fun PlayerContent(
     ) {
         // === MPV Video Surface (when available) ===
         if (isMPVAvailable && mpvHandle != null) {
-            MPVVideoSurface(mpvHandle = mpvHandle, modifier = Modifier.fillMaxSize())
+            MPVVideoSurface(
+                mpvHandle = mpvHandle,
+                renderer = softwareRenderer,
+                modifier = Modifier.fillMaxSize(),
+            )
         } else {
             // === Fallback: Video area placeholder ===
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -519,7 +651,28 @@ private fun PlayerContent(
                     Column {
                         Text(animeTitle, style = MaterialTheme.typography.titleMedium, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         if (currentEpisode != null) {
-                            Text("Episode ${String.format("%.0f", currentEpisode.episodeNumber)} — ${currentEpisode.name}", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("Episode ${String.format("%.0f", currentEpisode.episodeNumber)} — ${currentEpisode.name}", style = MaterialTheme.typography.bodySmall, color = Color.White.copy(alpha = 0.7f), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                                if (isOfflinePlayback) {
+                                    Spacer(Modifier.width(8.dp))
+                                    OfflineBadge()
+                                }
+                                videoQualityResolution?.let {
+                                    Spacer(Modifier.width(6.dp))
+                                    VideoQualityBadge(
+                                        resolution = it,
+                                        label = videoQualityLabel,
+                                    )
+                                }
+                                val stateBadgeState = playbackState
+                                if ((stateBadgeState != PlaybackState.IDLE && stateBadgeState != PlaybackState.PLAYING) || isLive) {
+                                    Spacer(Modifier.width(6.dp))
+                                    PlaybackStateBadge(
+                                        playbackState = stateBadgeState,
+                                        isLive = isLive,
+                                    )
+                                }
+                            }
                         }
                     }
                 },
@@ -547,6 +700,12 @@ private fun PlayerContent(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent, navigationIconContentColor = Color.White),
             )
         }
+
+        // === Offline checkmark animation ===
+        OfflineCheckmarkAnimation(
+            isOfflinePlayback = isOfflinePlayback,
+            modifier = Modifier.align(Alignment.Center).padding(bottom = 80.dp),
+        )
 
         // === Center play/pause ===
         AnimatedVisibility(visible = !isPlaying && isControlsVisible, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.Center)) {

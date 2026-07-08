@@ -220,6 +220,49 @@ object MPVLib {
     fun resume(handle: Pointer) = checkAvailable().mpv_resume(handle)
 
     // -------------------------------------------------------------------------
+    // Render API
+    // -------------------------------------------------------------------------
+
+    /**
+     * Build an array of [mpv_render_param] in native memory.
+     * Each pair is (type, dataPointer). The array is terminated with INVALID.
+     *
+     * @param params Variable number of (type, dataPointer) pairs.
+     * @return Pointer to the native memory block containing the param array.
+     */
+    fun buildRenderParams(vararg params: Pair<Int, Pointer?>): Pointer {
+        val count = params.size + 1 // +1 for INVALID terminator
+        val mem = Memory((count * 16).toLong())
+        for ((i, pair) in params.withIndex()) {
+            mem.setInt(i * 16.toLong(), pair.first)
+            pair.second?.let { mem.setPointer(i * 16L + 8, it) }
+        }
+        // Terminator: type=INVALID (0), data=NULL (already zeroed)
+        return mem
+    }
+
+    /** Create a software render context for the given mpv handle. */
+    fun renderContextCreate(mpvHandle: Pointer): Pointer? {
+        val params = buildRenderParams(
+            RENDER_PARAM_API_TYPE to Memory(3L).also { it.setString(0, RENDER_API_TYPE_SW) },
+        )
+        val res = PointerByReference()
+        val result = checkAvailable().mpv_render_context_create(res, mpvHandle, params)
+        return if (result >= 0) res.value else null
+    }
+
+    /** Free a render context. */
+    fun renderContextFree(ctx: Pointer) {
+        try {
+            checkAvailable().mpv_render_context_free(ctx)
+        } catch (_: Exception) { }
+    }
+
+    /** Render a frame into the provided buffer. */
+    fun renderContextRender(ctx: Pointer, params: Pointer): Int =
+        checkAvailable().mpv_render_context_render(ctx, params)
+
+    // -------------------------------------------------------------------------
     // Format constants
     // -------------------------------------------------------------------------
 
@@ -315,7 +358,6 @@ object MPVLib {
     const val RENDER_PARAM_AMBIENT_LIGHT = 10
     const val RENDER_PARAM_X11 = 11
     const val RENDER_PARAM_WL = 12
-    const val RENDER_PARAM_SW = 13
     const val RENDER_PARAM_OPENGL_FBO_SIZE = 14
     const val RENDER_PARAM_NEXT_FRAME_INFO = 15
     const val RENDER_PARAM_BLOCK_FOR_TARGET_TIME = 16
@@ -324,12 +366,30 @@ object MPVLib {
     const val RENDER_PARAM_DRM_DRAW_SURFACE_SIZE = 19
 
     // -------------------------------------------------------------------------
+    // Software render API constants (added in mpv 0.35.0+)
+    // -------------------------------------------------------------------------
+
+    const val RENDER_PARAM_SW_SIZE = 17
+    const val RENDER_PARAM_SW_FORMAT = 18
+    const val RENDER_PARAM_SW_STRIDE = 19
+    const val RENDER_PARAM_SW_POINTER = 20
+
+    // -------------------------------------------------------------------------
     // Render API type constants
     // -------------------------------------------------------------------------
 
     const val RENDER_API_TYPE_OPENGL = "opengl"
     const val RENDER_API_TYPE_SW = "sw"
     const val RENDER_API_TYPE_LIBPLACEBO = "libplacebo"
+
+    // -------------------------------------------------------------------------
+    // Software render pixel format strings
+    // -------------------------------------------------------------------------
+
+    const val RENDER_FORMAT_RGB0 = "rgb0"
+    const val RENDER_FORMAT_BGR0 = "bgr0"
+    const val RENDER_FORMAT_0RGB = "0rgb"
+    const val RENDER_FORMAT_0BGR = "0bgr"
 
     // -------------------------------------------------------------------------
     // Utility helper — JNA structure for double values
@@ -398,6 +458,22 @@ private interface MPVNatives : Library {
 
     /** Resume the main loop (mpv_resume). */
     fun mpv_resume(handle: Pointer)
+
+    // -------------------------------------------------------------------------
+    // Render API (mpv_render_context_*)
+    // -------------------------------------------------------------------------
+
+    /** Create a render context (mpv_render_context_create). */
+    fun mpv_render_context_create(res: PointerByReference, mpv: Pointer, params: Pointer): Int
+
+    /** Free a render context (mpv_render_context_free). */
+    fun mpv_render_context_free(ctx: Pointer)
+
+    /** Render a frame (mpv_render_context_render). */
+    fun mpv_render_context_render(ctx: Pointer, params: Pointer): Int
+
+    /** Set update callback (mpv_render_context_set_update_callback). */
+    fun mpv_render_context_set_update_callback(ctx: Pointer, callback: Pointer, cb_ctx: Pointer)
 }
 
 // -------------------------------------------------------------------------

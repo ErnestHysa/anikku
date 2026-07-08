@@ -1,11 +1,12 @@
 package app.anikku.macos.testextension
 
+import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+import eu.kanade.tachiyomi.animesource.model.AnimesPage
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.source.CatalogueSource
 import rx.Observable
-import eu.kanade.tachiyomi.animesource.model.AnimePage
 
 /**
  * Test source for verifying the extension loading and playback pipeline.
@@ -20,6 +21,9 @@ class TestAnimeSource : CatalogueSource {
     override val id: Long = 999001L
     override val name: String = "TestSource"
     override val lang: String = "en"
+    override val supportsLatest: Boolean = false
+
+    override fun getFilterList(): AnimeFilterList = AnimeFilterList()
 
     // A real playable video URL (public domain Big Buck Bunny)
     private val testVideoUrl = "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
@@ -63,12 +67,39 @@ class TestAnimeSource : CatalogueSource {
         )
     }
 
+    override suspend fun getPopularAnime(page: Int): AnimesPage {
+        val anime = SAnime.create().apply {
+            url = "/test/anime/1"
+            title = "Big Buck Bunny"
+            author = "Blender Foundation"
+            artist = "Blender Foundation"
+            description = "A large and lovable rabbit deals with three tiny bullies."
+            genre = "Animation, Short, Comedy"
+            status = SAnime.COMPLETED
+            thumbnail_url = testThumbnail
+            initialized = true
+        }
+        return AnimesPage(animes = listOf(anime), hasNextPage = false)
+    }
+
+    override suspend fun getSearchAnime(page: Int, query: String, filters: AnimeFilterList): AnimesPage {
+        return AnimesPage(animes = emptyList(), hasNextPage = false)
+    }
+
+    override suspend fun getLatestUpdates(page: Int): AnimesPage {
+        return AnimesPage(animes = emptyList(), hasNextPage = false)
+    }
+
     // RxJava stubs (required by CatalogueSource but unused)
     @Deprecated("Use suspend API")
-    override fun fetchPopularAnime(page: Int): Observable<AnimePage> =
+    override fun fetchPopularAnime(page: Int): Observable<AnimesPage> =
         throw UnsupportedOperationException("Use suspend API")
 
     @Deprecated("Use suspend API")
-    override fun fetchSearchAnime(page: Int, query: String): Observable<AnimePage> =
+    override fun fetchSearchAnime(page: Int, query: String, filters: AnimeFilterList): Observable<AnimesPage> =
+        throw UnsupportedOperationException("Use suspend API")
+
+    @Deprecated("Use suspend API")
+    override fun fetchLatestUpdates(page: Int): Observable<AnimesPage> =
         throw UnsupportedOperationException("Use suspend API")
 }

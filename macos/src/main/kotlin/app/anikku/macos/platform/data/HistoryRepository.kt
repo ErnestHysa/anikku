@@ -27,6 +27,8 @@ class HistoryRepository(private val dataDir: File) {
         val episodeUrl: String? = null,
         val seenAt: Long = System.currentTimeMillis(),
         val watchDuration: Long = 0L,
+        val lastSecondSeen: Long = 0L,
+        val totalSeconds: Long = 0L,
     )
 
     private var entries: MutableList<HistoryEntry> = loadFromFile()
@@ -55,6 +57,12 @@ class HistoryRepository(private val dataDir: File) {
 
     fun getForAnime(animeId: Long): List<HistoryEntry> =
         entries.filter { it.animeId == animeId }.sortedByDescending { it.seenAt }
+
+    /**
+     * Get the most recent history entry for an anime, for resume position.
+     */
+    fun getLatestForAnime(animeId: Long): HistoryEntry? =
+        entries.filter { it.animeId == animeId }.maxByOrNull { it.seenAt }
 
     private fun loadFromFile(): MutableList<HistoryEntry> {
         if (!historyFile.exists()) return mutableListOf()

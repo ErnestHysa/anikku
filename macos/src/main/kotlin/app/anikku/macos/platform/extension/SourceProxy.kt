@@ -1,6 +1,7 @@
 package app.anikku.macos.platform.extension
 
-import eu.kanade.tachiyomi.animesource.model.AnimePage
+import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+import eu.kanade.tachiyomi.animesource.model.AnimesPage
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -37,13 +38,15 @@ private val logger = KotlinLogging.logger {}
  *
  * ## Supported methods
  *
- * | Stub method | Real extension method |
+ * | Method | Reflection dispatch |
  * |---|---|
- * | `getAnimeDetails(SAnime)` | `getAnimeDetails(SAnime)` |
- * | `getEpisodeList(SAnime)` | `getEpisodeList(SAnime)` |
- * | `getVideoList(SEpisode)` | `getVideoList(SEpisode)` |
- * | `getPopularAnime(Int)` | `getPopularAnime(Int)` |
- * | `getSearchAnime(Int, String)` | `getSearchAnime(Int, String)` |
+ * | `getAnimeDetails(SAnime)` | Reflective → real extension |
+ * | `getEpisodeList(SAnime)` | Reflective → real extension |
+ * | `getVideoList(SEpisode)` | Reflective → real extension |
+ * | `getPopularAnime(Int)` | Reflective → real extension |
+ * | `getSearchAnime(Int, String, AnimeFilterList)` | Reflective (3-param first, 2-param fallback) |
+ * | `getLatestUpdates(Int)` | Reflective → real extension |
+ * | `getFilterList()` | Reflective → real extension (fallback: empty AnimeFilterList) |
  */
 class ReflectiveSourceProxy(
     /** The loaded extension instance (e.g., a Gogoanime source). */
@@ -61,6 +64,18 @@ class ReflectiveSourceProxy(
     override val lang: String
         get() = reflectiveGet<String>("lang") ?: ""
 
+    override val supportsLatest: Boolean
+        get() = reflectiveGet<Boolean>("supportsLatest") ?: false
+
+    override fun getFilterList(): AnimeFilterList {
+        return try {
+            val method = delegateClass.getMethod("getFilterList")
+            method.invoke(delegate) as AnimeFilterList
+        } catch (_: NoSuchMethodException) {
+            AnimeFilterList()
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Suspend method delegation
     // -------------------------------------------------------------------------
@@ -77,11 +92,18 @@ class ReflectiveSourceProxy(
         return reflectiveCallSuspend("getVideoList", arrayOf(SEpisode::class.java), episode)
     }
 
-    override suspend fun getPopularAnime(page: Int): AnimePage {
+    override suspend fun getPopularAnime(page: Int): AnimesPage {
         return reflectiveCallSuspend("getPopularAnime", arrayOf(Int::class.javaPrimitiveType!!), page)
     }
 
-    override suspend fun getSearchAnime(page: Int, query: String): AnimePage {
+    override suspend fun getSearchAnime(page: Int, query: String, filters: AnimeFilterList): AnimesPage {
+        // Try 3-param version (new source-api) first, fall back to 2-param (old extensions)
+        val result = tryFindSuspendMethod("getSearchAnime", arrayOf(Int::class.javaPrimitiveType!!, String::class.java, AnimeFilterList::class.java))?.let { method ->
+            @Suppress("UNCHECKED_CAST")
+            reflectiveCallSuspendWithMethod(method, page, query, filters) as AnimesPage
+        }
+        if (result != null) return result
+        // Fallback: call 2-param version (older extensions that don't use filters)
         return reflectiveCallSuspend("getSearchAnime", arrayOf(Int::class.javaPrimitiveType!!, String::class.java), page, query)
     }
 
@@ -90,11 +112,19 @@ class ReflectiveSourceProxy(
     // -------------------------------------------------------------------------
 
     @Deprecated("Use suspend API", ReplaceWith("getPopularAnime"))
-    override fun fetchPopularAnime(page: Int): rx.Observable<AnimePage> =
+    override fun fetchPopularAnime(page: Int): rx.Observable<AnimesPage> =
         throw UnsupportedOperationException("Use suspend API instead")
 
     @Deprecated("Use suspend API", ReplaceWith("getSearchAnime"))
-    override fun fetchSearchAnime(page: Int, query: String): rx.Observable<AnimePage> =
+    override fun fetchSearchAnime(page: Int, query: String, filters: AnimeFilterList): rx.Observable<AnimesPage> =
+        throw UnsupportedOperationException("Use suspend API instead")
+
+    override suspend fun getLatestUpdates(page: Int): AnimesPage {
+        return reflectiveCallSuspend("getLatestUpdates", arrayOf(Int::class.javaPrimitiveType!!), page)
+    }
+
+    @Deprecated("Use suspend API", ReplaceWith("getLatestUpdates"))
+    override fun fetchLatestUpdates(page: Int): rx.Observable<AnimesPage> =
         throw UnsupportedOperationException("Use suspend API instead")
 
     // -------------------------------------------------------------------------
@@ -180,6 +210,40 @@ class ReflectiveSourceProxy(
             }
             // Last param should be Continuation (or no extra param for non-suspend)
             true
+        }
+    }
+
+    /**
+     * Try to find a suspend method by name and param types, returning null if not found.
+     */
+    private fun tryFindSuspendMethod(name: String, paramTypes: Array<Class<*>>): Method? {
+        return findSuspendMethod(name, paramTypes)
+    }
+
+    /**
+     * Call a suspend function via reflection using a pre-resolved Method.
+     * Skips the method lookup step.
+     */
+    @Suppress("UNCHECKED_CAST")
+    private suspend fun <T> reflectiveCallSuspendWithMethod(
+        method: Method,
+        vararg args: Any?,
+    ): T {
+        return suspendCoroutineUninterceptedOrReturn { continuation ->
+            val callArgs = arrayOfNulls<Any?>(args.size + 1)
+            args.forEachIndexed { i, arg -> callArgs[i] = arg }
+            callArgs[args.size] = continuation as Continuation<*>
+
+            try {
+                val result = method.invoke(delegate, *callArgs)
+                if (result === COROUTINE_SUSPENDED) {
+                    COROUTINE_SUSPENDED
+                } else {
+                    result as T
+                }
+            } catch (e: Exception) {
+                throw RuntimeException("Failed to invoke ${method.name} on ${delegateClass.name}", e)
+            }
         }
     }
 

@@ -6,14 +6,49 @@ import kotlinx.serialization.json.Json
 import java.io.File
 
 /**
- * JSON-backed repository for the user's anime library (favorites).
+ * Default category ID for uncategorized library entries.
+ * Matches the Android domain's [Category.UNCATEGORIZED_ID].
+ */
+const val CATEGORY_DEFAULT_ID = 0L
+
+/**
+ * Preset category names used on first run.
+ */
+val DEFAULT_CATEGORIES = listOf(
+    CategoryEntry(id = 0L, name = "Default", order = 0, isDefault = true),
+    CategoryEntry(id = 1L, name = "Watching", order = 1),
+    CategoryEntry(id = 2L, name = "Completed", order = 2),
+    CategoryEntry(id = 3L, name = "Dropped", order = 3),
+    CategoryEntry(id = 4L, name = "Plan to Watch", order = 4),
+)
+
+/**
+ * A user-defined category for organizing library entries.
+ */
+@Serializable
+data class CategoryEntry(
+    val id: Long,
+    val name: String,
+    val order: Long = 0L,
+    val isDefault: Boolean = false,
+    val hidden: Boolean = false,
+)
+
+/**
+ * JSON-backed repository for the user's anime library (favorites)
+ * with category support.
  *
- * Stores anime the user has favorited/added to their library.
- * Data file: ~/Library/Application Support/Anikku/data/library.json
+ * Stores anime the user has favorited/added to their library,
+ * organized into user-defined categories.
+ *
+ * Data files:
+ * - ~/Library/Application Support/Anikku/data/library.json (entries)
+ * - ~/Library/Application Support/Anikku/data/categories.json
  */
 class LibraryRepository(private val dataDir: File) {
 
     private val libraryFile = File(dataDir, "library.json")
+    private val categoriesFile = File(dataDir, "categories.json")
     private val json = Json { prettyPrint = true; ignoreUnknownKeys = true }
 
     @Serializable
@@ -28,11 +63,27 @@ class LibraryRepository(private val dataDir: File) {
         val description: String? = null,
         val genre: List<String>? = null,
         val status: Int = 0,
+        val categoryId: Long = CATEGORY_DEFAULT_ID,
+        val lastSecondSeen: Long = 0L,
+        val totalSeconds: Long = 0L,
         val addedAt: Long = System.currentTimeMillis(),
         val lastUpdatedAt: Long = System.currentTimeMillis(),
     )
 
+    private var categories: MutableList<CategoryEntry> = loadCategoriesFromFile()
     private var entries: MutableList<LibraryEntry> = loadFromFile()
+
+    init {
+        // Seed default categories on first run
+        if (categories.isEmpty()) {
+            categories = DEFAULT_CATEGORIES.toMutableList()
+            saveCategoriesToFile()
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Entry CRUD
+    // -----------------------------------------------------------------------
 
     fun getAll(): List<LibraryEntry> = entries.toList()
 
@@ -70,6 +121,82 @@ class LibraryRepository(private val dataDir: File) {
 
     fun count(): Int = entries.size
 
+    /**
+     * Update the resume position for an anime in the library.
+     */
+    fun updateProgress(animeId: Long, lastSecondSeen: Long, totalSeconds: Long) {
+        val index = entries.indexOfFirst { it.animeId == animeId }
+        if (index >= 0) {
+            entries[index] = entries[index].copy(
+                lastSecondSeen = lastSecondSeen,
+                totalSeconds = totalSeconds,
+                lastUpdatedAt = System.currentTimeMillis(),
+            )
+            saveToFile()
+        }
+    }
+
+    /**
+     * Move an entry to a different category.
+     */
+    fun moveToCategory(animeId: Long, categoryId: Long) {
+        val index = entries.indexOfFirst { it.animeId == animeId }
+        if (index >= 0) {
+            entries[index] = entries[index].copy(
+                categoryId = categoryId,
+                lastUpdatedAt = System.currentTimeMillis(),
+            )
+            saveToFile()
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Category CRUD
+    // -----------------------------------------------------------------------
+
+    fun getCategories(): List<CategoryEntry> = categories.toList()
+
+    fun getCategory(id: Long): CategoryEntry? = categories.find { it.id == id }
+
+    fun addCategory(name: String): CategoryEntry {
+        val newId = (categories.maxOfOrNull { it.id } ?: 0L) + 1L
+        val entry = CategoryEntry(id = newId, name = name, order = categories.size.toLong())
+        categories.add(entry)
+        saveCategoriesToFile()
+        return entry
+    }
+
+    fun renameCategory(id: Long, newName: String): Boolean {
+        val index = categories.indexOfFirst { it.id == id }
+        if (index < 0 || categories[index].isDefault) return false
+        categories[index] = categories[index].copy(name = newName)
+        saveCategoriesToFile()
+        return true
+    }
+
+    /**
+     * Remove a category. Entries in that category move to Default.
+     */
+    fun removeCategory(id: Long): Boolean {
+        val cat = categories.find { it.id == id } ?: return false
+        if (cat.isDefault) return false
+        categories.removeAll { it.id == id }
+        // Move orphaned entries to Default
+        entries = entries.map { entry ->
+            if (entry.categoryId == id) entry.copy(categoryId = CATEGORY_DEFAULT_ID) else entry
+        }.toMutableList()
+        saveCategoriesToFile()
+        saveToFile()
+        return true
+    }
+
+    fun getEntriesByCategory(categoryId: Long): List<LibraryEntry> =
+        entries.filter { it.categoryId == categoryId }
+
+    // -----------------------------------------------------------------------
+    // Persistence
+    // -----------------------------------------------------------------------
+
     private fun loadFromFile(): MutableList<LibraryEntry> {
         if (!libraryFile.exists()) return mutableListOf()
         return try {
@@ -85,6 +212,24 @@ class LibraryRepository(private val dataDir: File) {
         libraryFile.writeText(json.encodeToString(LibraryList(entries)))
     }
 
+    private fun loadCategoriesFromFile(): MutableList<CategoryEntry> {
+        if (!categoriesFile.exists()) return mutableListOf()
+        return try {
+            val list = json.decodeFromString<CategoryList>(categoriesFile.readText())
+            list.categories.toMutableList()
+        } catch (_: Exception) {
+            mutableListOf()
+        }
+    }
+
+    private fun saveCategoriesToFile() {
+        categoriesFile.parentFile?.mkdirs()
+        categoriesFile.writeText(json.encodeToString(CategoryList(categories)))
+    }
+
     @Serializable
     private data class LibraryList(val entries: List<LibraryEntry>)
+
+    @Serializable
+    private data class CategoryList(val categories: List<CategoryEntry>)
 }

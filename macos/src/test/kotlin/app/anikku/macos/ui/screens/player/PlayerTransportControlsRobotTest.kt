@@ -406,7 +406,7 @@ class PlayerTransportControlsRobotTest {
                 )
             }
         }
-        composeRule.onNodeWithText("Loading...").assertIsDisplayed()
+        composeRule.onNodeWithText("Loading").assertIsDisplayed()
     }
 
     @Test
@@ -428,7 +428,7 @@ class PlayerTransportControlsRobotTest {
                 )
             }
         }
-        composeRule.onNodeWithText("Buffering...").assertIsDisplayed()
+        composeRule.onNodeWithText("Buffering").assertIsDisplayed()
     }
 
     @Test
@@ -450,7 +450,7 @@ class PlayerTransportControlsRobotTest {
                 )
             }
         }
-        composeRule.onNodeWithText("Playback error").assertIsDisplayed()
+        composeRule.onNodeWithText("Error").assertIsDisplayed()
     }
 
     @Test
@@ -472,7 +472,7 @@ class PlayerTransportControlsRobotTest {
                 )
             }
         }
-        composeRule.onNodeWithText("Episode ended").assertIsDisplayed()
+        composeRule.onNodeWithText("Ended").assertIsDisplayed()
     }
 
     @Test
@@ -516,10 +516,10 @@ class PlayerTransportControlsRobotTest {
                 )
             }
         }
-        composeRule.onNodeWithText("Loading...").assertDoesNotExist()
-        composeRule.onNodeWithText("Buffering...").assertDoesNotExist()
-        composeRule.onNodeWithText("Playback error").assertDoesNotExist()
-        composeRule.onNodeWithText("Episode ended").assertDoesNotExist()
+        composeRule.onNodeWithText("Loading").assertDoesNotExist()
+        composeRule.onNodeWithText("Buffering").assertDoesNotExist()
+        composeRule.onNodeWithText("Error").assertDoesNotExist()
+        composeRule.onNodeWithText("Ended").assertDoesNotExist()
         composeRule.onNodeWithText("Paused").assertDoesNotExist()
     }
 
@@ -542,7 +542,7 @@ class PlayerTransportControlsRobotTest {
                 )
             }
         }
-        composeRule.onNodeWithText("Loading...").assertDoesNotExist()
+        composeRule.onNodeWithText("Loading").assertDoesNotExist()
         composeRule.onNodeWithText("Paused").assertDoesNotExist()
     }
 

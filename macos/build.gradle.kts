@@ -67,14 +67,23 @@ dependencies {
     implementation(libs.disklrucache)
     implementation(libs.kotlinx.immutables)
 
-    // NanoHTTPd — embedded HTTP server for local video streaming (Phase 6.6)
+    // Source API (JVM target) and core/common — replaces macOS stubs
+    implementation(files("libs/source-api-jvm.jar"))
+    implementation(files("libs/common-jvm.jar"))
+
+    // Transitive deps from source-api/core/common
+    implementation("com.github.mihonapp:injekt:91edab2317")
+    implementation(kotlin("reflect"))
+    implementation("com.github.gpanther:java-nat-sort:natural-comparator-1.1")
+
+    // NanoHTTPd — embedded HTTP server for local video streaming
     implementation(libs.nanohttpd)
 
     // JNA - Java Native Access for macOS native API calls
     implementation(libs.jna.core)
     implementation(libs.jna.platform)
 
-    // JSON processing (TorrentServerBridge, general parsing)
+    // JSON processing
     implementation(libs.org.json)
 
     // Testing
@@ -91,35 +100,156 @@ tasks.test {
     }
 }
 
+// ---- Extension Build Tasks ------------------------------------------------
+
 /**
  * Build a standalone test extension JAR that can be loaded by MacOSExtensionLoader.
  *
  * Usage:
  *   ./macos/gradlew -p macos buildTestExtensionJar
- *   cp macos/build/libs/test-extension-1.0.0.jar ~/Library/Application\ Support/Anikku/extensions/
+ *   cp macos/build/libs/test-extension-1.0.0.jar ~/Library/Application Support/Anikku/extensions/
  */
 tasks.register<Jar>("buildTestExtensionJar") {
     dependsOn("compileKotlin")
     archiveBaseName.set("test-extension")
     archiveVersion.set("1.0.0")
-
-    // Include the compiled test source class
     from("${layout.buildDirectory.get()}/classes/kotlin/main") {
         include("app/anikku/macos/testextension/**")
     }
-
-    // Include extension metadata (src/main/resources/test-extension/extension.json -> META-INF/extension.json)
     from("src/main/resources/test-extension") {
         into("META-INF")
     }
-
     manifest {
-        attributes(
-            "Implementation-Title" to "TestExtension",
-            "Implementation-Version" to "1.0.0",
-        )
+        attributes("Implementation-Title" to "TestExtension", "Implementation-Version" to "1.0.0")
     }
 }
+
+/**
+ * Rebuild the source-api and core/common JVM JARs.
+ * Run after any changes to source-api or core/common:
+ *   ./macos/gradlew -p macos rebuildSourceApiJars
+ */
+tasks.register<Exec>("rebuildSourceApiJars") {
+    workingDir = rootProject.projectDir.parentFile
+    commandLine(
+        "bash", "-c",
+        "./gradlew :source-api:jvmJar :core:common:jvmJar --no-daemon -q && " +
+        "cp \$(ls source-api/build/libs/source-api-jvm-*.jar | grep -v -- -sources | head -1) macos/libs/source-api-jvm.jar && " +
+        "cp \$(ls core/common/build/libs/common-jvm-*.jar | grep -v -- -sources | head -1) macos/libs/common-jvm.jar",
+    )
+}
+
+tasks.named("compileKotlin") {
+    dependsOn("rebuildSourceApiJars")
+}
+
+/**
+ * Download a keiyoushi extension APK for reference/testing.
+ *
+ * Usage:
+ *   ./macos/gradlew -p macos downloadKeiyoushiExtension
+ *   ./macos/gradlew -p macos downloadKeiyoushiExtension -PextName=gogoanime
+ */
+tasks.register<Exec>("downloadKeiyoushiExtension") {
+    description = "Download a keiyoushi extension APK for reference"
+    group = "verification"
+
+    val extNameFilter = project.findProperty("extName") as? String ?: ""
+    val extensionsDir = "${System.getProperty("user.home")}/Library/Application Support/Anikku/extensions"
+    val D = "$"
+
+    commandLine(
+        "bash", "-c",
+        """
+set -euo pipefail
+INDEX_URL="https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"
+OUT_DIR="$extensionsDir"
+mkdir -p "${D}OUT_DIR"
+PYTHON_SCRIPT='import sys, json
+data = json.load(sys.stdin)
+ext_name = "$extNameFilter".lower().strip()
+for ext in data:
+    name = ext.get("name", "").lower()
+    lang = ext.get("lang", "")
+    if ext_name:
+        if ext_name in name:
+            print(json.dumps(ext)); sys.exit(0)
+    else:
+        if lang == "en":
+            print(json.dumps(ext)); sys.exit(0)
+if data: print(json.dumps(data[0]))
+else: print("ERROR: Empty index"); sys.exit(1)'
+EXT_JSON=$(curl -sL "${D}INDEX_URL" | python3 -c "${D}PYTHON_SCRIPT")
+APK_NAME=$(echo "${D}EXT_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['apk'])")
+curl -sL "https://raw.githubusercontent.com/keiyoushi/extensions/repo/apk/${D}APK_NAME" -o "${D}OUT_DIR/${D}APK_NAME"
+echo "Downloaded $(wc -c < "${D}OUT_DIR/${D}APK_NAME") bytes — APK for reference (not JVM-compatible)"
+""".trimIndent(),
+    )
+}
+
+/**
+ * Download a keiyoushi extension source from GitHub and build it as a loadable JVM JAR.
+ *
+ * Downloads the extension source from keiyoushi/extensions-source (GitHub),
+ * creates a standalone JVM Gradle project, compiles against source-api JARs,
+ * generates META-INF/extension.json, and deploys to the app's extensions dir.
+ *
+ * Usage:
+ *   ./macos/gradlew -p macos buildKeiyoushiExtension -Pext=allanime
+ *
+ * Parameters:
+ *   -Pext=<name>     Extension directory name (required, e.g. allanime)
+ *   -PextLang=<code> Language code (default: en)
+ *   -PextDir=<path>  Use local extension source directory instead of GitHub
+ *
+ * Examples:
+ *   # Download and build from GitHub
+ *   ./macos/gradlew -p macos buildKeiyoushiExtension -Pext=allanime
+ *
+ *   # Build from a local copy of the source
+ *   ./macos/gradlew -p macos buildKeiyoushiExtension -Pext=allanime -PextDir=/tmp/keiyoushi-source/src/en/allanime
+ */
+val buildKeiyoushiExtName: String? by project
+val buildKeiyoushiExtLang: String by project
+
+/**
+ * Build a keiyoushi extension from source as a loadable JVM JAR.
+ *
+ * Downloads the extension source from keiyoushi/extensions-source (GitHub),
+ * creates a standalone JVM Gradle project, compiles against source-api JARs,
+ * generates META-INF/extension.json, and deploys to the app's extensions dir.
+ *
+ * Usage:
+ *   ./macos/gradlew -p macos buildKeiyoushiExtension -PbuildKeiyoushiExtName=allanime
+ *
+ * Parameters:
+ *   -PbuildKeiyoushiExtName=<name>  Extension directory name (required)
+ *   -PbuildKeiyoushiExtLang=<code>  Language code (default: en)
+ */
+tasks.register<Exec>("buildKeiyoushiExtension") {
+    description = "Download keiyoushi extension source and build as loadable JVM JAR"
+    group = "extension"
+
+    doFirst {
+        val extName = buildKeiyoushiExtName
+            ?: throw GradleException("Usage: -PbuildKeiyoushiExtName=<name> (e.g., -PbuildKeiyoushiExtName=allanime)")
+        val extLang = buildKeiyoushiExtLang.ifBlank { "en" }
+        val scriptPath = "${project.projectDir}/scripts/convert-keiyoushi-extension.sh"
+
+        logger.lifecycle("Building extension: $extName (lang: $extLang)")
+        logger.lifecycle("Script: $scriptPath")
+
+        exec {
+            commandLine(
+                "bash", scriptPath,
+                "--pkg", extName,
+                "--lang", extLang,
+            )
+        }
+    }
+}
+
+// ---- Desktop Application Configuration ------------------------------------
 
 compose.desktop {
     application {
@@ -146,22 +276,6 @@ compose.desktop {
                 bundleID = "app.anikku.macos"
                 iconFile.set(project.file("src/main/resources/icons/app.icns"))
                 minimumSystemVersion = "12.0"
-
-                // Code signing (requires Apple Developer account)
-                // To enable, uncomment and configure your signing identity:
-                // signing {
-                //     sign.set(true)
-                //     identity.set("Developer ID Application: Your Name (TEAMID)")
-                // }
-
-                // Notarization (requires Apple Developer account)
-                // To enable, uncomment and configure your Apple ID credentials:
-                // notarization {
-                //     appleID.set("your@email.com")
-                //     appleIDPassword.set("@keychain:AC_PASSWORD")
-                // }
-
-                // Entitlements for sandbox and hardened runtime
                 entitlementsFile.set(project.file("src/main/resources/entitlements.plist"))
             }
         }

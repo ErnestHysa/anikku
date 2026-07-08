@@ -25,15 +25,16 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.outlined.DoneAll
-import androidx.compose.material.icons.outlined.Share
-import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.DoneAll
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.OpenInBrowser
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
+import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material.icons.outlined.BookmarkBorder
+import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -73,8 +74,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import app.anikku.macos.platform.MacOSShareUtil
+import app.anikku.macos.platform.data.DownloadRepository
 import app.anikku.macos.platform.data.LibraryRepository
+import app.anikku.macos.platform.data.LocalDownloadManager
 import app.anikku.macos.platform.data.LocalLibraryRepository
+import app.anikku.macos.platform.download.MacOSDownloadManager
 import app.anikku.macos.platform.extension.MacOSExtensionManager
 import app.anikku.macos.platform.preference.LocalBookmarkStore
 import app.anikku.macos.ui.AnikkuScreen
@@ -119,6 +123,7 @@ data class AnimeDetailScreen(
     val animeUrl: String? = null,
     val animeTitle: String? = null,
     val extensionManager: MacOSExtensionManager? = null,
+    val downloadManager: MacOSDownloadManager? = null,
 ) : AnikkuScreen() {
 
     override val key: ScreenKey = uniqueScreenKey
@@ -145,6 +150,18 @@ data class AnimeDetailScreen(
                     if (ep.id in bookmarkedIds) ep.copy(bookmark = true) else ep
                 }
             )
+        }
+
+        // Track download states per episode (keyed by episodeNumber)
+        var downloadStateMap by remember { mutableStateOf(mapOf<Double, Boolean>()) }
+        LaunchedEffect(downloadManager) {
+            if (downloadManager != null) {
+                downloadManager.downloads.collect { downloads ->
+                    downloadStateMap = downloads.filter { it.animeId == animeId }.associate {
+                        it.episodeNumber to (it.isActive || it.status == DownloadRepository.DownloadStatus.COMPLETED)
+                    }
+                }
+            }
         }
 
         // Fetch from source API if available
@@ -325,8 +342,30 @@ data class AnimeDetailScreen(
                                     sourceId = sourceId,
                                     episodeUrl = episode.url,
                                     extensionManager = extensionManager,
+                                    downloadManager = downloadManager,
                                 )
                             )
+                        },
+                        onDownloadEpisode = { episode ->
+                            val dm = downloadManager
+                            if (dm != null && sourceId != null) {
+                                val isAlready = downloadStateMap[episode.episodeNumber] == true
+                                if (isAlready) {
+                                    toastHost.show("Already in downloads", ToastDuration.SHORT)
+                                } else {
+                                    dm.enqueue(
+                                        animeId = anime?.id ?: animeId,
+                                        sourceId = sourceId,
+                                        animeTitle = anime?.title ?: "Unknown",
+                                        episodeName = episode.name,
+                                        episodeNumber = episode.episodeNumber,
+                                        episodeUrl = episode.url,
+                                    )
+                                    toastHost.show("Queued: ${episode.name}", ToastDuration.SHORT)
+                                }
+                            } else {
+                                toastHost.show("Download not available in demo mode", ToastDuration.SHORT)
+                            }
                         },
                     )
                 }
@@ -350,6 +389,7 @@ private fun AnimeDetailContent(
     onBack: () -> Unit,
     onMarkAllSeen: () -> Unit = {},
     onPlayEpisode: (EpisodeModel) -> Unit,
+    onDownloadEpisode: (EpisodeModel) -> Unit = {},
 ) {
     Scaffold(
         topBar = {
@@ -487,7 +527,12 @@ private fun AnimeDetailContent(
             }
 
             items(items = episodes, key = { it.id }) { episode ->
-                EpisodeItem(episode = episode, onClick = { onPlayEpisode(episode) }, onToggleBookmark = { onToggleBookmark(episode.id) })
+                EpisodeItem(
+                    episode = episode,
+                    onClick = { onPlayEpisode(episode) },
+                    onToggleBookmark = { onToggleBookmark(episode.id) },
+                    onDownload = { onDownloadEpisode(episode) },
+                )
             }
 
             if (episodes.isEmpty()) {
@@ -609,6 +654,7 @@ private fun EpisodeItem(
     episode: EpisodeModel,
     onClick: () -> Unit,
     onToggleBookmark: () -> Unit = {},
+    onDownload: () -> Unit = {},
 ) {
     Card(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 3.dp),
@@ -631,6 +677,16 @@ private fun EpisodeItem(
             Column(modifier = Modifier.weight(1f)) {
                 Text("Episode ${String.format("%.0f", episode.episodeNumber)}", style = MaterialTheme.typography.bodyMedium, fontWeight = if (!episode.seen) FontWeight.Medium else FontWeight.Normal, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(episode.name, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+
+            // Download button
+            IconButton(onClick = onDownload, modifier = Modifier.size(32.dp)) {
+                Icon(
+                    imageVector = Icons.Outlined.CloudDownload,
+                    contentDescription = "Download episode",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.size(18.dp),
+                )
             }
 
             IconButton(onClick = onToggleBookmark, modifier = Modifier.size(32.dp)) {

@@ -57,6 +57,13 @@ class PlayerViewModel {
     private val _handle = MutableStateFlow<Pointer?>(null)
     val handle: StateFlow<Pointer?> = _handle.asStateFlow()
 
+    /** Software renderer for pulling decoded frames. */
+    private var softwareRenderer: MPVSoftwareRenderer? = null
+
+    /** Expose renderer reactively for the video surface composable. */
+    private val _renderer = MutableStateFlow<MPVSoftwareRenderer?>(null)
+    val renderer: StateFlow<MPVSoftwareRenderer?> = _renderer.asStateFlow()
+
     /** Event loop for processing mpv events. */
     private var eventLoop: MPVEventLoop? = null
 
@@ -158,6 +165,16 @@ class PlayerViewModel {
                 return
             }
 
+            // Create software render context
+            val renderer = MPVSoftwareRenderer(handle)
+            if (renderer.create()) {
+                softwareRenderer = renderer
+                _renderer.value = renderer
+                logger.info { "Software renderer created and exposed" }
+            } else {
+                logger.warn { "Software renderer creation failed — video will not render" }
+            }
+
             // Start event loop
             val loop = MPVEventLoop(handle)
             eventLoop = loop
@@ -193,6 +210,12 @@ class PlayerViewModel {
                         }
                         MPVLib.MPV_EVENT_VIDEO_RECONFIG -> {
                             logger.debug { "Video reconfig event" }
+                            // Query the video dimensions from mpv
+                            val w = MPVLib.getPropertyInt(handle, "dwidth", 0)
+                            val h = MPVLib.getPropertyInt(handle, "dheight", 0)
+                            if (w > 0 && h > 0) {
+                                softwareRenderer?.updateVideoSize(w, h)
+                            }
                         }
                         MPVLib.MPV_EVENT_PLAYBACK_RESTART -> {
                             _playbackState.value = PlaybackState.PLAYING
@@ -231,8 +254,9 @@ class PlayerViewModel {
     private fun configureMPV(handle: Pointer) {
         try {
             // Video output configuration
+            // vo=libmpv enables the render API (required for software rendering)
             MPVLib.setOptionString(handle, "vo", "libmpv")
-            MPVLib.setOptionString(handle, "gpu-context", "none")
+            // No gpu-context needed — we use the software render API
             MPVLib.setOptionString(handle, "hwdec", "videotoolbox")
             MPVLib.setOptionString(handle, "cache", "yes")
             MPVLib.setOptionString(handle, "cache-secs", "30")
@@ -267,6 +291,9 @@ class PlayerViewModel {
         positionUpdateJob?.cancel()
         positionUpdateJob = null
         eventLoop?.stop()
+        softwareRenderer?.dispose()
+        _renderer.value = null
+        softwareRenderer = null
         mpvHandle?.let { handle ->
             try {
                 MPVLib.command(handle, "quit")

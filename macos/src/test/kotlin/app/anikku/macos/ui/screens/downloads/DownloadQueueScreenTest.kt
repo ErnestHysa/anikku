@@ -83,127 +83,35 @@ class DownloadQueueScreenTest {
     }
 
     @Test
-    fun `renders download count summary`() {
+    fun `renders download count summary when empty`() {
         composeTestRule.setContent {
             RenderDownloadQueue()
         }
 
-        // Mock data: 2 active (downloading) · 2 completed
-        composeTestRule.onNodeWithText("2 active · 2 completed").assertIsDisplayed()
+        // No download manager provided — download list is empty
+        composeTestRule.onNodeWithText("0 completed").assertIsDisplayed()
     }
 
     // -----------------------------------------------------------------------
-    // Download item rendering
+    // Empty state rendering
     // -----------------------------------------------------------------------
 
     @Test
-    fun `renders downloading anime titles`() {
+    fun `renders empty state message when no downloads`() {
         composeTestRule.setContent {
             RenderDownloadQueue()
         }
 
-        composeTestRule.onNodeWithText("Attack on Titan").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Jujutsu Kaisen").assertIsDisplayed()
+        composeTestRule.onNodeWithText("No downloads").assertIsDisplayed()
     }
 
     @Test
-    fun `renders completed anime titles`() {
+    fun `renders download manager message when manager is null`() {
         composeTestRule.setContent {
             RenderDownloadQueue()
         }
 
-        composeTestRule.onNodeWithText("One Piece").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Demon Slayer").assertIsDisplayed()
-    }
-
-    @Test
-    fun `renders paused anime title`() {
-        composeTestRule.setContent {
-            RenderDownloadQueue()
-        }
-
-        composeTestRule.onNodeWithText("Spy x Family").assertIsDisplayed()
-    }
-
-    @Test
-    fun `renders episode names`() {
-        composeTestRule.setContent {
-            RenderDownloadQueue()
-        }
-
-        composeTestRule.onNodeWithText("Episode 3 - A Dim Light Amid Despair").assertIsDisplayed()
-        composeTestRule.onNodeWithText("Episode 1092 - A Night to Remember").assertIsDisplayed()
-    }
-
-    // -----------------------------------------------------------------------
-    // Button rendering — pause/resume/cancel content descriptions
-    // -----------------------------------------------------------------------
-
-    @Test
-    fun `renders Pause button for downloading items`() {
-        composeTestRule.setContent {
-            RenderDownloadQueue()
-        }
-
-        // Items 1 and 2 are Downloading — each has a Pause icon button
-        composeTestRule.onAllNodesWithContentDescription("Pause").assertCountEquals(2)
-    }
-
-    @Test
-    fun `renders Resume button for paused items`() {
-        composeTestRule.setContent {
-            RenderDownloadQueue()
-        }
-
-        // Item 4 (Spy x Family) is Paused — has a Resume icon button
-        composeTestRule.onNodeWithContentDescription("Resume").assertIsDisplayed()
-    }
-
-    @Test
-    fun `renders Cancel button for active downloads`() {
-        composeTestRule.setContent {
-            RenderDownloadQueue()
-        }
-
-        // Items 1, 2 (Downloading) and 4 (Paused) have Cancel buttons
-        // Item 3 and 5 (Completed) do NOT have Cancel buttons
-        composeTestRule.onAllNodesWithContentDescription("Cancel").assertCountEquals(3)
-    }
-
-    @Test
-    fun `renders Completed icon for completed items`() {
-        composeTestRule.setContent {
-            RenderDownloadQueue()
-        }
-
-        // Items 3 (One Piece) and 5 (Demon Slayer) are Completed
-        composeTestRule.onAllNodesWithContentDescription("Completed").assertCountEquals(2)
-    }
-
-    // -----------------------------------------------------------------------
-    // ToastHost integration — full wired environment renders without error
-    // -----------------------------------------------------------------------
-
-    @Test
-    fun `renders with ToastHost provider without crash`() {
-        composeTestRule.setContent {
-            FullDownloadContent()
-        }
-
-        composeTestRule.onNodeWithText("Downloads").assertIsDisplayed()
-        composeTestRule.onNodeWithText("2 active · 2 completed").assertIsDisplayed()
-    }
-
-    @Test
-    fun `renders download items with ToastHost provider`() {
-        composeTestRule.setContent {
-            FullDownloadContent()
-        }
-
-        composeTestRule.onNodeWithText("Attack on Titan").assertIsDisplayed()
-        composeTestRule.onAllNodesWithContentDescription("Pause").assertCountEquals(2)
-        composeTestRule.onNodeWithContentDescription("Resume").assertIsDisplayed()
-        composeTestRule.onAllNodesWithContentDescription("Cancel").assertCountEquals(3)
+        composeTestRule.onNodeWithText("Download manager not initialized").assertIsDisplayed()
     }
 
     @Test

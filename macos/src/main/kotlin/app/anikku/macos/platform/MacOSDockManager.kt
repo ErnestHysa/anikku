@@ -72,13 +72,17 @@ object MacOSDockManager {
             val nsApp = ObjC.objc_getClass("NSApplication")
             val sharedAppSel = ObjC.sel_registerName("sharedApplication")
             val sharedApp = ObjC.objc_msgSend(nsApp, sharedAppSel)
+                ?: return.also { logger.debug { "sharedApplication returned null — skipping badge" } }
             val dockTileSel = ObjC.sel_registerName("dockTile")
             val dockTile = ObjC.objc_msgSend(sharedApp, dockTileSel)
+                ?: return.also { logger.debug { "dockTile returned null — skipping badge" } }
             val setBadgeSel = ObjC.sel_registerName("setBadgeLabel:")
 
             if (count > 0) {
                 val label = createNSString(count.toString())
-                ObjC.objc_msgSend_void(dockTile, setBadgeSel, label)
+                if (label != null) {
+                    ObjC.objc_msgSend_void(dockTile, setBadgeSel, label)
+                }
             } else {
                 ObjC.objc_msgSend_void(dockTile, setBadgeSel, Pointer.NULL)
             }
