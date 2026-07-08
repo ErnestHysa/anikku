@@ -1,0 +1,370 @@
+package app.anikku.macos.ui.screens.browse
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.Extension
+import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Warning
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import app.anikku.macos.platform.extension.MacOSExtensionManager
+import app.anikku.macos.ui.AnikkuScreen
+import cafe.adriel.voyager.core.screen.ScreenKey
+import cafe.adriel.voyager.core.screen.uniqueScreenKey
+import cafe.adriel.voyager.navigator.LocalNavigator
+import cafe.adriel.voyager.navigator.currentOrThrow
+import eu.kanade.tachiyomi.extension.model.Extension
+import eu.kanade.tachiyomi.extension.model.InstallStep
+import kotlinx.coroutines.launch
+
+/**
+ * Extension management screen (Phase 5.6).
+ *
+ * Allows users to:
+ * - View and add extension repositories
+ * - Browse available extensions from repos
+ * - Install, update, and remove extensions
+ * - View installed extensions with their sources
+ */
+data class ExtensionsScreen(
+    private val extensionManager: MacOSExtensionManager? = null,
+) : AnikkuScreen() {
+
+    override val key: ScreenKey = uniqueScreenKey
+
+    @Composable
+    override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
+        val scope = rememberCoroutineScope()
+
+        val installedExtensions by (extensionManager?.installedExtensionsFlow?.collectAsState() ?: remember { mutableStateOf(emptyList()) })
+        val availableExtensions by (extensionManager?.availableExtensionsFlow?.collectAsState() ?: remember { mutableStateOf(emptyList()) })
+
+        var selectedTab by remember { mutableStateOf(0) } // 0=Installed, 1=Available, 2=Repos
+        var repoUrl by remember { mutableStateOf("https://raw.githubusercontent.com/keiyoushi/extensions/repo/") }
+        var isFetching by remember { mutableStateOf(false) }
+        var installingPkg by remember { mutableStateOf<String?>(null) }
+        var installProgress by remember { mutableStateOf(0f) }
+
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            item {
+                Text(
+                    text = "Extensions",
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = "Install source extensions to browse and watch anime.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(12.dp))
+            }
+
+            // Tab switcher
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("Installed", "Available", "Repos").forEachIndexed { i, label ->
+                        Button(
+                            onClick = { selectedTab = i },
+                            shape = RoundedCornerShape(8.dp),
+                            colors = if (selectedTab == i)
+                                androidx.compose.material3.ButtonDefaults.buttonColors()
+                            else
+                                androidx.compose.material3.ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                ),
+                        ) {
+                            Text(label)
+                        }
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+
+            when (selectedTab) {
+                0 -> {
+                    // Installed extensions
+                    if (installedExtensions.isEmpty()) {
+                        item {
+                            Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                                Text("No extensions installed", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    } else {
+                        items(installedExtensions, key = { it.pkgName }) { ext ->
+                            InstalledExtensionCard(
+                                extension = ext,
+                                onRemove = { extensionManager?.removeExtension(ext) },
+                            )
+                        }
+                    }
+                }
+
+                1 -> {
+                    // Available extensions from repos
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            OutlinedTextField(
+                                value = repoUrl,
+                                onValueChange = { repoUrl = it },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                                placeholder = { Text("Extension repo URL") },
+                                shape = RoundedCornerShape(8.dp),
+                            )
+                            IconButton(
+                                onClick = {
+                                    scope.launch {
+                                        isFetching = true
+                                        extensionManager?.findAvailableExtensions(repoUrl, force = true)
+                                        isFetching = false
+                                    }
+                                },
+                                enabled = !isFetching,
+                            ) {
+                                Icon(
+                                    if (isFetching) Icons.Outlined.Refresh else Icons.Outlined.Download,
+                                    contentDescription = "Fetch",
+                                )
+                            }
+                        }
+                    }
+
+                    if (isFetching) {
+                        item {
+                            Box(Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator()
+                            }
+                        }
+                    }
+
+                    if (availableExtensions.isEmpty() && !isFetching) {
+                        item {
+                            Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
+                                Text(
+                                    "Tap the download button to fetch available extensions",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    } else {
+                        items(availableExtensions, key = { it.pkgName }) { ext ->
+                            AvailableExtensionCard(
+                                extension = ext,
+                                isInstalled = installedExtensions.any { it.pkgName == ext.pkgName },
+                                isInstalling = installingPkg == ext.pkgName,
+                                installProgress = installProgress,
+                                onInstall = {
+                                    scope.launch {
+                                        installingPkg = ext.pkgName
+                                        try {
+                                            extensionManager?.installExtension(ext) { step ->
+                                                if (step is InstallStep.Downloading) {
+                                                    installProgress = step.progress
+                                                }
+                                            }
+                                        } finally {
+                                            installingPkg = null
+                                            installProgress = 0f
+                                        }
+                                    }
+                                },
+                            )
+                        }
+                    }
+                }
+
+                2 -> {
+                    // Repos management
+                    item {
+                        Text(
+                            "Extension Repositories",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "The default repo is pre-configured. You can add custom repos for community extensions.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(12.dp))
+
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+                        ) {
+                            Column(Modifier.padding(12.dp)) {
+                                Text("Default Repo", fontWeight = FontWeight.Medium)
+                                Text(
+                                    "keiyoushi/extensions",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun InstalledExtensionCard(
+    extension: Extension.Installed,
+    onRemove: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Outlined.Extension,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(32.dp),
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(extension.name, fontWeight = FontWeight.Medium)
+                Text(
+                    "v${extension.versionName} · ${extension.sources.size} sources",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (extension.hasUpdate) {
+                    Text(
+                        "Update available",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary,
+                    )
+                }
+            }
+            IconButton(onClick = onRemove) {
+                Icon(
+                    Icons.Outlined.Delete,
+                    contentDescription = "Remove",
+                    tint = MaterialTheme.colorScheme.error,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AvailableExtensionCard(
+    extension: Extension.Available,
+    isInstalled: Boolean,
+    isInstalling: Boolean,
+    installProgress: Float,
+    onInstall: () -> Unit,
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(extension.name, fontWeight = FontWeight.Medium)
+                    if (extension.isNsfw) {
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "NSFW",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+                Text(
+                    "v${extension.versionName} · ${extension.lang} · ${extension.sources.size} sources",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (isInstalled) {
+                Icon(
+                    Icons.Outlined.CheckCircle,
+                    contentDescription = "Installed",
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            } else if (isInstalling) {
+                CircularProgressIndicator(
+                    progress = { installProgress },
+                    modifier = Modifier.size(24.dp),
+                    strokeWidth = 2.dp,
+                )
+            } else {
+                Button(
+                    onClick = onInstall,
+                    shape = RoundedCornerShape(6.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(8.dp, 4.dp),
+                ) {
+                    Icon(Icons.Outlined.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Install", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+    }
+}

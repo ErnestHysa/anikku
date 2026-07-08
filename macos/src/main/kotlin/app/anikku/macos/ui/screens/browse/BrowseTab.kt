@@ -1,9 +1,11 @@
 package app.anikku.macos.ui.screens.browse
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,15 +19,18 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Explore
+import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,25 +42,37 @@ import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.anikku.macos.platform.extension.MacOSExtensionManager
 import app.anikku.macos.ui.AnikkuScreen
+import cafe.adriel.voyager.navigator.LocalNavigator
+import cafe.adriel.voyager.navigator.currentOrThrow
 import cafe.adriel.voyager.navigator.tab.Tab
 import cafe.adriel.voyager.navigator.tab.TabOptions
+import eu.kanade.tachiyomi.source.Source
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Browse screen tab — replaces the placeholder.
+ * Browse screen tab — shows available anime sources from loaded extensions.
  *
- * Shows available anime sources and extensions.
- * Supports source search and extension management.
+ * Two sections:
+ * 1. Sources — loaded from installed extensions via [MacOSExtensionManager]
+ * 2. Extensions management — install/uninstall extension JARs
  *
- * TODO Phase 5.6: Full source list with language icons,
+ * Phase 5.6: Full source list with language icons,
  * extension management (adapted for desktop JAR loading),
  * global search across sources.
  */
 object BrowseTab : AnikkuScreen(), Tab {
 
-    @Composable
-    override fun Content() {
-        BrowseContent()
+    /** Extension manager reference — set during app initialization. */
+    private val _extensionManager = MutableStateFlow<MacOSExtensionManager?>(null)
+    val extensionManagerFlow: StateFlow<MacOSExtensionManager?> = _extensionManager.asStateFlow()
+
+    /** Set the extension manager reference (called from AnikkuApp). */
+    fun setExtensionManager(manager: MacOSExtensionManager) {
+        _extensionManager.value = manager
     }
 
     override val options: TabOptions
@@ -65,89 +82,123 @@ object BrowseTab : AnikkuScreen(), Tab {
             title = "Browse",
             icon = rememberVectorPainter(Icons.Outlined.Explore),
         )
-}
 
-/**
- * Represents an anime source for the browse screen.
- */
-private data class SourceInfo(
-    val id: Long,
-    val name: String,
-    val lang: String,
-    val isInstalled: Boolean = true,
-)
+    @Composable
+    override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
+        val extensionManager by extensionManagerFlow.collectAsState()
 
-@Composable
-private fun BrowseContent() {
-    var searchQuery by remember { mutableStateOf("") }
+        // Collect sources from installed extensions
+        val installedExtensions by remember(extensionManager) {
+            extensionManager?.installedExtensionsFlow ?: MutableStateFlow(emptyList())
+        }.collectAsState()
 
-    // Mock sources for display — actual sources loaded from SourceManager in Phase 5.6
-    val sources = remember {
-        listOf(
-            SourceInfo(1L, "Gogoanime", "EN"),
-            SourceInfo(2L, "Zoro", "EN"),
-            SourceInfo(3L, "AnimePahe", "EN"),
-            SourceInfo(4L, "9anime", "EN"),
-            SourceInfo(5L, "AniMixPlay", "EN"),
-            SourceInfo(6L, "Crunchyroll", "EN"),
-        )
-    }
-
-    val filteredSources = remember(sources, searchQuery) {
-        if (searchQuery.isBlank()) sources
-        else sources.filter { it.name.contains(searchQuery, ignoreCase = true) }
-    }
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        item {
-            Text(
-                text = "Browse Sources",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(bottom = 8.dp),
-            )
+        val sources = remember(installedExtensions, extensionManager) {
+            installedExtensions.flatMap { ext ->
+                ext.sources.filterIsInstance<Source>()
+            }
         }
 
-        item {
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = { searchQuery = it },
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Search sources...") },
-                leadingIcon = {
-                    Icon(Icons.Outlined.Search, contentDescription = null)
-                },
-                singleLine = true,
-                shape = RoundedCornerShape(12.dp),
-            )
-            Spacer(Modifier.height(12.dp))
+        var searchQuery by remember { mutableStateOf("") }
+
+        val filteredSources = remember(sources, searchQuery) {
+            if (searchQuery.isBlank()) sources
+            else sources.filter { it.name.contains(searchQuery, ignoreCase = true) }
         }
 
-        if (filteredSources.isEmpty()) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             item {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(32.dp),
-                    contentAlignment = Alignment.Center,
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        "No sources found",
-                        style = MaterialTheme.typography.bodyLarge,
+                        text = "Browse Sources",
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            navigator.push(ExtensionsScreen(extensionManager = extensionManager))
+                        },
+                        shape = RoundedCornerShape(8.dp),
+                    ) {
+                        Icon(Icons.Outlined.Extension, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Extensions", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+
+            item {
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("Search sources...") },
+                    leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(12.dp),
+                )
+                Spacer(Modifier.height(12.dp))
+            }
+
+            if (sources.isEmpty()) {
+                item {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(32.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                Icons.Outlined.Extension,
+                                contentDescription = null,
+                                modifier = Modifier.size(48.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                "No sources installed",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                "Install extensions from the Extensions tab to browse anime",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                            )
+                        }
+                    }
+                }
+            } else {
+                item {
+                    Text(
+                        "${sources.size} source${if (sources.size != 1) "s" else ""} · ${installedExtensions.size} extension${if (installedExtensions.size != 1) "s" else ""}",
+                        style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    Spacer(Modifier.height(4.dp))
                 }
-            }
-        } else {
-            items(
-                items = filteredSources,
-                key = { it.id },
-            ) { source ->
-                SourceItem(source = source)
+
+                items(
+                    items = filteredSources,
+                    key = { it.id },
+                ) { source ->
+                    SourceItem(
+                        sourceName = source.name,
+                        sourceLang = source.lang,
+                        onClick = {
+                            navigator.push(SourceBrowseScreen(sourceId = source.id, sourceName = source.name))
+                        },
+                    )
+                }
             }
         }
     }
@@ -155,7 +206,9 @@ private fun BrowseContent() {
 
 @Composable
 private fun SourceItem(
-    source: SourceInfo,
+    sourceName: String,
+    sourceLang: String,
+    onClick: () -> Unit,
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -163,12 +216,10 @@ private fun SourceItem(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         ),
-        onClick = { /* TODO: Navigate to source browse */ },
+        onClick = onClick,
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // Language icon
@@ -180,7 +231,7 @@ private fun SourceItem(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = source.lang,
+                    text = sourceLang.uppercase().take(2),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
                     fontWeight = FontWeight.Bold,
@@ -191,14 +242,14 @@ private fun SourceItem(
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = source.name,
+                    text = sourceName,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
                 Text(
-                    text = "${source.lang} source",
+                    text = "${sourceLang.uppercase()} source",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

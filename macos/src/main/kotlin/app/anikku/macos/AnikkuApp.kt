@@ -14,6 +14,7 @@ import app.anikku.macos.ui.MacOSMenuBarFactory
 import app.anikku.macos.platform.MacOSDockManager
 import app.anikku.macos.ui.GlobalKeyboardShortcuts
 import app.anikku.macos.ui.components.AboutDialog
+import app.anikku.macos.ui.screens.browse.BrowseTab
 import app.anikku.macos.ui.screens.onboarding.OnboardingScreen
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -100,6 +101,9 @@ fun main() = application {
             onOpenSettings = { TabSwitchHandler.switchTo(4) },
             onNewSource = { TabSwitchHandler.switchTo(3) },
         )
+
+        // Phase 5.6: Wire extension manager to BrowseTab
+        BrowseTab.setExtensionManager(app.extensionManager)
 
         // Phase 9.6: Initialize Dock integration
         MacOSDockManager.setBadgeCount(0) // Clear badge on launch
