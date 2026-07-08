@@ -74,9 +74,13 @@ dependencies {
     implementation(libs.jna.core)
     implementation(libs.jna.platform)
 
+    // JSON processing (TorrentServerBridge, general parsing)
+    implementation(libs.org.json)
+
     // Testing
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.compose.ui.test)
+    testImplementation(libs.mockwebserver)
     testRuntimeOnly(libs.junit.vintage.engine)
 }
 

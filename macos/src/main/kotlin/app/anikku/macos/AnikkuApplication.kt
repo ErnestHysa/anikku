@@ -6,13 +6,18 @@ import app.anikku.macos.di.platformModule
 import app.anikku.macos.platform.BackgroundTaskScheduler
 import app.anikku.macos.platform.data.MacOSCustomAnimeRepository
 import app.anikku.macos.platform.database.MacOSDatabaseDriver
+import app.anikku.macos.platform.discord.DiscordRPC
 import app.anikku.macos.platform.extension.MacOSExtensionManager
+import app.anikku.macos.platform.logging.CrashReporter
 import app.anikku.macos.platform.logging.MacOSLogger
 import app.anikku.macos.platform.network.MacOSCookieJar
 import app.anikku.macos.platform.network.MacOSNetworkHelper
+import app.anikku.macos.platform.notification.MacOSNotificationManager
 import app.anikku.macos.platform.preference.MacOSPreferenceStore
+import app.anikku.macos.platform.security.MacOSBiometricAuth
 import app.anikku.macos.platform.storage.MacOSStorageManager
 import app.anikku.macos.platform.storage.MacOSStorageProvider
+import app.anikku.macos.platform.update.AppUpdateChecker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -52,6 +57,12 @@ class AnikkuApplication {
     // Phase 3: Extension system
     val extensionManager: MacOSExtensionManager
 
+    // Phase 7: Advanced Features
+    val discordRPC: DiscordRPC
+    val notificationManager: MacOSNotificationManager
+    val biometricAuth: MacOSBiometricAuth
+    val appUpdateChecker: AppUpdateChecker
+
     init {
         // 1. Ensure storage directories exist
         storageProvider.ensureDirectories()
@@ -79,7 +90,31 @@ class AnikkuApplication {
         // 8. Initialize custom anime repo (Phase 2.2)
         customAnimeRepository = MacOSCustomAnimeRepository(storageProvider.dataDirectory)
 
-        // 9. Start Koin with modular dependency injection
+        // 9. Initialize Phase 7: Advanced Features
+        // 9a. Discord Rich Presence
+        discordRPC = DiscordRPC(applicationScope)
+
+        // 9b. macOS Notifications
+        notificationManager = MacOSNotificationManager()
+        notificationManager.initialize()
+
+        // 9c. Biometric Authentication (Touch ID + PIN fallback)
+        biometricAuth = MacOSBiometricAuth()
+
+        // 9d. App Update Checker (GitHub API)
+        appUpdateChecker = AppUpdateChecker(
+            currentVersion = "1.0.0",
+            repoOwner = "komikku-app",
+            repoName = "anikku",
+        )
+
+        // 9e. Crash Reporting
+        CrashReporter.initialize(
+            storageProvider = storageProvider,
+            version = "1.0.0",
+        )
+
+        // 10. Start Koin with modular dependency injection
         startKoin {
             modules(
                 platformModule(this@AnikkuApplication),
@@ -90,30 +125,48 @@ class AnikkuApplication {
 
         MacOSLogger.getLogger<AnikkuApplication>()
             .info("Anikku macOS application initialized")
+        CrashReporter.logEvent("App initialization complete")
     }
 
     /**
      * Called when the main window gains focus.
      * Equivalent to onStart() in Android lifecycle.
+     * Triggers Discord RPC reconnection and sync operations.
      */
     fun onAppFocused() {
-        // Future: sync triggers, Discord RPC start
+        // Phase 7.3: Discord Rich Presence — connect on app focus
+        if (discordRPC.isDiscordInstalled) {
+            discordRPC.start()
+        }
     }
 
     /**
      * Called when the main window loses focus.
      * Equivalent to onStop() in Android lifecycle.
+     * Pauses Discord RPC and saves sync state.
      */
     fun onAppBlurred() {
-        // Future: sync triggers, Discord RPC stop
+        // Phase 7.3: Discord Rich Presence — disconnect on blur
+        if (discordRPC.isConnected) {
+            discordRPC.clearPresence()
+        }
     }
 
     /**
      * Called when the application is shutting down.
+     * Cleans up all Phase 7 services.
      */
     fun onShutdown() {
         backgroundScheduler.cancelAll()
         extensionManager.close()
+
+        // Phase 7.3: Discord RPC
+        discordRPC.stop()
+
+        // Phase 7.6: Notifications
+        notificationManager.shutdown()
+
+        CrashReporter.logEvent("App shutdown")
     }
 
 }

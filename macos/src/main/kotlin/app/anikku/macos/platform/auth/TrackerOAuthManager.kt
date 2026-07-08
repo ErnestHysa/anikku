@@ -1,0 +1,276 @@
+package app.anikku.macos.platform.auth
+
+import io.github.oshai.kotlinlogging.KotlinLogging
+import okhttp3.FormBody
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import java.util.concurrent.TimeUnit
+
+private val logger = KotlinLogging.logger {}
+
+/**
+ * Manages OAuth token exchange and refresh for tracker services.
+ *
+ * ## Supported Trackers
+ *
+ * - **MyAnimeList** — OAuth 2.0 authorization code flow
+ * - **AniList** — OAuth 2.0 authorization code flow
+ * - **Kitsu** — OAuth 2.0 authorization code flow
+ * - **MangaUpdates** — API key based
+ * - **Shikimori** — OAuth 2.0 authorization code flow
+ *
+ * ## Usage
+ *
+ * ```kotlin
+ * val manager = TrackerOAuthManager(httpClient)
+ * val token = manager.exchangeAuthorizationCode(
+ *     tracker = "myanimelist",
+ *     code = "abc123",
+ *     clientId = "...",
+ *     clientSecret = "...",
+ *     redirectUri = "http://127.0.0.1:8080/callback",
+ * )
+ * ```
+ */
+class TrackerOAuthManager(
+    private val client: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .build(),
+    private val json: Json = Json { ignoreUnknownKeys = true },
+    /** For testing: override token URLs. Key = tracker name, Value = token URL. */
+    private val tokenUrlOverrides: Map<String, String> = emptyMap(),
+) {
+
+    private val oauthConfigs = mapOf(
+        "myanimelist" to TrackerOAuthConfig(
+            authorizeUrl = "https://myanimelist.net/v1/oauth2/authorize",
+            tokenUrl = "https://myanimelist.net/v1/oauth2/token",
+            scope = "write:animelist",
+        ),
+        "anilist" to TrackerOAuthConfig(
+            authorizeUrl = "https://anilist.co/api/v2/oauth/authorize",
+            tokenUrl = "https://anilist.co/api/v2/oauth/token",
+        ),
+        "kitsu" to TrackerOAuthConfig(
+            authorizeUrl = "https://kitsu.io/api/oauth/authorize",
+            tokenUrl = "https://kitsu.io/api/oauth/token",
+        ),
+        "shikimori" to TrackerOAuthConfig(
+            authorizeUrl = "https://shikimori.one/oauth/authorize",
+            tokenUrl = "https://shikimori.one/oauth/token",
+            scope = "user_rates",
+        ),
+    )
+
+    /**
+     * Exchange an authorization code for access and refresh tokens.
+     *
+     * @param tracker The tracker name (e.g., "myanimelist", "anilist").
+     * @param code The authorization code from the OAuth callback.
+     * @param clientId OAuth client ID.
+     * @param clientSecret OAuth client secret.
+     * @param redirectUri The redirect URI used in the authorization request.
+     * @param codeVerifier Optional PKCE code verifier.
+     * @return Token response with access/refresh tokens, or null on failure.
+     */
+    fun exchangeAuthorizationCode(
+        tracker: String,
+        code: String,
+        clientId: String,
+        clientSecret: String,
+        redirectUri: String,
+        codeVerifier: String? = null,
+    ): TokenResponse? {
+        val config = oauthConfigs[tracker] ?: run {
+            logger.warn { "Unknown tracker: $tracker" }
+            return null
+        }
+
+        val tokenUrl = tokenUrlOverrides[tracker] ?: config.tokenUrl
+
+        val body = FormBody.Builder()
+            .add("grant_type", "authorization_code")
+            .add("client_id", clientId)
+            .add("client_secret", clientSecret)
+            .add("code", code)
+            .add("redirect_uri", redirectUri)
+            .apply {
+                if (codeVerifier != null) add("code_verifier", codeVerifier)
+            }
+            .build()
+
+        val request = Request.Builder()
+            .url(config.tokenUrl)
+            .post(body)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .build()
+
+        return try {
+            val response = client.newCall(request).execute()
+            val bodyString = response.body?.string() ?: return null
+
+            if (!response.isSuccessful) {
+                logger.warn { "Token exchange failed for $tracker: ${response.code} $bodyString" }
+                return null
+            }
+
+            val jsonObj = json.parseToJsonElement(bodyString).jsonObject
+            TokenResponse(
+                accessToken = jsonObj["access_token"]?.jsonPrimitive?.content ?: return null,
+                refreshToken = jsonObj["refresh_token"]?.jsonPrimitive?.content ?: "",
+                tokenType = jsonObj["token_type"]?.jsonPrimitive?.content ?: "Bearer",
+                expiresIn = jsonObj["expires_in"]?.jsonPrimitive?.content?.toLongOrNull() ?: 3600,
+                scope = jsonObj["scope"]?.jsonPrimitive?.content ?: "",
+                createdAt = System.currentTimeMillis() / 1000,
+            )
+        } catch (e: Exception) {
+            logger.error(e) { "Token exchange failed for $tracker" }
+            null
+        }
+    }
+
+    /**
+     * Refresh an expired access token using the refresh token.
+     *
+     * @param tracker The tracker name.
+     * @param refreshToken The refresh token.
+     * @param clientId OAuth client ID.
+     * @param clientSecret OAuth client secret.
+     * @return New token response, or null on failure.
+     */
+    fun refreshToken(
+        tracker: String,
+        refreshToken: String,
+        clientId: String,
+        clientSecret: String,
+    ): TokenResponse? {
+        val config = oauthConfigs[tracker] ?: return null
+
+        val body = FormBody.Builder()
+            .add("grant_type", "refresh_token")
+            .add("client_id", clientId)
+            .add("client_secret", clientSecret)
+            .add("refresh_token", refreshToken)
+            .build()
+
+        val request = Request.Builder()
+            .url(config.tokenUrl)
+            .post(body)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .build()
+
+        return try {
+            val response = client.newCall(request).execute()
+            val bodyString = response.body?.string() ?: return null
+
+            if (!response.isSuccessful) {
+                logger.warn { "Token refresh failed for $tracker: ${response.code}" }
+                return null
+            }
+
+            val jsonObj = json.parseToJsonElement(bodyString).jsonObject
+            TokenResponse(
+                accessToken = jsonObj["access_token"]?.jsonPrimitive?.content ?: return null,
+                refreshToken = jsonObj["refresh_token"]?.jsonPrimitive?.content ?: refreshToken,
+                tokenType = jsonObj["token_type"]?.jsonPrimitive?.content ?: "Bearer",
+                expiresIn = jsonObj["expires_in"]?.jsonPrimitive?.content?.toLongOrNull() ?: 3600,
+                scope = jsonObj["scope"]?.jsonPrimitive?.content ?: "",
+                createdAt = System.currentTimeMillis() / 1000,
+            )
+        } catch (e: Exception) {
+            logger.error(e) { "Token refresh failed for $tracker" }
+            null
+        }
+    }
+
+    /**
+     * Revoke a token for a tracker.
+     *
+     * @param tracker The tracker name.
+     * @param accessToken The access token to revoke.
+     */
+    fun revokeToken(tracker: String, accessToken: String): Boolean {
+        val config = oauthConfigs[tracker] ?: return false
+
+        return try {
+            val body = FormBody.Builder()
+                .add("token", accessToken)
+                .build()
+
+            val request = Request.Builder()
+                .url(config.tokenUrl.replace("/token", "/revoke"))
+                .post(body)
+                .build()
+
+            val response = client.newCall(request).execute()
+            response.isSuccessful
+        } catch (e: Exception) {
+            logger.warn(e) { "Token revocation failed for $tracker" }
+            false
+        }
+    }
+
+    /**
+     * Check if a tracker supports OAuth-based login.
+     */
+    fun supportsOAuth(tracker: String): Boolean = tracker in oauthConfigs
+
+    /**
+     * Validate an existing access token by making a simple API call.
+     *
+     * @param tracker The tracker name.
+     * @param accessToken The access token to validate.
+     * @return true if the token is valid.
+     */
+    fun validateToken(tracker: String, accessToken: String): Boolean {
+        val testUrl = when (tracker) {
+            "myanimelist" -> "https://api.myanimelist.net/v2/users/@me"
+            "anilist" -> "https://graphql.anilist.co"
+            "kitsu" -> "https://kitsu.io/api/edge/users?filter[self]=true"
+            "shikimori" -> "https://shikimori.one/api/users/whoami"
+            else -> return false
+        }
+
+        return try {
+            val request = Request.Builder()
+                .url(testUrl)
+                .header("Authorization", "Bearer $accessToken")
+                .build()
+            val response = client.newCall(request).execute()
+            response.isSuccessful
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
+     * OAuth configuration for a tracker.
+     */
+    data class TrackerOAuthConfig(
+        val authorizeUrl: String,
+        val tokenUrl: String,
+        val scope: String = "",
+    )
+}
+
+/**
+ * Response from an OAuth token exchange.
+ */
+@Serializable
+data class TokenResponse(
+    val accessToken: String,
+    val refreshToken: String,
+    val tokenType: String = "Bearer",
+    val expiresIn: Long = 3600,
+    val scope: String = "",
+    val createdAt: Long = System.currentTimeMillis() / 1000,
+) {
+    /** Whether the token is expired. */
+    val isExpired: Boolean
+        get() = (System.currentTimeMillis() / 1000) >= (createdAt + expiresIn - 60)
+}
