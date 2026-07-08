@@ -1,0 +1,522 @@
+package app.anikku.macos.ui.screens.player
+
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+
+/**
+ * Player settings panels (Phase 5.8).
+ *
+ * Provides composable bottom-sheet style panels for:
+ * - Playback speed control (0.5x — 2.0x)
+ * - Audio track selection
+ * - Subtitle track selection
+ * - Video equalizer (brightness, contrast, saturation)
+ *
+ * Each panel can be shown independently in a bottom sheet or
+ * dialog from [PlayerScreen].
+ *
+ * Usage:
+ * ```kotlin
+ * var showSpeedPanel by remember { mutableStateOf(false) }
+ * if (showSpeedPanel) {
+ *     PlayerSpeedPanel(
+ *         currentSpeed = 1.0f,
+ *         onSpeedChange = { playerViewModel.setSpeed(it) },
+ *         onDismiss = { showSpeedPanel = false },
+ *     )
+ * }
+ * ```
+ */
+
+/**
+ * Playback speed control panel.
+ * Allows selecting from common speeds (0.5x — 2.0x) or using a slider.
+ */
+@Composable
+fun PlayerSpeedPanel(
+    currentSpeed: Float = 1.0f,
+    onSpeedChange: (Float) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val speeds = listOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
+    var sliderSpeed by remember(currentSpeed) { mutableFloatStateOf(currentSpeed) }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        shape = RoundedCornerShape(16.dp),
+        tonalElevation = 8.dp,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Text(
+                text = "Playback Speed",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+
+            Spacer(Modifier.height(16.dp))
+
+            // Preset speed buttons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceEvenly,
+            ) {
+                speeds.forEach { speed ->
+                    val isSelected = kotlin.math.abs(speed - currentSpeed) < 0.01f
+                    Button(
+                        onClick = {
+                            onSpeedChange(speed)
+                            sliderSpeed = speed
+                        },
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isSelected) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.surfaceVariant
+                            },
+                            contentColor = if (isSelected) {
+                                MaterialTheme.colorScheme.onPrimary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                        ),
+                        modifier = Modifier.width(52.dp),
+                    ) {
+                        Text(
+                            text = "${speed}x",
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            // Fine-grained slider
+            Slider(
+                value = sliderSpeed,
+                onValueChange = { sliderSpeed = it },
+                onValueChangeFinished = { onSpeedChange(sliderSpeed) },
+                valueRange = 0.25f..3.0f,
+                steps = 10,
+                colors = SliderDefaults.colors(
+                    thumbColor = MaterialTheme.colorScheme.primary,
+                    activeTrackColor = MaterialTheme.colorScheme.primary,
+                ),
+            )
+
+            Text(
+                text = "Custom: ${"%.2f".format(sliderSpeed)}x",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(Modifier.height(16.dp))
+
+            // Close button
+            OutlinedButton(
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Done")
+            }
+        }
+    }
+}
+
+/**
+ * Audio track selector panel.
+ * Allows switching between available audio tracks.
+ */
+@Composable
+fun PlayerAudioTrackPanel(
+    tracks: List<String> = emptyList(),
+    currentTrackIndex: Int = 0,
+    onTrackSelected: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        shape = RoundedCornerShape(16.dp),
+        tonalElevation = 8.dp,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Text(
+                text = "Audio Track",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+
+            Spacer(Modifier.height(16.dp))
+
+            if (tracks.isEmpty()) {
+                Text(
+                    text = "No alternate audio tracks available",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                tracks.forEachIndexed { index, track ->
+                    val isSelected = index == currentTrackIndex
+                    OutlinedButton(
+                        onClick = {
+                            onTrackSelected(index)
+                            onDismiss()
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = if (isSelected) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
+                            },
+                        ),
+                    ) {
+                        Text(
+                            text = track,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            OutlinedButton(
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Close")
+            }
+        }
+    }
+}
+
+/**
+ * Subtitle track selector panel.
+ * Allows switching between available subtitle tracks or disabling them.
+ */
+@Composable
+fun PlayerSubtitleTrackPanel(
+    tracks: List<String> = emptyList(),
+    currentTrackIndex: Int = -1, // -1 = disabled
+    subtitleDelay: Double = 0.0,
+    onTrackSelected: (Int) -> Unit,
+    onDelayChange: (Double) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var sliderDelay by remember(subtitleDelay) { mutableFloatStateOf(subtitleDelay.toFloat()) }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        shape = RoundedCornerShape(16.dp),
+        tonalElevation = 8.dp,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Text(
+                text = "Subtitles",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+
+            Spacer(Modifier.height(16.dp))
+
+            // Subtitle off toggle
+            var subsEnabled by remember(currentTrackIndex) { mutableStateOf(currentTrackIndex >= 0) }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Subtitles enabled",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.weight(1f))
+                Switch(
+                    checked = subsEnabled,
+                    onCheckedChange = {
+                        subsEnabled = it
+                        onTrackSelected(if (it) 0 else -1)
+                    },
+                )
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+
+            // Subtitle tracks
+            if (subsEnabled && tracks.isNotEmpty()) {
+                Text(
+                    text = "Track",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                tracks.forEachIndexed { index, track ->
+                    val isSelected = index == currentTrackIndex
+                    OutlinedButton(
+                        onClick = {
+                            onTrackSelected(index)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 2.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = if (isSelected) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurface
+                            },
+                        ),
+                    ) {
+                        Text(
+                            text = track,
+                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+
+                // Subtitle delay
+                Text(
+                    text = "Delay (${"%.1f".format(sliderDelay)}s)",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Slider(
+                    value = sliderDelay,
+                    onValueChange = { sliderDelay = it },
+                    onValueChangeFinished = { onDelayChange(sliderDelay.toDouble()) },
+                    valueRange = -10f..10f,
+                    steps = 40,
+                    colors = SliderDefaults.colors(
+                        thumbColor = MaterialTheme.colorScheme.primary,
+                        activeTrackColor = MaterialTheme.colorScheme.primary,
+                    ),
+                )
+            } else {
+                Text(
+                    text = "No subtitle tracks available",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            OutlinedButton(
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Done")
+            }
+        }
+    }
+}
+
+/**
+ * Video equalizer panel.
+ * Adjusts brightness, contrast, saturation, and gamma.
+ */
+@Composable
+fun PlayerEqualizerPanel(
+    brightness: Float = 0f,
+    contrast: Float = 1f,
+    saturation: Float = 1f,
+    gamma: Float = 1f,
+    onBrightnessChange: (Float) -> Unit = {},
+    onContrastChange: (Float) -> Unit = {},
+    onSaturationChange: (Float) -> Unit = {},
+    onGammaChange: (Float) -> Unit = {},
+    onReset: () -> Unit = {},
+    onDismiss: () -> Unit,
+) {
+    var localBrightness by remember(brightness) { mutableFloatStateOf(brightness) }
+    var localContrast by remember(contrast) { mutableFloatStateOf(contrast) }
+    var localSaturation by remember(saturation) { mutableFloatStateOf(saturation) }
+    var localGamma by remember(gamma) { mutableFloatStateOf(gamma) }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        shape = RoundedCornerShape(16.dp),
+        tonalElevation = 8.dp,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Text(
+                text = "Video Equalizer",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+
+            Spacer(Modifier.height(16.dp))
+
+            // Brightness
+            EqualizerSlider(
+                label = "Brightness",
+                value = localBrightness,
+                onValueChange = { localBrightness = it; onBrightnessChange(it) },
+                valueRange = -1f..1f,
+                displayValue = "${"%.1f".format(localBrightness)}",
+            )
+
+            Spacer(Modifier.height(8.dp))
+
+            // Contrast
+            EqualizerSlider(
+                label = "Contrast",
+                value = localContrast,
+                onValueChange = { localContrast = it; onContrastChange(it) },
+                valueRange = 0f..2f,
+                displayValue = "${"%.1f".format(localContrast)}",
+            )
+
+            Spacer(Modifier.height(8.dp))
+
+            // Saturation
+            EqualizerSlider(
+                label = "Saturation",
+                value = localSaturation,
+                onValueChange = { localSaturation = it; onSaturationChange(it) },
+                valueRange = 0f..2f,
+                displayValue = "${"%.1f".format(localSaturation)}",
+            )
+
+            Spacer(Modifier.height(8.dp))
+
+            // Gamma
+            EqualizerSlider(
+                label = "Gamma",
+                value = localGamma,
+                onValueChange = { localGamma = it; onGammaChange(it) },
+                valueRange = 0.1f..2f,
+                displayValue = "${"%.1f".format(localGamma)}",
+            )
+
+            Spacer(Modifier.height(16.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween,
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        localBrightness = 0f
+                        localContrast = 1f
+                        localSaturation = 1f
+                        localGamma = 1f
+                        onReset()
+                    },
+                    shape = RoundedCornerShape(8.dp),
+                ) {
+                    Text("Reset")
+                }
+
+                Button(
+                    onClick = onDismiss,
+                    shape = RoundedCornerShape(8.dp),
+                ) {
+                    Text("Done")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EqualizerSlider(
+    label: String,
+    value: Float,
+    onValueChange: (Float) -> Unit,
+    valueRange: ClosedFloatingPointRange<Float>,
+    displayValue: String,
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = displayValue,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Slider(
+            value = value,
+            onValueChange = onValueChange,
+            valueRange = valueRange,
+            colors = SliderDefaults.colors(
+                thumbColor = MaterialTheme.colorScheme.primary,
+                activeTrackColor = MaterialTheme.colorScheme.primary,
+            ),
+        )
+    }
+}
