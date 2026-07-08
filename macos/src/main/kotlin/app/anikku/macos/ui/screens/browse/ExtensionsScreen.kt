@@ -82,10 +82,42 @@ data class ExtensionsScreen(
         val untrustedExtensions by (extensionManager?.untrustedExtensionsFlow?.collectAsState() ?: remember { mutableStateOf(emptyList()) })
 
         var selectedTab by remember { mutableStateOf(0) } // 0=Installed, 1=Available, 2=Repos, 3=Untrusted
-        var repoUrl by remember { mutableStateOf("https://raw.githubusercontent.com/keiyoushi/extensions/repo/") }
+        // Default anime extension repos — these have actual anime streaming sources
+        // (unlike keiyoushi/extensions which is primarily manga)
+        val defaultRepoUrl = "https://raw.githubusercontent.com/salmanbappi/extensions-repo/main/"
+        val fallbackRepoUrls = listOf(
+            defaultRepoUrl,
+            "https://raw.githubusercontent.com/keiyoushi/extensions/repo/",
+        )
+
+        var repoUrl by remember { mutableStateOf(defaultRepoUrl) }
         var isFetching by remember { mutableStateOf(false) }
+        var hasAutoFetched by remember { mutableStateOf(false) }
         var installingPkg by remember { mutableStateOf<String?>(null) }
         var installProgress by remember { mutableStateOf(0f) }
+
+        // Auto-fetch available extensions from default repo on first load
+        LaunchedEffect(extensionManager) {
+            if (!hasAutoFetched && extensionManager != null) {
+                isFetching = true
+                try {
+                    // Use force=false so the 1-day rate limit in MacOSExtensionManager is respected
+                    var extensions = extensionManager.findAvailableExtensions(defaultRepoUrl, force = false)
+                    if (extensions.isEmpty()) {
+                        // Fall back to keiyoushi repo if salmanbappi returns nothing
+                        for (fallbackUrl in fallbackRepoUrls.drop(1)) {
+                            extensions = extensionManager.findAvailableExtensions(fallbackUrl, force = false)
+                            if (extensions.isNotEmpty()) {
+                                repoUrl = fallbackUrl
+                                break
+                            }
+                        }
+                    }
+                } catch (_: Exception) { }
+                hasAutoFetched = true
+                isFetching = false
+            }
+        }
 
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(16.dp),
@@ -296,26 +328,93 @@ data class ExtensionsScreen(
                         )
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            "The default repo is pre-configured. You can add custom repos for community extensions.",
+                            "Pre-configured anime extension repos. The first one with available extensions is used automatically.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         Spacer(Modifier.height(12.dp))
+                    }
+
+                    // Pre-configured repos
+                    val repoInfo = listOf(
+                        Triple(
+                            defaultRepoUrl,
+                            "salmanbappi/extensions-repo",
+                            "Community anime extensions repo — allanime, nineanime, gogoanime, and more"
+                        ),
+                        Triple(
+                            fallbackRepoUrls[1],
+                            "keiyoushi/extensions",
+                            "Main keiyoushi extension repo — primarily manga, includes some anime sources"
+                        ),
+                    )
+
+                    items(repoInfo.size) { index ->
+                        val (url, name, desc) = repoInfo[index]
+                        val isActive = url == repoUrl
 
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(8.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (isActive)
+                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                                else
+                                    MaterialTheme.colorScheme.surfaceContainerHigh
+                            ),
+                            onClick = {
+                                repoUrl = url
+                                scope.launch {
+                                    isFetching = true
+                                    extensionManager?.findAvailableExtensions(url, force = true)
+                                    isFetching = false
+                                }
+                            },
                         ) {
-                            Column(Modifier.padding(12.dp)) {
-                                Text("Default Repo", fontWeight = FontWeight.Medium)
-                                Text(
-                                    "keiyoushi/extensions",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+                            Row(
+                                Modifier.fillMaxWidth().padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(name, fontWeight = FontWeight.Medium)
+                                    Text(
+                                        desc,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                if (isActive) {
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        "Active",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        fontWeight = FontWeight.Bold,
+                                    )
+                                }
                             }
                         }
+                    }
+
+                    item {
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = repoUrl,
+                            onValueChange = { repoUrl = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            label = { Text("Custom repo URL") },
+                            placeholder = { Text("Paste a repo index URL...") },
+                            shape = RoundedCornerShape(8.dp),
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Enter a URL pointing to an index.min.json file",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
             }
