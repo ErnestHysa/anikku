@@ -91,6 +91,36 @@ tasks.test {
     }
 }
 
+/**
+ * Build a standalone test extension JAR that can be loaded by MacOSExtensionLoader.
+ *
+ * Usage:
+ *   ./macos/gradlew -p macos buildTestExtensionJar
+ *   cp macos/build/libs/test-extension-1.0.0.jar ~/Library/Application\ Support/Anikku/extensions/
+ */
+tasks.register<Jar>("buildTestExtensionJar") {
+    dependsOn("compileKotlin")
+    archiveBaseName.set("test-extension")
+    archiveVersion.set("1.0.0")
+
+    // Include the compiled test source class
+    from("${layout.buildDirectory.get()}/classes/kotlin/main") {
+        include("app/anikku/macos/testextension/**")
+    }
+
+    // Include extension metadata (src/main/resources/test-extension/extension.json -> META-INF/extension.json)
+    from("src/main/resources/test-extension") {
+        into("META-INF")
+    }
+
+    manifest {
+        attributes(
+            "Implementation-Title" to "TestExtension",
+            "Implementation-Version" to "1.0.0",
+        )
+    }
+}
+
 compose.desktop {
     application {
         mainClass = "app.anikku.macos.AnikkuAppKt"
