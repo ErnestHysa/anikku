@@ -14,6 +14,7 @@ import app.anikku.macos.ui.MacOSMenuBarFactory
 import app.anikku.macos.platform.MacOSDockManager
 import app.anikku.macos.ui.GlobalKeyboardShortcuts
 import app.anikku.macos.ui.components.AboutDialog
+import app.anikku.macos.ui.screens.onboarding.OnboardingScreen
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import app.anikku.macos.ui.MainWindow
@@ -26,6 +27,7 @@ import app.anikku.macos.ui.components.ToastHostState
 import app.anikku.macos.ui.settings.LocalSettingsState
 import app.anikku.macos.ui.settings.SettingsState
 import app.anikku.macos.ui.theme.AnikkuTheme
+
 import coil3.ImageLoader
 import coil3.compose.setSingletonImageLoaderFactory
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
@@ -37,14 +39,13 @@ import java.awt.Frame
  * Launches the Compose Desktop application with:
  * - macOS application initialization (logging, Koin DI, storage, database)
  * - Native menu bar (File, Edit, View, Window, Help) per AD-04 (Phase 9.1)
- *   via java.awt native menu bar (Compose Desktop MenuBar API unavailable in 1.11.x)
  * - Material 3 theme system (18+ color schemes)
  * - Voyager tab navigation with desktop sidebar rail
  * - Coil 3 image loading with OkHttp network layer
+ * - Onboarding flow on first launch (Phase 5.12)
+ * - Dock menu with Play/Pause, Next Episode (Phase 9.6)
  */
 fun main() = application {
-    // Configure the global Coil ImageLoader for Compose Desktop
-    // Uses OkHttp for network requests (shared HTTP client with the app)
     setSingletonImageLoaderFactory { context ->
         ImageLoader.Builder(context)
             .components {
@@ -66,17 +67,21 @@ fun main() = application {
         title = "Anikku",
         state = windowState,
     ) {
-        // Shared settings state — wired to both the theme system and the Settings screen
         val settingsState = remember { SettingsState(app.preferenceStore) }
-        // Shared bookmark store — persists bookmarked episode IDs across restarts
         val bookmarkStore = remember { BookmarkStore(app.preferenceStore) }
         val toastHostState = remember { ToastHostState() }
 
-        // About dialog visibility — toggled from the menu bar's "About Anikku" item
         var showAboutDialog by remember { mutableStateOf(false) }
 
+        // Phase 5.12: Check if onboarding has been completed
+        val onboardingCompletePref = remember {
+            app.preferenceStore.getBoolean("onboarding_completed", false)
+        }
+        var showOnboarding by remember {
+            mutableStateOf(!onboardingCompletePref.get())
+        }
+
         // Set up the macOS native menu bar via java.awt
-        // (Compose Desktop MenuBar/Menu/Item composable API unavailable in 1.11.x)
         val onQuit = {
             app.onShutdown()
             exitApplication()
@@ -98,6 +103,7 @@ fun main() = application {
 
         // Phase 9.6: Initialize Dock integration
         MacOSDockManager.setBadgeCount(0) // Clear badge on launch
+        MacOSDockManager.createDockMenu() // Create dock menu with Play/Pause and Next Episode
 
         CompositionLocalProvider(
             LocalSettingsState provides settingsState,
@@ -110,11 +116,19 @@ fun main() = application {
                 isDarkOverride = settingsState.themeMode,
             ) {
                 Box(modifier = androidx.compose.ui.Modifier.fillMaxSize()) {
-                    MainWindow()
+                    if (showOnboarding) {
+                        OnboardingScreen(
+                            onComplete = {
+                                onboardingCompletePref.set(true)
+                                showOnboarding = false
+                            },
+                        ).Content()
+                    } else {
+                        MainWindow()
+                    }
                     ToastHost(state = toastHostState)
                 }
 
-                // About dialog — shown when triggered from menu bar
                 if (showAboutDialog) {
                     AboutDialog(onCloseRequest = { showAboutDialog = false })
                 }

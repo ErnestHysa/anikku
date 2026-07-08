@@ -31,8 +31,20 @@ class MacOSDockManagerTest {
     }
 
     @Test
-    fun `set play pause menu action does not throw`() {
-        MacOSDockManager.setPlayPauseMenuAction { /* no-op */ }
+    fun `set play pause callback does not throw`() {
+        MacOSDockManager.setPlayPauseCallback { /* no-op */ }
+        assert(true)
+    }
+
+    @Test
+    fun `set next episode callback does not throw`() {
+        MacOSDockManager.setNextEpisodeCallback { /* no-op */ }
+        assert(true)
+    }
+
+    @Test
+    fun `create dock menu does not throw`() {
+        MacOSDockManager.createDockMenu()
         assert(true)
     }
 
@@ -46,5 +58,32 @@ class MacOSDockManagerTest {
     fun `set badge count to negative is safe`() {
         MacOSDockManager.setBadgeCount(-1)
         assert(true)
+    }
+
+    @Test
+    fun `onPlayPause callback is invoked when set`() {
+        var invoked = false
+        MacOSDockManager.setPlayPauseCallback { invoked = true }
+        MacOSDockManager.onPlayPause()
+        assert(invoked)
+    }
+
+    @Test
+    fun `onNextEpisode callback is invoked when set`() {
+        var invoked = false
+        MacOSDockManager.setNextEpisodeCallback { invoked = true }
+        MacOSDockManager.onNextEpisode()
+        assert(invoked)
+    }
+
+    @Test
+    fun `callbacks are independent`() {
+        var playInvoked = false
+        var nextInvoked = false
+        MacOSDockManager.setPlayPauseCallback { playInvoked = true }
+        MacOSDockManager.setNextEpisodeCallback { nextInvoked = true }
+        MacOSDockManager.onPlayPause()
+        assert(playInvoked)
+        assert(!nextInvoked)
     }
 }

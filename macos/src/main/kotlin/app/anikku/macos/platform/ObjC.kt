@@ -56,6 +56,11 @@ object ObjC {
         return msgSend.invoke(Pointer::class.java, arrayOf(receiver, selector)) as Pointer
     }
 
+    /** objc_msgSend(id, SEL, id) -> id */
+    fun objc_msgSend(receiver: Pointer, selector: Pointer, arg: Pointer): Pointer {
+        return msgSend.invoke(Pointer::class.java, arrayOf(receiver, selector, arg)) as Pointer
+    }
+
     /** objc_msgSend(id, SEL) -> void */
     fun objc_msgSend_void(receiver: Pointer, selector: Pointer) {
         msgSend.invoke(arrayOf(receiver, selector))
@@ -69,6 +74,11 @@ object ObjC {
     /** objc_msgSend(id, SEL, int64) -> void */
     fun objc_msgSend_void(receiver: Pointer, selector: Pointer, arg: Long) {
         msgSend.invoke(arrayOf(receiver, selector, arg))
+    }
+
+    /** objc_msgSend(id, SEL, id, id, id) -> void */
+    fun objc_msgSend_void(receiver: Pointer, selector: Pointer, arg1: Pointer, arg2: Pointer, arg3: Pointer) {
+        msgSend.invoke(arrayOf(receiver, selector, arg1, arg2, arg3))
     }
 
     /** objc_msgSend(id, SEL, const char *) -> id */
