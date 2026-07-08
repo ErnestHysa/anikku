@@ -1,8 +1,6 @@
 package app.anikku.macos.platform
 
-import com.sun.jna.Library
-import com.sun.jna.Native
-import com.sun.jna.Pointer
+import app.anikku.macos.platform.ObjC
 import java.awt.Frame
 
 /**
@@ -43,11 +41,10 @@ object MacOSFullScreen {
                 return false
             }
 
-            val selector = ObjC.INSTANCE.sel_registerName("toggleFullScreen:")
-            ObjC.INSTANCE.objc_msgSend(
-                Pointer.createConstant(nsWindowPtr),
+            val selector = ObjC.sel_registerName("toggleFullScreen:")
+            ObjC.objc_msgSend(
+                com.sun.jna.Pointer.createConstant(nsWindowPtr),
                 selector,
-                Pointer.NULL,
             )
             isJnaAvailable = true
             true
@@ -78,25 +75,4 @@ object MacOSFullScreen {
             0L
         }
     }
-}
-
-/**
- * JNA mapping for the Objective-C runtime (libobjc.dylib).
- */
-private interface ObjC : Library {
-    companion object {
-        val INSTANCE: ObjC = Native.load("objc", ObjC::class.java)
-    }
-
-    /**
-     * objc_msgSend(id receiver, SEL selector, ...)
-     * Sends a message with one pointer argument (the sender, typically nil).
-     */
-    fun objc_msgSend(receiver: Pointer, selector: Pointer, arg: Pointer)
-
-    /**
-     * sel_registerName(const char *name) -> SEL
-     * Returns a SEL pointer for the given selector name.
-     */
-    fun sel_registerName(name: String): Pointer
 }

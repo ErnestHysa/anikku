@@ -5,6 +5,7 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ReadOnlyComposable
+import app.anikku.macos.ui.settings.ThemeMode
 import app.anikku.macos.ui.theme.colorscheme.BaseColorScheme
 import app.anikku.macos.ui.theme.colorscheme.CloudflareColorScheme
 import app.anikku.macos.ui.theme.colorscheme.CottoncandyColorScheme
@@ -74,17 +75,25 @@ object AnikkuTheme {
 /**
  * Applies the Anikku theme with the specified color scheme, dark mode, and AMOLED black option.
  *
+ * Phase 9.7: Dark Mode Detection — Supports [ThemeMode] for SYSTEM / LIGHT / DARK.
+ *
  * @param theme The color scheme theme to use (default: DEFAULT / TachiyomiColorScheme)
  * @param isAmoledOLED Whether to use AMOLED pure black backgrounds in dark mode
+ * @param isDarkOverride Dark mode override: SYSTEM=sync with macOS, LIGHT=force light, DARK=force dark
  * @param content The content to render within the theme
  */
 @Composable
 fun AnikkuTheme(
     theme: AnikkuTheme.Theme = AnikkuTheme.Theme.DEFAULT,
     isAmoledOLED: Boolean = false,
+    isDarkOverride: ThemeMode = ThemeMode.SYSTEM,
     content: @Composable () -> Unit,
 ) {
-    val isDark = isSystemInDarkTheme()
+    val isDark = when (isDarkOverride) {
+        ThemeMode.SYSTEM -> isSystemInDarkTheme()
+        ThemeMode.LIGHT -> false
+        ThemeMode.DARK -> true
+    }
     val colorScheme = theme.scheme.getColorScheme(isDark, isAmoledOLED)
 
     MaterialTheme(

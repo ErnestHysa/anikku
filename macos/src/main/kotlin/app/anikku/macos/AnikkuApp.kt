@@ -8,6 +8,8 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import app.anikku.macos.ui.MacOSMenuBarFactory
+import app.anikku.macos.platform.MacOSDockManager
+import app.anikku.macos.ui.GlobalKeyboardShortcuts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import app.anikku.macos.ui.MainWindow
@@ -68,12 +70,26 @@ fun main() = application {
 
         // Set up the macOS native menu bar via java.awt
         // (Compose Desktop MenuBar/Menu/Item composable API unavailable in 1.11.x)
-        val onQuit = { exitApplication() }
+        val onQuit = {
+            app.onShutdown()
+            exitApplication()
+        }
         val onSettings = { TabSwitchHandler.switchTo(4) }
-        val onOpenBackup = { /* TODO: Phase 7 — Open file picker for .tachibk backup */ }
+        val onOpenBackup = { /* Future: open file picker for .tachibk backup */ }
         (window as? Frame)?.let { frame ->
             MacOSMenuBarFactory.attach(frame, onQuit, onSettings, onOpenBackup)
         }
+
+        // Phase 9.2: Initialize global keyboard shortcuts
+        GlobalKeyboardShortcuts.initialize(
+            onToggleSidebar = { /* Future: toggle sidebar visibility */ },
+            onOpenSearch = { /* Future: focus search in current screen */ },
+            onOpenSettings = { TabSwitchHandler.switchTo(4) },
+            onNewSource = { TabSwitchHandler.switchTo(3) },
+        )
+
+        // Phase 9.6: Initialize Dock integration
+        MacOSDockManager.setBadgeCount(0) // Clear badge on launch
 
         CompositionLocalProvider(
             LocalSettingsState provides settingsState,
@@ -83,6 +99,7 @@ fun main() = application {
             AnikkuTheme(
                 theme = settingsState.theme,
                 isAmoledOLED = settingsState.isAmoledOLED,
+                isDarkOverride = settingsState.themeMode,
             ) {
                 Box(modifier = androidx.compose.ui.Modifier.fillMaxSize()) {
                     MainWindow()

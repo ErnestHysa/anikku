@@ -2,6 +2,7 @@ package app.anikku.macos.di
 
 import app.anikku.macos.AnikkuApplication
 import app.anikku.macos.platform.BackgroundTaskScheduler
+import app.anikku.macos.platform.MacOSDockManager
 import app.anikku.macos.platform.auth.TrackerOAuthManager
 import app.anikku.macos.platform.database.MacOSDatabaseDriver
 import app.anikku.macos.platform.discord.DiscordRPC
@@ -11,6 +12,7 @@ import app.anikku.macos.platform.network.MacOSNetworkHelper
 import app.anikku.macos.platform.notification.MacOSNotificationManager
 import app.anikku.macos.platform.preference.MacOSPreferenceStore
 import app.anikku.macos.platform.security.MacOSBiometricAuth
+import app.anikku.macos.platform.storage.MacOSFilePicker
 import app.anikku.macos.platform.storage.MacOSStorageProvider
 import app.anikku.macos.platform.sync.GoogleDriveRestClient
 import app.anikku.macos.platform.update.AppUpdateChecker
@@ -64,4 +66,10 @@ fun platformModule(app: AnikkuApplication) = module {
 
     // Phase 7.7: App Update Checker
     single<AppUpdateChecker> { app.appUpdateChecker }
+
+    // Phase 9.3: macOS File Picker
+    single<MacOSFilePicker> { MacOSFilePicker() }
+
+    // Phase 9.6: macOS Dock Integration
+    single { MacOSDockManager }
 }
