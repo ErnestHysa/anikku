@@ -35,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import app.anikku.macos.platform.auth.LocalTrackerManager
 import app.anikku.macos.platform.web.BrowserLauncher
 import app.anikku.macos.ui.components.CheckboxItem
 import app.anikku.macos.ui.components.HeadingItem
@@ -257,6 +258,19 @@ fun SettingsScreen() {
             subtitle = "Manage ongoing and completed downloads",
             onClick = { downloadNav.push(DownloadQueueScreen()) },
         )
+
+        HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
+
+        // =====================================================================
+        // Tracking
+        // =====================================================================
+        val trackerManager = LocalTrackerManager.current
+        if (trackerManager != null) {
+            TrackerSettingsPanel(
+                trackerManager = trackerManager,
+                onTrackerChanged = { /* login status updated reactively via StateFlow */ },
+            )
+        }
 
         HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
 

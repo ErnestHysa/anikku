@@ -1,6 +1,6 @@
 package app.anikku.macos.platform.auth
 
-import app.anikku.macos.platform.preference.MacOSPreferenceStore
+import androidx.compose.runtime.compositionLocalOf
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -204,3 +204,15 @@ class TrackerManager(
         }
     }
 }
+
+/**
+ * CompositionLocal for [TrackerManager] — used in SettingsScreen
+ * to provide tracker login/logout functionality.
+ *
+ * Must be provided via [CompositionLocalProvider] in AnikkuApp.kt:
+ * ```kotlin
+ * val trackerManager = TrackerManager(oauthManager, tokenStore, httpClient)
+ * CompositionLocalProvider(LocalTrackerManager provides trackerManager) { ... }
+ * ```
+ */
+val LocalTrackerManager = compositionLocalOf<TrackerManager?> { null }

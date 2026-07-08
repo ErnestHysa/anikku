@@ -26,6 +26,10 @@ import app.anikku.macos.platform.data.LocalLibraryRepository
 import app.anikku.macos.platform.data.LocalHistoryRepository
 import app.anikku.macos.platform.preference.BookmarkStore
 import app.anikku.macos.platform.preference.LocalBookmarkStore
+import app.anikku.macos.platform.auth.LocalTrackerManager
+import app.anikku.macos.platform.auth.TrackerManager
+import app.anikku.macos.platform.auth.TrackerOAuthManager
+import app.anikku.macos.platform.auth.TrackerTokenStore
 import app.anikku.macos.ui.components.LocalToastHost
 import app.anikku.macos.ui.components.ToastHost
 import app.anikku.macos.ui.components.ToastHostState
@@ -115,12 +119,21 @@ fun main() = application {
         MacOSDockManager.setBadgeCount(0) // Clear badge on launch
         MacOSDockManager.createDockMenu() // Create dock menu with Play/Pause and Next Episode
 
+        val trackerManager = remember {
+            TrackerManager(
+                oauthManager = app.networkHelper.client.let { TrackerOAuthManager(it) },
+                tokenStore = app.preferenceStore.let { TrackerTokenStore(it) },
+                httpClient = app.networkHelper.client,
+            )
+        }
+
         CompositionLocalProvider(
             LocalSettingsState provides settingsState,
             LocalBookmarkStore provides bookmarkStore,
             LocalLibraryRepository provides libraryRepository,
             LocalHistoryRepository provides historyRepository,
             LocalToastHost provides toastHostState,
+            LocalTrackerManager provides trackerManager,
         ) {
             AnikkuTheme(
                 theme = settingsState.theme,
