@@ -483,6 +483,22 @@ class PlayerViewModel {
     val audioDelay: StateFlow<Double> = _audioDelay.asStateFlow()
 
     // -------------------------------------------------------------------------
+    // Aspect ratio & video filters
+    // -------------------------------------------------------------------------
+
+    private val _aspectRatio = MutableStateFlow("-1")
+    val aspectRatio: StateFlow<String> = _aspectRatio.asStateFlow()
+
+    private val _videoRotation = MutableStateFlow(0)
+    val videoRotation: StateFlow<Int> = _videoRotation.asStateFlow()
+
+    private val _isHflip = MutableStateFlow(false)
+    val isHflip: StateFlow<Boolean> = _isHflip.asStateFlow()
+
+    private val _isVflip = MutableStateFlow(false)
+    val isVflip: StateFlow<Boolean> = _isVflip.asStateFlow()
+
+    // -------------------------------------------------------------------------
     // Video equalizer controls
     // -------------------------------------------------------------------------
 
@@ -594,6 +610,71 @@ class PlayerViewModel {
                 MPVLib.setPropertyDouble(handle, "audio-delay", clamped)
             } catch (e: Exception) {
                 logger.warn(e) { "Failed to set audio delay" }
+            }
+        }
+    }
+
+    /**
+     * Set display aspect ratio.
+     * Common values: "-1" (original), "4:3", "16:9", "16:10", "21:9", "3:2", "5:4", "1:1".
+     */
+    fun setAspectRatio(ratio: String) {
+        _aspectRatio.value = ratio
+        val handle = mpvHandle
+        if (handle != null) {
+            try {
+                MPVLib.setPropertyString(handle, "video-aspect", ratio)
+            } catch (e: Exception) {
+                logger.warn(e) { "Failed to set aspect ratio" }
+            }
+        }
+    }
+
+    /**
+     * Set video rotation in degrees (0, 90, 180, 270).
+     */
+    fun setVideoRotation(degrees: Int) {
+        val clamped = when (degrees) {
+            90 -> 90; 180 -> 180; 270 -> 270; else -> 0
+        }
+        _videoRotation.value = clamped
+        val handle = mpvHandle
+        if (handle != null) {
+            try {
+                MPVLib.setPropertyInt(handle, "video-rotate", clamped)
+            } catch (e: Exception) {
+                logger.warn(e) { "Failed to set video rotation" }
+            }
+        }
+    }
+
+    /**
+     * Toggle horizontal flip.
+     */
+    fun toggleHflip() {
+        _isHflip.value = !_isHflip.value
+        applyVideoFilters()
+    }
+
+    /**
+     * Toggle vertical flip.
+     */
+    fun toggleVflip() {
+        _isVflip.value = !_isVflip.value
+        applyVideoFilters()
+    }
+
+    private fun applyVideoFilters() {
+        val handle = mpvHandle
+        if (handle != null) {
+            try {
+                val filters = buildList {
+                    if (_isHflip.value) add("hflip")
+                    if (_isVflip.value) add("vflip")
+                }
+                MPVLib.setPropertyString(handle, "vf", filters.joinToString(","))
+            } catch (e: Exception) {
+                logger.warn(e) { "Failed to apply video filters" }
             }
         }
     }

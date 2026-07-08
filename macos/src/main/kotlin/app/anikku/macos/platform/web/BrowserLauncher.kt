@@ -41,6 +41,17 @@ object BrowserLauncher {
         Desktop.isDesktopSupported() && Desktop.getDesktop().isSupported(Desktop.Action.BROWSE)
     }
 
+    // -----------------------------------------------------------------------
+    // Test support — set testMode = true to capture URIs without opening
+    // the system browser during unit tests.
+    // -----------------------------------------------------------------------
+
+    /** When true, captures [lastOpenedUri] instead of calling Desktop.browse(). */
+    internal var testMode: Boolean = false
+
+    /** The last URI that would have been opened (populated in testMode). */
+    internal var lastOpenedUri: URI? = null
+
     /**
      * Opens the given URL in the system's default web browser.
      *
@@ -61,6 +72,10 @@ object BrowserLauncher {
      * @throws java.io.IOException if the browser fails to launch.
      */
     fun open(uri: URI) {
+        if (testMode) {
+            doBrowse(uri)
+            return
+        }
         if (!isAvailable) {
             logger.warn { "Desktop browse not available in this environment" }
             return
@@ -111,6 +126,11 @@ object BrowserLauncher {
     // -----------------------------------------------------------------------
 
     private fun doBrowse(uri: URI) {
+        if (testMode) {
+            lastOpenedUri = uri
+            logger.debug { "Test mode — would have opened: $uri" }
+            return
+        }
         try {
             Desktop.getDesktop().browse(uri)
             logger.debug { "Opened browser: $uri" }

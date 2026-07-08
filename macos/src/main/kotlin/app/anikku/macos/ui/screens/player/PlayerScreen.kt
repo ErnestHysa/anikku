@@ -112,6 +112,10 @@ data class PlayerScreen(
         val gamma by playerViewModel.gamma.collectAsState()
         val subtitleDelay by playerViewModel.subtitleDelay.collectAsState()
         val audioDelay by playerViewModel.audioDelay.collectAsState()
+        val aspectRatio by playerViewModel.aspectRatio.collectAsState()
+        val videoRotation by playerViewModel.videoRotation.collectAsState()
+        val isHflip by playerViewModel.isHflip.collectAsState()
+        val isVflip by playerViewModel.isVflip.collectAsState()
 
         // Look up data from MockData
         val anime = remember { MockData.sampleAnime.find { it.id == animeId } }
@@ -152,6 +156,10 @@ data class PlayerScreen(
             gamma = gamma,
             subtitleDelay = subtitleDelay,
             audioDelay = audioDelay,
+            aspectRatio = aspectRatio,
+            videoRotation = videoRotation,
+            isHflip = isHflip,
+            isVflip = isVflip,
             isMPVAvailable = playerViewModel.isMPVAvailable,
             onBack = { navigator.pop() },
             onNavigateEpisode = { index ->
@@ -204,6 +212,10 @@ private fun PlayerContent(
     gamma: Float = 1f,
     subtitleDelay: Double = 0.0,
     audioDelay: Double = 0.0,
+    aspectRatio: String = "-1",
+    videoRotation: Int = 0,
+    isHflip: Boolean = false,
+    isVflip: Boolean = false,
     isMPVAvailable: Boolean = false,
     onBack: () -> Unit,
     onNavigateEpisode: (Int) -> Unit,
@@ -226,6 +238,8 @@ private fun PlayerContent(
     var showAudioPanel by remember { mutableStateOf(false) }
     var showSubtitlePanel by remember { mutableStateOf(false) }
     var showEqualizerPanel by remember { mutableStateOf(false) }
+    var showAspectRatioPanel by remember { mutableStateOf(false) }
+    var showVideoFilterPanel by remember { mutableStateOf(false) }
 
     // Sync with mpv state when available
     LaunchedEffect(isPaused) {
@@ -481,6 +495,20 @@ private fun PlayerContent(
                                     showEqualizerPanel = true
                                 },
                             )
+                            DropdownMenuItem(
+                                text = { Text("Aspect Ratio") },
+                                onClick = {
+                                    showSettingsMenu = false
+                                    showAspectRatioPanel = true
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Video Filters") },
+                                onClick = {
+                                    showSettingsMenu = false
+                                    showVideoFilterPanel = true
+                                },
+                            )
                         }
                     }
                     // Screenshot button
@@ -572,7 +600,7 @@ private fun PlayerContent(
         }
 
         // === Settings panel overlays ===
-        val isAnyPanelOpen = showSpeedPanel || showAudioPanel || showSubtitlePanel || showEqualizerPanel
+        val isAnyPanelOpen = showSpeedPanel || showAudioPanel || showSubtitlePanel || showEqualizerPanel || showAspectRatioPanel || showVideoFilterPanel
 
         // Scrim
         if (isAnyPanelOpen) {
@@ -588,6 +616,8 @@ private fun PlayerContent(
                         showAudioPanel = false
                         showSubtitlePanel = false
                         showEqualizerPanel = false
+                        showAspectRatioPanel = false
+                        showVideoFilterPanel = false
                     }
             )
         }
@@ -658,6 +688,38 @@ private fun PlayerContent(
                 onGammaChange = { playerViewModel?.setGamma(it) },
                 onReset = { playerViewModel?.resetEqualizer() },
                 onDismiss = { showEqualizerPanel = false },
+            )
+        }
+
+        // Aspect ratio panel
+        AnimatedVisibility(
+            visible = showAspectRatioPanel,
+            enter = slideInVertically { it } + fadeIn(),
+            exit = slideOutVertically { it } + fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            PlayerAspectRatioPanel(
+                currentRatio = aspectRatio,
+                onRatioChange = { playerViewModel?.setAspectRatio(it) },
+                onDismiss = { showAspectRatioPanel = false },
+            )
+        }
+
+        // Video filter panel
+        AnimatedVisibility(
+            visible = showVideoFilterPanel,
+            enter = slideInVertically { it } + fadeIn(),
+            exit = slideOutVertically { it } + fadeOut(),
+            modifier = Modifier.align(Alignment.BottomCenter),
+        ) {
+            PlayerVideoFilterPanel(
+                currentRotation = videoRotation,
+                isHflip = isHflip,
+                isVflip = isVflip,
+                onRotationChange = { playerViewModel?.setVideoRotation(it) },
+                onToggleHflip = { playerViewModel?.toggleHflip() },
+                onToggleVflip = { playerViewModel?.toggleVflip() },
+                onDismiss = { showVideoFilterPanel = false },
             )
         }
     }

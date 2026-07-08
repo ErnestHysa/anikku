@@ -1,5 +1,6 @@
 package app.anikku.macos.ui.screens.player
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -12,6 +13,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -507,6 +510,230 @@ fun PlayerEqualizerPanel(
                 ) {
                     Text("Done")
                 }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Aspect Ratio Panel
+// ---------------------------------------------------------------------------
+
+/** Preset aspect ratio values with display labels. */
+private val aspectRatioPresets = listOf(
+    "-1" to "Original",
+    "16:9" to "16:9",
+    "4:3" to "4:3",
+    "16:10" to "16:10",
+    "21:9" to "21:9",
+    "3:2" to "3:2",
+    "5:4" to "5:4",
+    "1:1" to "1:1",
+)
+
+/**
+ * Aspect ratio selector panel.
+ * Allows selecting from common display aspect ratio presets.
+ */
+@Composable
+fun PlayerAspectRatioPanel(
+    currentRatio: String = "-1",
+    onRatioChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        shape = RoundedCornerShape(16.dp),
+        tonalElevation = 8.dp,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Text(
+                text = "Aspect Ratio",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+
+            Spacer(Modifier.height(16.dp))
+
+            // Preset ratio buttons in a 4-column grid
+            aspectRatioPresets.chunked(4).forEach { row ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    row.forEach { (value, label) ->
+                        val isSelected = currentRatio == value
+                        Button(
+                            onClick = { onRatioChange(value) },
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isSelected) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceVariant
+                                },
+                                contentColor = if (isSelected) {
+                                    MaterialTheme.colorScheme.onPrimary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                            ),
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(
+                                text = label,
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        }
+                    }
+                    // Pad remaining slots in the last row
+                    repeat(4 - row.size) {
+                        Spacer(Modifier.weight(1f))
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            OutlinedButton(
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Done")
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Video Filter Panel (rotation + flip)
+// ---------------------------------------------------------------------------
+
+/**
+ * Video filter panel.
+ * Allows rotation (0/90/180/270) and horizontal/vertical flip.
+ */
+@Composable
+fun PlayerVideoFilterPanel(
+    currentRotation: Int = 0,
+    isHflip: Boolean = false,
+    isVflip: Boolean = false,
+    onRotationChange: (Int) -> Unit,
+    onToggleHflip: () -> Unit,
+    onToggleVflip: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(16.dp),
+        shape = RoundedCornerShape(16.dp),
+        tonalElevation = 8.dp,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            Text(
+                text = "Video Filters",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+
+            Spacer(Modifier.height(16.dp))
+
+            // Rotation presets
+            Text(
+                text = "Rotation",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                listOf(0 to "0°", 90 to "90°", 180 to "180°", 270 to "270°").forEach { (degrees, label) ->
+                    val isSelected = currentRotation == degrees
+                    Button(
+                        onClick = { onRotationChange(degrees) },
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isSelected) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.surfaceVariant
+                            },
+                            contentColor = if (isSelected) {
+                                MaterialTheme.colorScheme.onPrimary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                        ),
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(12.dp))
+
+            // Flip toggles
+            Text(
+                text = "Flip",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                FilterChip(
+                    selected = isHflip,
+                    onClick = onToggleHflip,
+                    label = { Text("Horizontal Flip") },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    ),
+                )
+                FilterChip(
+                    selected = isVflip,
+                    onClick = onToggleVflip,
+                    label = { Text("Vertical Flip") },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    ),
+                )
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            OutlinedButton(
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Done")
             }
         }
     }
