@@ -240,12 +240,47 @@ log ""
 log "Step 3: Building extensions..."
 log ""
 
+# ---------------------------------------------------------------------------
+# Step 2c: Compile shared library modules (lib-*, common, core)
+# ---------------------------------------------------------------------------
+log ""
+log "Step 2c: Compiling shared library modules..."
+
+SHARED_LIBS_DIR="${TEMP_DIR}/shared-libs-classes"
+
+for lib_dir in "${GIT_CLONE_DIR}"/lib-*/ "${GIT_CLONE_DIR}/common/" "${GIT_CLONE_DIR}/core/"; do
+    [ ! -d "$lib_dir" ] && continue
+    lib_name=$(basename "$lib_dir")
+    lib_classes="${SHARED_LIBS_DIR}/${lib_name}"
+    [ -d "$lib_classes" ] && continue
+
+    find "$lib_dir" -name "*.kt" > "${TEMP_DIR}/${lib_name}-sources.txt" 2>/dev/null || true
+    src_count=$(wc -l < "${TEMP_DIR}/${lib_name}-sources.txt" 2>/dev/null || echo 0)
+    [ "$src_count" -eq 0 ] && continue
+
+    log "  Compiling: ${lib_name} (${src_count} files)..."
+    mkdir -p "$lib_classes"
+
+    set +e
+    kotlinc -cp "${CLASSPATH}" -d "$lib_classes" -jvm-target 17 @"${TEMP_DIR}/${lib_name}-sources.txt" 2>"${TEMP_DIR}/${lib_name}-compile.log"
+    local_exit=$?
+    set -e
+
+    class_count=$(find "$lib_classes" -name "*.class" 2>/dev/null | wc -l)
+
+    if [ "$class_count" -gt 0 ]; then
+        add_to_cp "$lib_classes"
+        log "    -> ${class_count} classes ✓"
+    elif [ "$local_exit" -ne 0 ]; then
+        log "    -> SKIP: compilation failed"
+    fi
+done
+
 SUCCESS_COUNT=0
 FAIL_COUNT=0
 SKIPPED_COUNT=0
-SUCCESSFUL_PKGS=""
-FAILED_NAMES=""
-TRUST_ENTRIES_JSON="["
+TRUST_DATA="${TEMP_DIR}/trust-data.json"
+echo '[]' > "$TRUST_DATA"
 
 for ext_dir in "${EXT_DIRS[@]}"; do
     EXT_NAME=$(basename "$ext_dir")
@@ -354,19 +389,26 @@ JSONEOF
         mkdir -p "${EXTENSIONS_DIR}"
         cp "$JAR_PATH" "${EXTENSIONS_DIR}/${JAR_NAME}"
 
-        # Compute SHA-256 for trust store
+        # Compute SHA-256 for trust store (use Python to build JSON safely)
         if command -v shasum >/dev/null 2>&1; then
             JAR_HASH=$(shasum -a 256 "$JAR_PATH" | awk '{print $1}')
         elif command -v sha256sum >/dev/null 2>&1; then
             JAR_HASH=$(sha256sum "$JAR_PATH" | awk '{print $1}')
         else
-            JAR_HASH="unknown"
+            JAR_HASH=""
         fi
-        if [ "$JAR_HASH" != "unknown" ]; then
-            if [ "$TRUST_ENTRIES_JSON" != "[" ]; then
-                TRUST_ENTRIES_JSON="${TRUST_ENTRIES_JSON},"
-            fi
-            TRUST_ENTRIES_JSON="${TRUST_ENTRIES_JSON}{\"pkgName\":\"${PKG}\",\"versionCode\":${VERSION_CODE},\"signatureHash\":\"${JAR_HASH}\"}"
+        if [ -n "$JAR_HASH" ]; then
+            python3 -c "
+import json
+try:
+    with open('${TRUST_DATA}') as f:
+        data = json.load(f)
+except:
+    data = []
+data.append({'pkgName': '${PKG}', 'versionCode': ${VERSION_CODE}, 'signatureHash': '${JAR_HASH}'})
+with open('${TRUST_DATA}', 'w') as f:
+    json.dump(data, f, separators=(',', ':'))
+" 2>/dev/null || true
         fi
 
         SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
@@ -436,15 +478,15 @@ fi
 # ---------------------------------------------------------------------------
 # Step 5: Write trust store
 # ---------------------------------------------------------------------------
-TRUST_ENTRIES_JSON="${TRUST_ENTRIES_JSON}]"
 TRUST_DIR="${HOME}/Library/Application Support/Anikku/data/trust"
 mkdir -p "$TRUST_DIR" 2>/dev/null || true
 TRUST_FILE="${TRUST_DIR}/trusted_extensions.json"
-if echo "$TRUST_ENTRIES_JSON" > "$TRUST_FILE" 2>/dev/null; then
-    TRUSTED_COUNT=$(echo "$TRUST_ENTRIES_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d))" 2>/dev/null || echo "0")
+if [ -f "$TRUST_DATA" ]; then
+    cp "$TRUST_DATA" "$TRUST_FILE"
+    TRUSTED_COUNT=$(python3 -c "import json; print(len(json.load(open('${TRUST_FILE}'))))" 2>/dev/null || echo "0")
     log "  Trusted ${TRUSTED_COUNT} extension(s) → ${TRUST_FILE}"
 else
-    log "  WARNING: Could not write trust store to ${TRUST_FILE}"
+    log "  No trust data to write"
 fi
 
 # ---------------------------------------------------------------------------
