@@ -1,5 +1,7 @@
 package android.app
 
+import android.content.Context
+
 /**
  * Stub for `android.app.Application` on macOS JVM.
  *
@@ -11,8 +13,11 @@ package android.app
  *
  * This stub provides the class so the JVM can resolve it, and a corresponding
  * Koin singleton (registered in [PlatformModule]) satisfies the injection
- * request. The stub has no functionality — it just needs to exist as a type.
+ * request.
+ *
+ * Extends [Context] to provide `getSharedPreferences()` and other common
+ * Android framework methods that extensions may call at runtime.
  */
-open class Application {
-    // No-op stub — only needed for type resolution in extension bytecode
+open class Application : Context() {
+    // Methods are inherited from Context
 }
