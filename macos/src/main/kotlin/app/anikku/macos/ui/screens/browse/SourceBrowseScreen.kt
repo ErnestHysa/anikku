@@ -44,12 +44,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.anikku.macos.platform.logging.UIActionLogger
 import app.anikku.macos.platform.extension.MacOSExtensionManager
 import app.anikku.macos.ui.AnikkuScreen
+import app.anikku.macos.ui.components.LocalToastHost
+import app.anikku.macos.ui.components.ToastDuration
 import app.anikku.macos.ui.components.AnimeCoverImage
 import app.anikku.macos.ui.screens.anime.AnimeDetailScreen
 import app.anikku.macos.ui.screens.models.AnimeModel
-import app.anikku.macos.ui.screens.models.MockData
 import app.anikku.macos.ui.screens.models.toAnimeModel
 import cafe.adriel.voyager.core.screen.ScreenKey
 import cafe.adriel.voyager.core.screen.uniqueScreenKey
@@ -66,7 +68,7 @@ import kotlinx.coroutines.withContext
  *
  * Fetches popular anime from the source's [CatalogueSource.getPopularAnime] API on load.
  * Supports searching via [CatalogueSource.getSearchAnime] when the user types a query.
- * Falls back to [MockData] when no compatible extension source is installed.
+ * Shows error state when no compatible extension source is installed.
  */
 data class SourceBrowseScreen(
     val sourceId: Long,
@@ -85,10 +87,10 @@ data class SourceBrowseScreen(
         var isSearching by remember { mutableStateOf(false) }
         var errorMessage by remember { mutableStateOf<String?>(null) }
         var animeList by remember { mutableStateOf(emptyList<AnimeModel>()) }
-        var usingFallback by remember { mutableStateOf(false) }
         var searchQuery by remember { mutableStateOf("") }
         var isShowingSearchResults by remember { mutableStateOf(false) }
         var hasSearched by remember { mutableStateOf(false) }
+        val toastHost = LocalToastHost.current
 
         // Fetch popular anime on first composition
         LaunchedEffect(sourceId) {
@@ -97,30 +99,26 @@ data class SourceBrowseScreen(
 
             val source = extensionManager?.getSource(sourceId)
             if (source is CatalogueSource) {
+                UIActionLogger.logExtension(sourceName, "fetchPopular", "sourceId=$sourceId")
                 // Run the suspend call on IO dispatcher — extensions may do blocking I/O
                 try {
                     val page = withContext(Dispatchers.IO) {
                         source.getPopularAnime(page = 1)
                     }
                     animeList = page.animes.map { it.toAnimeModel(sourceId) }
+                    UIActionLogger.logExtension(sourceName, "popularResults", "count=${animeList.size}")
                 } catch (e: NoClassDefFoundError) {
-                    errorMessage = "Extension has missing JVM dependencies: ${e.message}. " +
-                        "This source may need a JVM-compatible build."
-                    animeList = MockData.sampleAnime
-                    usingFallback = true
+                    errorMessage = "Missing JVM dependency: ${e.message}. " +
+                        "This source needs a JVM-compatible build. Try building from source with: ./gradlew buildKeiyoushiExtension"
+                    toastHost.show("Missing dependency for $sourceName", ToastDuration.LONG)
                 } catch (e: Exception) {
                     errorMessage = "${e::class.simpleName}: ${e.message}"
-                    animeList = MockData.sampleAnime
-                    usingFallback = true
+                    toastHost.show("$sourceName: ${e::class.simpleName} — ${e.message?.take(80)}", ToastDuration.LONG)
                 }
             } else if (source != null) {
                 errorMessage = "Source does not support catalog browsing (missing CatalogueSource interface)"
-                animeList = MockData.sampleAnime
-                usingFallback = true
             } else {
                 errorMessage = "Source not found — install an extension via the Extensions tab"
-                animeList = MockData.sampleAnime
-                usingFallback = true
             }
 
             isLoading = false
@@ -134,12 +132,14 @@ data class SourceBrowseScreen(
                     isShowingSearchResults = false
                     hasSearched = false
                     val source = extensionManager?.getSource(sourceId)
-                    if (source is CatalogueSource && !usingFallback) {
+                    if (source is CatalogueSource && errorMessage == null) {
                         try {
                             isLoading = true
                             val page = source.getPopularAnime(page = 1)
                             animeList = page.animes.map { it.toAnimeModel(sourceId) }
-                        } catch (_: Exception) { }
+                        } catch (_: Exception) {
+                            toastHost.show("Failed to reload popular anime", ToastDuration.SHORT)
+                        }
                         isLoading = false
                     }
                 }
@@ -150,25 +150,21 @@ data class SourceBrowseScreen(
             delay(400)
 
             val source = extensionManager?.getSource(sourceId)
-            if (source is CatalogueSource && !usingFallback) {
+            if (source is CatalogueSource && errorMessage == null) {
                 isSearching = true
                 isShowingSearchResults = true
                 hasSearched = true
                 errorMessage = null
+                UIActionLogger.logExtension(sourceName, "search", "query=$searchQuery")
                 try {
                     val page = source.getSearchAnime(page = 1, query = searchQuery, filters = AnimeFilterList())
                     animeList = page.animes.map { it.toAnimeModel(sourceId) }
+                    UIActionLogger.logExtension(sourceName, "searchResults", "count=${animeList.size}, query=$searchQuery")
                 } catch (e: Exception) {
                     errorMessage = "Search error: ${e.message}"
+                    toastHost.show("Search failed: ${e.message?.take(80)}", ToastDuration.LONG)
                 }
                 isSearching = false
-            } else if (usingFallback) {
-                // Filter MockData locally
-                isShowingSearchResults = true
-                hasSearched = true
-                animeList = MockData.sampleAnime.filter {
-                    it.title.contains(searchQuery, ignoreCase = true)
-                }
             }
         }
 
@@ -176,16 +172,7 @@ data class SourceBrowseScreen(
             topBar = {
                 TopAppBar(
                     title = {
-                        Column {
-                            Text(sourceName, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            if (usingFallback) {
-                                Text(
-                                    "Demo mode",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.tertiary,
-                                )
-                            }
-                        }
+                        Text(sourceName, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     },
                     navigationIcon = {
                         IconButton(onClick = { navigator.pop() }) {

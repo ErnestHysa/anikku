@@ -1,5 +1,6 @@
 package app.anikku.macos.player
 
+import app.anikku.macos.platform.logging.CrashReporter
 import com.sun.jna.Pointer
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.CoroutineScope
@@ -136,34 +137,57 @@ class PlayerViewModel {
     /**
      * Initialize the mpv core and event loop.
      * Safe to call multiple times — subsequent calls are no-ops.
+     *
+     * @return true if mpv was successfully initialized, false otherwise.
      */
-    fun initialize() {
-        if (mpvHandle != null) return
+    fun initialize(): Boolean {
+        if (mpvHandle != null) return true
 
-        MPVLib.initialize()
-        if (!MPVLib.isAvailable) {
+        val mpvLoaded = MPVLib.initialize()
+        if (!mpvLoaded) {
             _playbackState.value = PlaybackState.ERROR
             logger.warn { "MPV not available — player will operate in mock mode" }
-            return
+            CrashReporter.logEvent("MPV init failed", "libmpv could not be loaded")
+            return false
         }
 
         try {
             val handle = MPVLib.create()
+            if (handle == null) {
+                logger.error { "🚀 MPV_CORE: mpv_create() returned null — cannot create mpv instance. " +
+                    "This is likely caused by a locale issue (LC_NUMERIC not \"C\"). " +
+                    "Check ~/Library/Logs/Anikku/ for details." }
+                _handle.value = null
+                mpvHandle = null
+                _playbackState.value = PlaybackState.ERROR
+                CrashReporter.logEvent("MPV handle null", "mpv_create returned null — locale issue")
+                return false
+            }
             mpvHandle = handle
             _handle.value = handle
-            logger.info { "🚀 MPV_CORE: mpv handle created" }
+            logger.info { "🚀 MPV_CORE: mpv handle created (${Pointer.nativeValue(handle)})" }
 
-            // Configure mpv
-            configureMPV(handle)
+            // Configure mpv options BEFORE mpv_initialize
+            val configOk = configureMPV(handle)
 
-            val result = MPVLib.initialize(handle)
-            if (result < 0) {
-                logger.error { "🚀 MPV_CORE: mpv_initialize failed with code: $result" }
+            if (!configOk) {
+                logger.error { "🚀 MPV_CORE: mpv_set_option failed — mpv may have locale issues" }
                 _handle.value = null
                 mpvHandle = null
                 MPVLib.destroy(handle)
                 _playbackState.value = PlaybackState.ERROR
-                return
+                return false
+            }
+
+            val initResult = MPVLib.initialize(handle)
+            if (initResult == null || initResult < 0) {
+                logger.error { "🚀 MPV_CORE: mpv_initialize failed with code: $initResult" }
+                _handle.value = null
+                mpvHandle = null
+                MPVLib.destroy(handle)
+                _playbackState.value = PlaybackState.ERROR
+                CrashReporter.logEvent("MPV init failed", "mpv_initialize returned $initResult")
+                return false
             }
             logger.info { "🚀 MPV_CORE: mpv initialized successfully (vo=libmpv, hwdec=videotoolbox)" }
 
@@ -213,7 +237,6 @@ class PlayerViewModel {
                             logger.info { "🎬 VIDEO_FILE: playback ended" }
                         }
                         MPVLib.MPV_EVENT_VIDEO_RECONFIG -> {
-                            // Query the video dimensions from mpv
                             val w = MPVLib.getPropertyInt(handle, "dwidth", 0)
                             val h = MPVLib.getPropertyInt(handle, "dheight", 0)
                             if (w > 0 && h > 0) {
@@ -249,52 +272,72 @@ class PlayerViewModel {
 
             _playbackState.value = PlaybackState.IDLE
             logger.info { "🚀 PLAYER_READY: mpv player fully initialized and awaiting video" }
+            return true
         } catch (e: Exception) {
             logger.error(e) { "Failed to initialize MPV player" }
+            CrashReporter.logError("PlayerInit", e.message ?: "", e)
             _playbackState.value = PlaybackState.ERROR
+            return false
         }
     }
 
     /**
      * Configure mpv options before initialization.
+     * Returns false if any critical option fails.
      */
-    private fun configureMPV(handle: Pointer) {
-        try {
-            // Video output configuration
-            // vo=libmpv enables the render API (required for software rendering)
-            MPVLib.setOptionString(handle, "vo", "libmpv")
-            // No gpu-context needed — we use the software render API
-            MPVLib.setOptionString(handle, "hwdec", "videotoolbox")
-            MPVLib.setOptionString(handle, "cache", "yes")
-            MPVLib.setOptionString(handle, "cache-secs", "30")
-            MPVLib.setOptionString(handle, "demuxer-max-bytes", "150M")
-            MPVLib.setOptionString(handle, "demuxer-max-back-bytes", "50M")
+    private fun configureMPV(handle: Pointer): Boolean {
+        var allOk = true
+        val criticalOptions = listOf(
+            "vo" to "libmpv",
+            "hwdec" to "videotoolbox",
+            "cache" to "yes",
+            "cache-secs" to "30",
+            "demuxer-max-bytes" to "150M",
+            "demuxer-max-back-bytes" to "50M",
+        )
+        val nonCriticalOptions = listOf(
+            "audio-file-auto" to "no",
+            "sub-auto" to "fuzzy",
+            "sub-file-auto" to "no",
+            "osd-level" to "0",
+            "keep-open" to "yes",
+            "screenshot-format" to "png",
+            "screenshot-template" to "anikku-screenshot-%n",
+        )
 
-            // Audio configuration
-            MPVLib.setOptionString(handle, "audio-file-auto", "no")
-
-            // Subtitle configuration
-            MPVLib.setOptionString(handle, "sub-auto", "fuzzy")
-            MPVLib.setOptionString(handle, "sub-file-auto", "no")
-
-            // OSD configuration
-            MPVLib.setOptionString(handle, "osd-level", "0")
-
-            // Keep open on end
-            MPVLib.setOptionString(handle, "keep-open", "yes")
-
-            // Screenshot configuration
-            MPVLib.setOptionString(handle, "screenshot-format", "png")
-            MPVLib.setOptionString(handle, "screenshot-template", "anikku-screenshot-%n")
-        } catch (e: Exception) {
-            logger.warn(e) { "Failed to set mpv options" }
+        for ((name, value) in criticalOptions) {
+            try {
+                val result = MPVLib.setOptionString(handle, name, value)
+                if (result == null || result < 0) {
+                    logger.error { "Failed to set critical mpv option: $name=$value (error: $result)" }
+                    allOk = false
+                }
+            } catch (e: Exception) {
+                logger.error(e) { "Exception setting mpv option: $name=$value" }
+                allOk = false
+            }
         }
+
+        for ((name, value) in nonCriticalOptions) {
+            try {
+                MPVLib.setOptionString(handle, name, value)
+            } catch (e: Exception) {
+                logger.debug(e) { "Non-critical mpv option failed: $name=$value" }
+            }
+        }
+
+        if (!allOk) {
+            CrashReporter.logEvent("MPV config failed", "Critical options could not be set")
+        }
+
+        return allOk
     }
 
     /**
      * Shut down the player, clean up mpv resources.
      */
     fun shutdown() {
+        logger.info { "🎬 PLAYER_SHUTDOWN: shutting down mpv player..." }
         positionUpdateJob?.cancel()
         positionUpdateJob = null
         eventLoop?.stop()
@@ -311,7 +354,8 @@ class PlayerViewModel {
         mpvHandle = null
         eventLoop = null
         _playbackState.value = PlaybackState.IDLE
-        logger.info { "MPV player shut down" }
+        logger.info { "🎬 PLAYER_SHUTDOWN: mpv player shut down complete" }
+        CrashReporter.logEvent("Player shutdown")
     }
 
     // -------------------------------------------------------------------------
@@ -324,19 +368,23 @@ class PlayerViewModel {
      */
     fun loadEpisode(url: String) {
         val handle = mpvHandle ?: run {
-            logger.warn { "Cannot load episode: mpv not initialized" }
+            logger.warn { "🎬 VIDEO_LOAD: Cannot load episode: mpv not initialized" }
             _playbackState.value = PlaybackState.ERROR
+            CrashReporter.logEvent("Video load failed", "mpv not initialized, url=$url")
             return
         }
 
         currentUrl = url
         _playbackState.value = PlaybackState.LOADING
         logger.info { "🎬 VIDEO_LOAD: loading episode into mpv: $url" }
+        CrashReporter.logEvent("Video loading", "url=$url")
 
         try {
             MPVLib.command(handle, "loadfile", url, "replace")
+            logger.info { "🎬 VIDEO_LOAD: loadfile command sent successfully" }
         } catch (e: Exception) {
             logger.error(e) { "Failed to load episode: $url" }
+            CrashReporter.logError("VideoLoad", "Failed to load $url", e)
             _playbackState.value = PlaybackState.ERROR
         }
     }

@@ -413,16 +413,66 @@ class MacOSExtensionManager(
     // -------------------------------------------------------------------------
 
     private fun loadTrustStore() {
-        if (!trustFile.isFile) return
-        try {
-            val content = trustFile.readText()
-            val entries: List<MacOSExtensionLoader.TrustEntry> = json.decodeFromString(content)
-            trustStore = entries
-                .groupByTo(mutableMapOf()) { it.pkgName }
-                .mapValues { (_, v) -> v.toMutableList() }
-                .toMutableMap()
-        } catch (e: Exception) {
-            logger.error(e) { "Failed to load trust store" }
+        if (trustFile.isFile) {
+            try {
+                val content = trustFile.readText()
+                val entries: List<MacOSExtensionLoader.TrustEntry> = json.decodeFromString(content)
+                trustStore = entries
+                    .groupByTo(mutableMapOf()) { it.pkgName }
+                    .mapValues { (_, v) -> v.toMutableList() }
+                    .toMutableMap()
+                logger.info { "Loaded trust store: ${trustStore.size} packages trusted" }
+            } catch (e: Exception) {
+                logger.error(e) { "Failed to load trust store" }
+            }
+            return
+        }
+
+        // First launch: no trust file exists. Auto-trust all JARs in the
+        // extensions directory so users don't have to manually trust each
+        // extension after a fresh install.
+        autoTrustAllJars()
+    }
+
+    /**
+     * Auto-trust all JAR files in the extensions directory.
+     * Called on first launch when no trust store exists.
+     *
+     * This is the default behavior for fresh installs — users can always
+     * revoke trust for individual extensions later via the UI.
+     */
+    private fun autoTrustAllJars() {
+        val jars = extensionsDir.listFiles()
+            ?.filter { it.extension == "jar" }
+            ?: emptyList()
+
+        if (jars.isEmpty()) {
+            logger.info { "No JARs to auto-trust — extensions directory is empty" }
+            return
+        }
+
+        logger.info { "First launch — auto-trusting ${jars.size} extension(s) in ${extensionsDir.absolutePath}" }
+
+        for (jar in jars) {
+            val metadata = MacOSExtensionLoader.readMetadata(jar)
+            if (metadata == null) {
+                logger.warn { "Skipping auto-trust for ${jar.name} — no valid metadata" }
+                continue
+            }
+
+            val hash = MacOSExtensionLoader.computeSha256(jar)
+            val entry = MacOSExtensionLoader.TrustEntry(
+                pkgName = metadata.pkgName,
+                versionCode = metadata.versionCode,
+                signatureHash = hash,
+            )
+            trustStore.getOrPut(metadata.pkgName) { mutableListOf() }.add(entry)
+            logger.info { "  Auto-trusted: ${metadata.pkgName} (hash: ${hash.take(12)}...)" }
+        }
+
+        if (trustStore.isNotEmpty()) {
+            saveTrustStore()
+            logger.info { "Auto-trusted ${trustStore.size} extension(s)" }
         }
     }
 

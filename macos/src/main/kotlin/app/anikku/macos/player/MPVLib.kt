@@ -38,8 +38,11 @@ object MPVLib {
 
     private var isInitialized = false
 
+    /** Whether a previous initialization attempt permanently failed. Prevents retry loops. */
+    private var initFailed = false
+
     /** Whether libmpv was successfully loaded and is available for use. */
-    val isAvailable: Boolean get() = isInitialized
+    val isAvailable: Boolean get() = isInitialized && !initFailed
 
     /**
      * Attempt to load libmpv from standard locations.
@@ -52,11 +55,26 @@ object MPVLib {
      * 5. System `java.library.path`
      * 6. Default JNA lookup (DYLD_LIBRARY_PATH, etc.)
      */
-    fun initialize() {
-        if (isInitialized) return
+    /**
+     * Attempt to load libmpv from standard locations.
+     *
+     * @return true if libmpv was successfully loaded and is available.
+     */
+    fun initialize(): Boolean {
+        if (isInitialized) return true
+        // Permanent failure guard — prevents retry loop when checkAvailable() calls
+        // initialize() repeatedly after mpv_create() or library loading fails.
+        if (initFailed) {
+            logger.warn { "MPV initialization previously failed — skipping retry" }
+            return false
+        }
 
         // mpv requires LC_NUMERIC=C — non-C locales break its config parsing.
-        // Use JNA to call setlocale(LC_NUMERIC, "C") before loading libmpv.
+        // We must set the locale BEFORE loading libmpv via dlopen, because
+        // mpv checks locale in its library constructor (runs during dlopen).
+        // JNA's setlocale via NativeLibrary works, but we also call Java's
+        // Locale.setDefault() as a supplementary fallback.
+        java.util.Locale.setDefault(java.util.Locale.US)
         forceCLocale()
 
         val libraryPaths = listOfNotNull(
@@ -76,7 +94,7 @@ object MPVLib {
         val libPath = libraryPaths.firstOrNull()
 
         if (libPath == null) {
-            logger.warn { "libmpv.1.dylib not found. Attempting JNA default lookup..." }
+            logger.warn { "libmpv not found in standard paths. Attempting JNA default lookup..." }
         }
 
         try {
@@ -89,13 +107,29 @@ object MPVLib {
             }
             instance = lib
             isInitialized = true
-            logger.info { "libmpv loaded successfully" }
+
+            // Verify mpv_create() works
+            val testHandle = lib.mpv_create()
+            if (testHandle == null || Pointer.nativeValue(testHandle) == 0L) {
+                logger.error { "mpv_create() returned null — libmpv loaded but cannot create handle. " +
+                    "This may be caused by a locale issue (LC_NUMERIC not set to C). Checking..." }
+                isInitialized = false
+                instance = null
+                initFailed = true
+                return false
+            }
+            lib.mpv_destroy(testHandle)
+
+            logger.info { "libmpv loaded successfully (v${getVersion()})" }
+            return true
         } catch (e: UnsatisfiedLinkError) {
             logger.error(e) { "Failed to load libmpv — video playback unavailable" }
             logger.warn { "Install mpv via: brew install mpv" }
-            logger.warn { "Or bundle libmpv.1.dylib in Anikku.app/Contents/Frameworks/" }
+            logger.warn { "Or bundle libmpv in Anikku.app/Contents/Frameworks/" }
             instance = null
             isInitialized = false
+            initFailed = true
+            return false
         }
     }
 
@@ -107,18 +141,40 @@ object MPVLib {
      * config file and option parsing. mpv will refuse to initialize
      * with the error: "Non-C locale detected. This is not supported."
      *
-     * Uses JNA to call the C library's setlocale() function directly,
-     * which is the only reliable way to change the locale from Java.
+     * Strategy:
+     * 1. First try Java's Locale.setDefault() (affects JVM-wide locale)
+     * 2. Then use JNA to call the C library's setlocale() directly
+     * 3. Try LC_ALL first, then LC_NUMERIC specifically
      */
     private fun forceCLocale() {
+        var success = false
+
         try {
             val libc = NativeLibrary.getInstance("c")
             val setlocale = libc.getFunction("setlocale")
-            // LC_NUMERIC = 1 on all POSIX systems (apple, linux, etc.)
-            // Just call setlocale to force the locale; ignore return value
-            setlocale.invoke(arrayOf(1, "C"))
-        } catch (e: Exception) {
-            logger.debug(e) { "Failed to force LC_NUMERIC locale — mpv may complain" }
+            // LC_ALL = 0 (all locale categories) — most reliable
+            val result = setlocale.invoke(arrayOf(0, "C"))
+            val resultStr = if (result is Pointer && Pointer.nativeValue(result) != 0L) {
+                result.getString(0)
+            } else {
+                result?.toString() ?: "null"
+            }
+            logger.debug { "setlocale(LC_ALL, \"C\") returned: $resultStr" }
+            success = resultStr.contains("C")
+        } catch (e: Throwable) {
+            logger.warn(e) { "JNA setlocale(LC_ALL) failed — trying LC_NUMERIC..." }
+        }
+
+        if (!success) {
+            try {
+                val libc = NativeLibrary.getInstance("System")
+                val setlocale = libc.getFunction("setlocale")
+                setlocale.invoke(arrayOf(1, "C"))
+                logger.debug { "setlocale(LC_NUMERIC, \"C\") via libSystem succeeded" }
+                success = true
+            } catch (e: Throwable) {
+                logger.warn(e) { "All setlocale attempts failed — mpv may not initialize" }
+            }
         }
     }
 
@@ -150,18 +206,44 @@ object MPVLib {
     private var instance: MPVNatives? = null
 
     private fun checkAvailable(): MPVNatives {
-        if (!isInitialized) initialize()
+        if (!isInitialized && !initFailed) initialize()
         return instance ?: error("libmpv not available. Install via: brew install mpv")
     }
 
     /** Create a new mpv handle. */
-    fun create(): Pointer = checkAvailable().mpv_create()
+    /** Create a new mpv handle. Returns null on failure. */
+    fun create(): Pointer? {
+        return try {
+            val h = checkAvailable().mpv_create()
+            if (h == null || Pointer.nativeValue(h) == 0L) {
+                logger.error { "mpv_create() returned null — possible locale/initialization issue" }
+                null
+            } else {
+                h
+            }
+        } catch (e: Exception) {
+            logger.error(e) { "mpv_create() threw exception" }
+            null
+        }
+    }
 
-    /** Initialize an mpv handle after setting options. */
-    fun initialize(handle: Pointer): Int = checkAvailable().mpv_initialize(handle)
+    /** Initialize an mpv handle after setting options. Returns error code, or null if handle is invalid. */
+    fun initialize(handle: Pointer?): Int? {
+        if (handle == null) {
+            logger.warn { "mpv_initialize called with null handle" }
+            return null
+        }
+        return try {
+            checkAvailable().mpv_initialize(handle)
+        } catch (e: Exception) {
+            logger.error(e) { "mpv_initialize threw exception" }
+            null
+        }
+    }
 
     /** Destroy an mpv handle and free resources. */
-    fun destroy(handle: Pointer) {
+    fun destroy(handle: Pointer?) {
+        if (handle == null) return
         try {
             checkAvailable().mpv_destroy(handle)
         } catch (_: Exception) {
@@ -169,24 +251,53 @@ object MPVLib {
         }
     }
 
-    /** Set a string option before mpv_initialize. */
-    fun setOptionString(handle: Pointer, name: String, value: String): Int =
-        checkAvailable().mpv_set_option_string(handle, name, value)
+    /** Set a string option before mpv_initialize. Returns null if handle is invalid. */
+    fun setOptionString(handle: Pointer?, name: String, value: String): Int? {
+        if (handle == null) {
+            logger.warn { "setOptionString called with null handle: $name=$value" }
+            return null
+        }
+        return try {
+            checkAvailable().mpv_set_option_string(handle, name, value)
+        } catch (e: Exception) {
+            logger.warn(e) { "Failed to set mpv option: $name=$value" }
+            null
+        }
+    }
 
-    /** Set a string property at runtime. */
-    fun setPropertyString(handle: Pointer, name: String, value: String): Int =
-        checkAvailable().mpv_set_property_string(handle, name, value)
+    /** Set a string property at runtime. Returns null if handle is invalid. */
+    fun setPropertyString(handle: Pointer?, name: String, value: String): Int? {
+        if (handle == null) return null
+        return try {
+            checkAvailable().mpv_set_property_string(handle, name, value)
+        } catch (e: Exception) {
+            null
+        }
+    }
 
-    /** Set an integer property at runtime. */
-    fun setPropertyInt(handle: Pointer, name: String, value: Int): Int =
-        checkAvailable().mpv_set_property(handle, name, FORMAT_INT64, LongByReference(value.toLong()).pointer)
+    /** Set an integer property at runtime. Returns null if handle is invalid. */
+    fun setPropertyInt(handle: Pointer?, name: String, value: Int): Int? {
+        if (handle == null) return null
+        return try {
+            checkAvailable().mpv_set_property(handle, name, FORMAT_INT64, LongByReference(value.toLong()).pointer)
+        } catch (e: Exception) {
+            null
+        }
+    }
 
-    /** Set a double property at runtime. */
-    fun setPropertyDouble(handle: Pointer, name: String, value: Double): Int =
-        checkAvailable().mpv_set_property(handle, name, FORMAT_DOUBLE, DoubleArrayHolder(value).pointer)
+    /** Set a double property at runtime. Returns null if handle is invalid. */
+    fun setPropertyDouble(handle: Pointer?, name: String, value: Double): Int? {
+        if (handle == null) return null
+        return try {
+            checkAvailable().mpv_set_property(handle, name, FORMAT_DOUBLE, DoubleArrayHolder(value).pointer)
+        } catch (e: Exception) {
+            null
+        }
+    }
 
-    /** Get a string property. */
-    fun getPropertyString(handle: Pointer, name: String): String? {
+    /** Get a string property. Returns null if handle is invalid. */
+    fun getPropertyString(handle: Pointer?, name: String): String? {
+        if (handle == null) return null
         val ptr = PointerByReference()
         val result = checkAvailable().mpv_get_property(handle, name, FORMAT_STRING, ptr.pointer)
         if (result >= 0 && ptr.value != null) {
@@ -197,64 +308,85 @@ object MPVLib {
         return null
     }
 
-    /** Get an integer property. */
-    fun getPropertyInt(handle: Pointer, name: String, default: Int = 0): Int {
+    /** Get an integer property. Returns default if handle is invalid. */
+    fun getPropertyInt(handle: Pointer?, name: String, default: Int = 0): Int {
+        if (handle == null) return default
         val ref = LongByReference()
         val result = checkAvailable().mpv_get_property(handle, name, FORMAT_INT64, ref.pointer)
         return if (result >= 0) ref.value.toInt() else default
     }
 
-    /** Get a double property. */
-    fun getPropertyDouble(handle: Pointer, name: String, default: Double = 0.0): Double {
+    /** Get a double property. Returns default if handle is invalid. */
+    fun getPropertyDouble(handle: Pointer?, name: String, default: Double = 0.0): Double {
+        if (handle == null) return default
         val holder = DoubleArrayHolder()
         val result = checkAvailable().mpv_get_property(handle, name, FORMAT_DOUBLE, holder.pointer)
         return if (result >= 0) holder.value else default
     }
 
-    /** Get a flag (boolean) property. */
-    fun getPropertyFlag(handle: Pointer, name: String, default: Boolean = false): Boolean {
+    /** Get a flag (boolean) property. Returns default if handle is invalid. */
+    fun getPropertyFlag(handle: Pointer?, name: String, default: Boolean = false): Boolean {
+        if (handle == null) return default
         val ref = LongByReference()
         val result = checkAvailable().mpv_get_property(handle, name, FORMAT_FLAG, ref.pointer)
         return if (result >= 0) ref.value != 0L else default
     }
 
-    /** Send a command to mpv. */
-    fun command(handle: Pointer, vararg args: String): Int {
+    /** Send a command to mpv. Returns error code, or -999 if handle is invalid. */
+    fun command(handle: Pointer?, vararg args: String): Int {
+        if (handle == null) {
+            logger.warn { "command called with null handle: ${args.joinToString(" ")}" }
+            return -999
+        }
         // JNA requires null-terminated array of C strings
         val cArgs = args.map { it.ifEmpty { null } }.toTypedArray()
-        return checkAvailable().mpv_command(handle, cArgs)
+        return try {
+            checkAvailable().mpv_command(handle, cArgs)
+        } catch (e: Exception) {
+            logger.warn(e) { "mpv_command failed" }
+            -999
+        }
     }
 
     /** Observe a property for changes. */
-    fun observeProperty(handle: Pointer, replyUserdata: Long, name: String, format: Int): Int =
-        checkAvailable().mpv_observe_property(handle, replyUserdata, name, format)
+    fun observeProperty(handle: Pointer?, replyUserdata: Long, name: String, format: Int): Int {
+        if (handle == null) return -999
+        return checkAvailable().mpv_observe_property(handle, replyUserdata, name, format)
+    }
 
     /** Unobserve a property. */
-    fun unobserveProperty(handle: Pointer, replyUserdata: Long): Int =
-        checkAvailable().mpv_unobserve_property(handle, replyUserdata)
+    fun unobserveProperty(handle: Pointer?, replyUserdata: Long): Int {
+        if (handle == null) return -999
+        return checkAvailable().mpv_unobserve_property(handle, replyUserdata)
+    }
 
     /** Request a property change event. */
-    fun requestEvent(handle: Pointer, event: Int, enable: Boolean): Int =
-        checkAvailable().mpv_request_event(handle, event, if (enable) 1 else 0)
+    fun requestEvent(handle: Pointer?, event: Int, enable: Boolean): Int {
+        if (handle == null) return -999
+        return checkAvailable().mpv_request_event(handle, event, if (enable) 1 else 0)
+    }
 
     /** Wait for the next mpv event (blocking). Timeout in seconds (0 = no wait). */
-    fun waitEvent(handle: Pointer, timeout: Double = 0.0): MPVEvent? {
+    fun waitEvent(handle: Pointer?, timeout: Double = 0.0): MPVEvent? {
+        if (handle == null) return null
         val ptr = checkAvailable().mpv_wait_event(handle, timeout)
         if (ptr == null || ptr == Pointer.NULL) return null
         val event = MPVEvent(ptr)
         return if (event.eventId == MPV_EVENT_NONE) null else event
     }
 
-    /** Get the mpv client name. */
-    fun clientName(handle: Pointer): String =
-        checkAvailable().mpv_client_name(handle)?.getString(0) ?: "unknown"
+    /** Get the mpv client name. Returns null if handle is invalid. */
+    fun clientName(handle: Pointer?): String {
+        if (handle == null) return "unknown"
+        return checkAvailable().mpv_client_name(handle)?.getString(0) ?: "unknown"
+    }
 
     /** Get the mpv version number. */
     fun getVersion(): Long = checkAvailable().mpv_client_api_version()
 
     /** Suspend/resume the main loop (useful during render context operations). */
-    fun suspend(handle: Pointer) = checkAvailable().mpv_suspend(handle)
-    fun resume(handle: Pointer) = checkAvailable().mpv_resume(handle)
+    fun suspend(handle: Pointer?) { if (handle != null) checkAvailable().mpv_suspend(handle) }
+    fun resume(handle: Pointer?) { if (handle != null) checkAvailable().mpv_resume(handle) }
 
     // -------------------------------------------------------------------------
     // Render API
@@ -279,7 +411,11 @@ object MPVLib {
     }
 
     /** Create a software render context for the given mpv handle. */
-    fun renderContextCreate(mpvHandle: Pointer): Pointer? {
+    fun renderContextCreate(mpvHandle: Pointer?): Pointer? {
+        if (mpvHandle == null) {
+            logger.warn { "renderContextCreate called with null handle" }
+            return null
+        }
         val params = buildRenderParams(
             RENDER_PARAM_API_TYPE to Memory(3L).also { it.setString(0, RENDER_API_TYPE_SW) },
         )
@@ -289,15 +425,18 @@ object MPVLib {
     }
 
     /** Free a render context. */
-    fun renderContextFree(ctx: Pointer) {
+    fun renderContextFree(ctx: Pointer?) {
+        if (ctx == null) return
         try {
             checkAvailable().mpv_render_context_free(ctx)
         } catch (_: Exception) { }
     }
 
     /** Render a frame into the provided buffer. */
-    fun renderContextRender(ctx: Pointer, params: Pointer): Int =
-        checkAvailable().mpv_render_context_render(ctx, params)
+    fun renderContextRender(ctx: Pointer?, params: Pointer): Int {
+        if (ctx == null) return -999
+        return checkAvailable().mpv_render_context_render(ctx, params)
+    }
 
     // -------------------------------------------------------------------------
     // Format constants
@@ -531,7 +670,13 @@ class MPVEvent(nativePointer: Pointer) {
     val eventId: Int
     val error: Int
     val replyUserdata: Long
-    val data: Pointer
+    /** Event-specific data payload, or null if the event has no payload.
+     *
+     * Some mpv events (e.g. MPV_EVENT_NONE, property changes with null data)
+     * have a NULL data pointer. JNA's [Pointer.getPointer] throws
+     * NullPointerException when the stored pointer is NULL, so we must
+     * catch that case here to prevent the event loop from crashing. */
+    val data: Pointer?
 
     init {
         // mpv_event struct layout (platform-dependent offsets):
@@ -542,7 +687,13 @@ class MPVEvent(nativePointer: Pointer) {
         eventId = nativePointer.getInt(0)
         error = nativePointer.getInt(4)
         replyUserdata = nativePointer.getLong(8)
-        data = nativePointer.getPointer(16)
+        data = try {
+            nativePointer.getPointer(16)
+        } catch (e: NullPointerException) {
+            // getPointer throws NPE when the stored pointer is NULL.
+            // This is normal for events without a data payload.
+            null
+        }
     }
 
     /** Returns a human-readable name for the event ID. */

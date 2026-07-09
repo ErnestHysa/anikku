@@ -35,6 +35,7 @@ import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.BookmarkBorder
 import androidx.compose.material.icons.outlined.CloudDownload
+import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -80,6 +81,7 @@ import app.anikku.macos.platform.data.LocalDownloadManager
 import app.anikku.macos.platform.data.LocalLibraryRepository
 import app.anikku.macos.platform.download.MacOSDownloadManager
 import app.anikku.macos.platform.extension.MacOSExtensionManager
+import app.anikku.macos.platform.logging.UIActionLogger
 import app.anikku.macos.platform.preference.LocalBookmarkStore
 import app.anikku.macos.ui.AnikkuScreen
 import app.anikku.macos.ui.components.AnimeCoverImage
@@ -87,7 +89,6 @@ import app.anikku.macos.ui.components.LocalToastHost
 import app.anikku.macos.ui.components.ToastDuration
 import app.anikku.macos.ui.screens.models.AnimeModel
 import app.anikku.macos.ui.screens.models.EpisodeModel
-import app.anikku.macos.ui.screens.models.MockData
 import app.anikku.macos.ui.screens.models.toAnimeModel
 import app.anikku.macos.ui.screens.models.toEpisodeModel
 import app.anikku.macos.ui.screens.player.PlayerScreen
@@ -103,15 +104,35 @@ import java.awt.datatransfer.StringSelection
 import java.net.URI
 
 /**
+ * Ensures the [url] property is set on an [SAnime] result from a source call.
+ *
+ * Some source implementations (e.g. AnimeHttpSource subclasses like allanime's)
+ * return a new SAnime from [animeDetailsParse] without copying [url] back from
+ * the input. Accessing a lateinit var that hasn't been set throws
+ * [kotlin.UninitializedPropertyAccessException].
+ *
+ * This helper silently copies the URL if the result's url is uninitialized.
+ */
+private fun ensureUrlIsSet(anime: SAnime, fallbackUrl: String) {
+    try {
+        // Trigger getter — will throw if url is not initialized
+        @Suppress("UNUSED_EXPRESSION")
+        anime.url
+    } catch (_: UninitializedPropertyAccessException) {
+        anime.url = fallbackUrl
+    }
+}
+
+/**
  * Anime detail screen — Phase 5.7.
  *
  * Displays anime information (cover, title, description, status)
  * and a list of episodes.
  *
  * When [sourceId] and [extensionManager] are provided, fetches real data
- * from the extension source API. Falls back to [MockData] otherwise.
+ * from the extension source API. Shows error state otherwise.
  *
- * @param animeId       The ID of the anime to display (used for MockData fallback).
+ * @param animeId       The ID of the anime to display.
  * @param sourceId      Source ID for extension API lookup (optional).
  * @param animeUrl      The anime URL on the source (required for source API).
  * @param animeTitle    The anime title (used for display while loading).
@@ -138,19 +159,11 @@ data class AnimeDetailScreen(
 
         // State for source-backed data
         var isLoading by remember { mutableStateOf(true) }
-        var usingFallback by remember { mutableStateOf(true) }
+        var errorMessage by remember { mutableStateOf<String?>(null) }
 
-        // Anime data — starts with MockData fallback
-        var anime by remember { mutableStateOf(MockData.sampleAnime.find { it.id == animeId }) }
-        var episodes by remember {
-            val bookmarkedIds = bookmarkStore.getBookmarkedIds()
-            val baseEpisodes = MockData.sampleEpisodes.filter { it.animeId == animeId }
-            mutableStateOf(
-                baseEpisodes.map { ep ->
-                    if (ep.id in bookmarkedIds) ep.copy(bookmark = true) else ep
-                }
-            )
-        }
+        // Anime data — starts null, populated from source API
+        var anime by remember { mutableStateOf<AnimeModel?>(null) }
+        var episodes by remember { mutableStateOf(emptyList<EpisodeModel>()) }
 
         // Track download states per episode (keyed by episodeNumber)
         var downloadStateMap by remember { mutableStateOf(mapOf<Double, Boolean>()) }
@@ -164,11 +177,16 @@ data class AnimeDetailScreen(
             }
         }
 
+        UIActionLogger.logScreenOpen("AnimeDetailScreen", mapOf(
+            "animeId" to animeId, "sourceId" to sourceId, "title" to animeTitle
+        ))
+
         // Fetch from source API if available
         LaunchedEffect(sourceId, animeUrl) {
             if (sourceId != null && animeUrl != null) {
                 val source = extensionManager?.getSource(sourceId)
                 if (source != null) {
+                    UIActionLogger.logExtension(animeTitle ?: "Unknown", "fetchDetails", "sourceId=$sourceId")
                     try {
                         // Fetch anime details
                         val sAnime = SAnime.create().apply {
@@ -176,6 +194,11 @@ data class AnimeDetailScreen(
                             title = animeTitle ?: ""
                         }
                         val details = source.getAnimeDetails(sAnime)
+
+                        // Some source implementations return a new SAnime without copying
+                        // url back from the input. Ensure it's set before using.
+                        ensureUrlIsSet(details, sAnime.url)
+
                         val sourceAnime = details.toAnimeModel(sourceId)
 
                         // Fetch episode list
@@ -184,12 +207,18 @@ data class AnimeDetailScreen(
 
                         anime = sourceAnime
                         episodes = episodeModels
-                        usingFallback = false
+                    } catch (e: NoClassDefFoundError) {
+                        errorMessage = "Missing dependency: ${e.message}"
+                        toastHost.show("Missing dependency: ${e.message}", ToastDuration.LONG)
                     } catch (e: Exception) {
-                        // Source API failed — keep MockData fallback
-                        toastHost.show("Source error: ${e.message}", ToastDuration.SHORT)
+                        errorMessage = "${e::class.simpleName}: ${e.message}"
+                        toastHost.show("Source error: ${e.message}", ToastDuration.LONG)
                     }
+                } else {
+                    errorMessage = "Source not found — install this anime's extension via the Extensions tab"
                 }
+            } else {
+                errorMessage = "Cannot load anime — no source or URL provided"
             }
             isLoading = false
         }
@@ -241,17 +270,44 @@ data class AnimeDetailScreen(
                     }
                 }
 
+                errorMessage != null -> {
+                    // Show error state when source API call failed
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                Icons.Outlined.Warning,
+                                contentDescription = null,
+                                modifier = Modifier.size(48.dp),
+                                tint = MaterialTheme.colorScheme.error,
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                errorMessage ?: "Unknown error",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 32.dp),
+                            )
+                            Spacer(Modifier.height(16.dp))
+                            OutlinedButton(onClick = { navigator.pop() }) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
+                                Spacer(Modifier.width(4.dp))
+                                Text("Go back")
+                            }
+                        }
+                    }
+                }
+
                 anime == null -> {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text("Anime not found", style = MaterialTheme.typography.bodyLarge)
                     }
                 }
 
-                else -> {
+                anime != null -> {
                     AnimeDetailContent(
                         anime = anime!!,
                         episodes = episodes,
-                        usingFallback = usingFallback,
+                        usingFallback = false,
                         isFavorite = anime?.favorite ?: false,
                         onToggleFavorite = {
                             val currentAnime = anime

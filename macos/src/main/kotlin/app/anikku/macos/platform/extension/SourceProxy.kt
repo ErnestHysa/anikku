@@ -2,6 +2,7 @@ package app.anikku.macos.platform.extension
 
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
+import eu.kanade.tachiyomi.animesource.model.Hoster
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -89,7 +90,54 @@ class ReflectiveSourceProxy(
     }
 
     override suspend fun getVideoList(episode: SEpisode): List<Video> {
-        return reflectiveCallSuspend("getVideoList", arrayOf(SEpisode::class.java), episode)
+        return try {
+            reflectiveCallSuspend("getVideoList", arrayOf(SEpisode::class.java), episode)
+        } catch (e: LinkageError) {
+            // Fallback for extensions where getVideoList(SEpisode) throws NoSuchMethodError
+            // or NoClassDefFoundError (e.g., the compiled AllAnime extension's internal
+            // implementation references methods/classes that don't exist in the JVM classpath).
+            // Use the hoster-based flow instead: getHosterList → getVideoList(Hoster) for each.
+            logger.warn { "getVideoList(SEpisode) failed with ${e::class.simpleName} on ${delegateClass.name}: ${e.message}. Falling back to hoster-based flow." }
+            getVideoListViaHoster(episode)
+        }
+    }
+
+    /**
+     * Fallback: get videos via the hoster-based flow.
+     * Calls [AnimeSource.getHosterList] then [AnimeSource.getVideoList] for each hoster.
+     */
+    private suspend fun getVideoListViaHoster(episode: SEpisode): List<Video> {
+        val hosters: List<Hoster> = try {
+            reflectiveCallSuspend("getHosterList", arrayOf(SEpisode::class.java), episode)
+        } catch (e: LinkageError) {
+            logger.warn { "getHosterList linkage error on ${delegateClass.name}: ${e::class.simpleName}: ${e.message}" }
+            emptyList()
+        } catch (e: NoSuchMethodException) {
+            logger.warn { "getHosterList not found on ${delegateClass.name}" }
+            emptyList()
+        } catch (e: Exception) {
+            logger.warn { "getHosterList failed on ${delegateClass.name}: ${e::class.simpleName}: ${e.message}" }
+            emptyList()
+        }
+
+        if (hosters.isEmpty()) return emptyList()
+
+        val allVideos = mutableListOf<Video>()
+        for (hoster in hosters) {
+            try {
+                val videos: List<Video> = reflectiveCallSuspend(
+                    "getVideoList",
+                    arrayOf(Hoster::class.java),
+                    hoster,
+                )
+                allVideos.addAll(videos)
+            } catch (e: Exception) {
+                logger.warn { "getVideoList(Hoster) failed for hoster ${hoster.hosterName}: ${e.message}" }
+            }
+        }
+
+        logger.info { "Fetched ${allVideos.size} video(s) via hoster-based fallback from ${hosters.size} hoster(s)" }
+        return allVideos
     }
 
     override suspend fun getPopularAnime(page: Int): AnimesPage {

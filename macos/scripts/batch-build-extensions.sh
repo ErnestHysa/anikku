@@ -46,18 +46,18 @@
 
 set -euo pipefail 2>/dev/null || set -eu  # pipefail supported on bash 4+
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")\" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 EXTENSIONS_DIR="${HOME}/Library/Application Support/Anikku/extensions"
 TEMP_DIR="/tmp/anikku-batch-build"
 OUTPUT_DIR="${TEMP_DIR}/output"
 BUILD_LOG="${TEMP_DIR}/build-log.txt"
 
-# Extension repos (APK-based) — format: <index-url>:<repo-name>
+# Extension repos (APK-based) — format: <index-url>|<repo-name>
 REPOS=(
-    "https://raw.githubusercontent.com/salmanbappi/extensions-repo/main/index.min.json:salmanbappi"
-    "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json:keiyoushi"
-    "https://raw.githubusercontent.com/msrofficial/anime-repo/repo/index.min.json:msrofficial"
+    "https://raw.githubusercontent.com/salmanbappi/extensions-repo/main/index.min.json|salmanbappi"
+    "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json|keiyoushi"
+    "https://raw.githubusercontent.com/msrofficial/anime-repo/repo/index.min.json|msrofficial"
 )
 
 D2J_DEX2JAR="$(which d2j-dex2jar 2>/dev/null || echo "/opt/homebrew/bin/d2j-dex2jar")"
@@ -159,8 +159,8 @@ ALL_EXTENSIONS=()
 DECLARED_PKGS=""
 
 for repo_entry in "${REPOS[@]}"; do
-    REPO_URL="${repo_entry%%:*}"
-    REPO_NAME="${repo_entry##*:}"
+    REPO_URL="${repo_entry%%|*}"
+    REPO_NAME="${repo_entry##*|}"
 
     log "Fetching index from: ${REPO_NAME}..."
 
@@ -188,7 +188,7 @@ for ext in data:
     if keyword in pkg or keyword in name or keyword in apk:
         print(json.dumps(ext))
 " 2>/dev/null || echo "")
-    else:
+    else
         # Filter for English anime-specific packages (broad filter)
         ANIME_EXTS=$(echo "$REPO_INDEX" | python3 -c "
 import sys, json
@@ -206,6 +206,7 @@ for ext in data:
             print(json.dumps(ext))
             break
 " 2>/dev/null || echo "")
+    fi
 
     while IFS= read -r line; do
         if [ -n "$line" ]; then
@@ -228,10 +229,12 @@ log ""
 # ---------------------------------------------------------------------------
 # Step 2: Download and convert each extension using dex2jar
 # ---------------------------------------------------------------------------
+
 SUCCESS_COUNT=0
 FAIL_COUNT=0
 SUCCESSFUL_JARS=""
 FAILED_NAMES=""
+TRUST_ENTRIES_JSON="["
 
 for ext_json in "${ALL_EXTENSIONS[@]}"; do
     EXT_NAME=$(echo "$ext_json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('name','unknown'))" 2>/dev/null || echo "unknown")
@@ -290,7 +293,7 @@ with zipfile.ZipFile('${EXT_TEMP}/extension.apk') as z:
         data = z.read('AndroidManifest.xml')
         text = data.decode('latin-1')
         # versionName is usually quoted
-        m = re.search(r'versionName=\"([^\"]+)\"', text)
+        m = re.search('versionName=\x22([^\x22]+)\x22', text)
         print(m.group(1) if m else '1.0.0')
     except Exception:
         print('1.0.0')
@@ -302,24 +305,14 @@ with zipfile.ZipFile('${TEMP_DIR}/ext-${SHORT_NAME}/extension.apk') as z:
     try:
         data = z.read('AndroidManifest.xml')
         text = data.decode('latin-1')
-        m = re.search(r'versionCode=\"?([0-9]+)\"?', text)
+        m = re.search('versionCode=\x22?([0-9]+)\x22?', text)
         print(m.group(1) if m else '100')
     except Exception:
         print('100')
 " 2>/dev/null || echo "100")
 
-    LIB_VERSION=$(echo "$VERSION_NAME" | python3 -c "
-import sys
-v = sys.stdin.read().strip()
-try:
-    parts = v.rsplit('.', 1)
-    if len(parts) > 1:
-        print(float(parts[0]))
-    else:
-        print('15.0')
-except:
-    print('15.0')
-" 2>/dev/null || echo "15.0")
+    # libVersion: default to 15 since we can't read extension's gradle deps from APK
+    LIB_VERSION="15.0"
 
     # Also try to find the real package from the APK
     APK_PKG=$(python3 -c "
@@ -328,7 +321,7 @@ with zipfile.ZipFile('${EXT_TEMP}/extension.apk') as z:
     try:
         data = z.read('AndroidManifest.xml')
         text = data.decode('latin-1')
-        m = re.search(r'package=\"([^\"]+)\"', text)
+        m = re.search('package=\x22([^\x22]+)\x22', text)
         print(m.group(1) if m else '${EXT_PKG}')
     except Exception:
         print('${EXT_PKG}')
@@ -377,16 +370,32 @@ with zipfile.ZipFile('${EXT_TEMP}/extension.apk') as z:
     # -----------------------------------------------------------------------
     info "  Detecting source classes..."
 
-    # List all classes, remove inner classes ($), exclude Android/Java stdlib
+    # Only look for classes within the extension's own package namespace.
+    # This avoids accidentally picking library classes (e.g. JsUnpacker) as sources.
+    # Filter out \$\$ classes (DEX lambdas like \$\$ExternalSyntheticLambda0) and
+    # \$ inner classes (serializers, etc.) to prefer the actual source class.
     SOURCE_CLASSES=$("$JAR_CMD" tf "$D2J_OUTPUT" 2>/dev/null | \
         grep '\.class$' | \
         sed 's|/|.|g; s|\.class||' | \
-        grep -vE '^(android\.|java\.|javax\.|kotlin\.|dalvik\.|com\.android\.)' | \
-        grep -vE '(R\$|BuildConfig|Manifest|databinding)' | \
-        head -5 | \    tr '\n' ';' | \
-    sed 's/;$//' || true)
+        grep "^${APK_PKG}\." | \
+        grep -vE '(\$\$|\$[A-Za-z]|R\$|BuildConfig|Manifest|databinding)' | \
+        head -5 | \
+        tr '\n' ';' | \
+        sed 's/;$//' || true)
 
-if [ -z "$SOURCE_CLASSES" ]; then
+    if [ -z "$SOURCE_CLASSES" ]; then
+        info "  WARNING: No classes in package namespace, falling back to all non-stdlib classes"
+        SOURCE_CLASSES=$("$JAR_CMD" tf "$D2J_OUTPUT" 2>/dev/null | \
+            grep '\.class$' | \
+            sed 's|/|.|g; s|\.class||' | \
+            grep -vE '^(android\.|java\.|javax\.|kotlin\.|dalvik\.|com\.android\.)' | \
+            grep -vE '(R\$|BuildConfig|Manifest|databinding)' | \
+            head -5 | \
+            tr '\n' ';' | \
+            sed 's/;$//' || true)
+    fi
+
+    if [ -z "$SOURCE_CLASSES" ]; then
         info "  WARNING: No non-Android classes found, using all classes (excluding well-known)"
         SOURCE_CLASSES=$("$JAR_CMD" tf "$D2J_OUTPUT" 2>/dev/null | \
             grep '\.class$' | \
@@ -458,14 +467,14 @@ JSONEOF
     cp "$D2J_OUTPUT" "$FINAL_JAR"
 
     # Add META-INF/extension.json to the JAR
+    mkdir -p "${META_DIR}/META-INF"
+    cp "${META_DIR}/extension.json" "${META_DIR}/META-INF/"
     cd "$META_DIR"
-    "$JAR_CMD" uf "$FINAL_JAR" extension.json 2>/dev/null || {
-        # If jar update fails (e.g., no manifest), create a new JAR with META-INF
+    "$JAR_CMD" uf "$FINAL_JAR" META-INF/extension.json 2>/dev/null || {
+        # If jar update fails (e.g., no manifest)
         mkdir -p "${META_DIR}/META-INF"
         cp "${META_DIR}/extension.json" "${META_DIR}/META-INF/"
         cd "$META_DIR"
-        TMP_JAR="${EXT_TEMP}/final.jar"
-        "$JAR_CMD" cf "$TMP_JAR" META-INF/
         # Merge: extract both JARs into a temp dir and repack
         MERGE_DIR="${EXT_TEMP}/merge"
         mkdir -p "$MERGE_DIR"
@@ -487,6 +496,21 @@ JSONEOF
         FINAL_SIZE=$(stat -f%z "$FINAL_JAR" 2>/dev/null || echo "0")
         info "  ✅ Built: ${JAR_NAME} (${CLASS_COUNT} classes, ${FINAL_SIZE} bytes)"
         info "     Installed to: ${EXTENSIONS_DIR}/${JAR_NAME}"
+
+        # Compute SHA-256 hash for trust
+        if command -v shasum >/dev/null 2>&1; then
+            JAR_HASH=$(shasum -a 256 "$FINAL_JAR" | awk '{print $1}')
+        elif command -v sha256sum >/dev/null 2>&1; then
+            JAR_HASH=$(sha256sum "$FINAL_JAR" | awk '{print $1}')
+        else
+            JAR_HASH="unknown"
+        fi
+        if [ "$JAR_HASH" != "unknown" ]; then
+            if [ "$TRUST_ENTRIES_JSON" != "[" ]; then
+                TRUST_ENTRIES_JSON="${TRUST_ENTRIES_JSON},"
+            fi
+            TRUST_ENTRIES_JSON="${TRUST_ENTRIES_JSON}{\"pkgName\":\"${APK_PKG}\",\"versionCode\":${VERSION_CODE:-100},\"signatureHash\":\"${JAR_HASH}\"}"
+        fi
     else
         info "  ❌ JAR packaging failed"
         FAIL_COUNT=$((FAIL_COUNT + 1))
@@ -560,11 +584,25 @@ for fname in os.listdir(output_dir):
 with open(os.path.join(output_dir, 'index.min.json'), 'w') as f:
     json.dump(entries, f, separators=(',', ':'))
 
-print(f'Generated index with {len(entries)} entries')
+print('Generated index with ' + str(len(entries)) + ' entries')
 " 2>&1 || true
 
 # Also copy index to extensions dir
 cp "${OUTPUT_DIR}/index.min.json" "${EXTENSIONS_DIR}/macos-repo-index.json" 2>/dev/null || true
+
+# -----------------------------------------------------------------------
+# Write trust store: auto-trust all successfully built extensions
+# -----------------------------------------------------------------------
+TRUST_ENTRIES_JSON="${TRUST_ENTRIES_JSON}]"
+TRUST_DIR="${HOME}/Library/Application Support/Anikku/data/trust"
+mkdir -p "$TRUST_DIR" 2>/dev/null || true
+TRUST_FILE="${TRUST_DIR}/trusted_extensions.json"
+if echo "$TRUST_ENTRIES_JSON" > "$TRUST_FILE" 2>/dev/null; then
+    TRUSTED_COUNT=$(echo "$TRUST_ENTRIES_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d))" 2>/dev/null || echo "0")
+    log "  Trusted ${TRUSTED_COUNT} extension(s) → ${TRUST_FILE}"
+else
+    log "  WARNING: Could not write trust store to ${TRUST_FILE}"
+fi
 
 # ---------------------------------------------------------------------------
 # Summary

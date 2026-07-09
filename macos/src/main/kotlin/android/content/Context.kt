@@ -10,7 +10,7 @@ package android.content
  *
  * Returns a no-op [SharedPreferences] implementation that ignores all
  * operations. Extension preferences are handled through the app's own
- * [tachiyomi.core.common.preference.PreferenceStore] via the Injekt bridge.
+ * preference store via the Injekt bridge.
  */
 open class Context {
 
@@ -43,7 +43,43 @@ open class Context {
 
     fun getBaseContext(): Context = this
 
-    fun getFilesDir(): java.io.File? = null
+    fun getFilesDir(): java.io.File {
+        val dir = java.io.File(System.getProperty("user.home"), ".Anikku/files")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
 
-    fun getDir(name: String, mode: Int): java.io.File? = null
+    fun getDir(name: String, mode: Int): java.io.File {
+        val dir = java.io.File(getFilesDir(), name)
+        if (!dir.exists()) dir.mkdirs()
+        return dir
+    }
+
+    fun getExternalFilesDir(type: String?): java.io.File = getFilesDir()
+
+    fun getString(resId: Int): String = ""
+
+    fun getResources(): android.content.res.Resources = android.content.res.Resources()
+
+    fun getPackageManager(): android.content.pm.PackageManager = android.content.pm.PackageManager()
+
+    fun getContentResolver(): android.content.ContentResolver = android.content.ContentResolver()
+
+    fun getSystemService(name: String): Any? = null
+
+    fun checkSelfPermission(permission: String): Int =
+        android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    fun startActivity(intent: Intent) {}
+
+    fun sendBroadcast(intent: Intent) {}
+
+    fun registerReceiver(
+        receiver: android.content.BroadcastReceiver?,
+        filter: IntentFilter?,
+    ): Intent? = null
+
+    fun unregisterReceiver(receiver: android.content.BroadcastReceiver?) {}
+
+    fun getPackageName(): String = "app.anikku.macos"
 }

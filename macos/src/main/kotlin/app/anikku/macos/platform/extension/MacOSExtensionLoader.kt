@@ -204,18 +204,22 @@ object MacOSExtensionLoader {
         val classLoader = buildClassLoader(jarFile, libsDir)
         classLoaders[pkgName] = classLoader
 
-        // Load sources
+        // Load sources (resilient: individual class failures skip, not fail the extension)
         val sources = try {
             loadSources(classLoader, metadata)
-        } catch (e: NoClassDefFoundError) {
-            logger.error(e) { "Failed to load sources from $pkgName — missing class dependency (converted APK with android.* references)" }
-            classLoaders.remove(pkgName)?.close()
-            return LoadResult.Error
         } catch (e: Exception) {
-            logger.error(e) { "Failed to load sources from $pkgName" }
+            logger.error(e) { "Unexpected error loading sources from $pkgName" }
             classLoaders.remove(pkgName)?.close()
             return LoadResult.Error
         }
+
+        if (sources.isEmpty()) {
+            logger.warn { "No valid sources found in $pkgName — all listed classes failed to instantiate" }
+            classLoaders.remove(pkgName)?.close()
+            return LoadResult.Error
+        }
+
+        logger.info { "Loaded ${sources.size} source(s) from $pkgName" }
 
         // Build lang from sources
         val sourceLangs = sources
@@ -271,12 +275,23 @@ object MacOSExtensionLoader {
 
     /**
      * Build a URLClassLoader for the extension JAR and its dependencies.
-     * Uses the system class loader as parent so shared classes (Source, okhttp, etc.)
-     * come from the application classpath.
+     *
+     * Shared dependency JARs (source-api, common, kotlin-stdlib, etc.) are added
+     * DIRECTLY to the URLClassLoader's URLs so extensions can find them regardless
+     * of class loader parent delegation behavior. This is the most robust approach
+     * because:
+     *
+     * 1. The parent class loader may not expose all app dependencies (Gradle's
+     *    class loader hierarchy is complex and varies by launch method).
+     * 2. Android extensions use `compileOnly` for these libraries — they expect
+     *    the host to provide them at runtime.
+     * 3. Adding JARs directly to the URLClassLoader URLs bypasses all delegation
+     *    issues and guarantees the classes are available.
      */
     private fun buildClassLoader(jarFile: File, libsDir: File?): URLClassLoader {
         val urls = mutableListOf(jarFile.toURI().toURL())
 
+        // 1. Scan the extension's own libs/ directory for dependency JARs
         val depsDir = libsDir?.let { File(it, "libs") } ?: File(jarFile.parentFile, "libs")
         if (depsDir.isDirectory) {
             depsDir.listFiles()
@@ -284,10 +299,50 @@ object MacOSExtensionLoader {
                 ?.forEach { urls.add(it.toURI().toURL()) }
         }
 
+        // 2. Add shared dependency JARs from the macOS app's libs/ directory.
+        //    These are built by the `rebuildSourceApiJars` Gradle task and
+        //    contain the source-api and core/common classes that extensions
+        //    reference via `compileOnly` (ConfigurableAnimeSource, AnimeSource, etc.).
+        val sharedLibsDir = findSharedLibsDir()
+        if (sharedLibsDir.isDirectory) {
+            sharedLibsDir.listFiles()
+                ?.filter { it.extension == "jar" }
+                ?.forEach { urls.add(it.toURI().toURL()) }
+        }
+
+        // 3. Also scan extensions/libs/ for globally shared dependency JARs
+        val globalLibsDir = File(jarFile.parentFile, "libs")
+        if (globalLibsDir.isDirectory && globalLibsDir != depsDir) {
+            globalLibsDir.listFiles()
+                ?.filter { it.extension == "jar" }
+                ?.forEach { urls.add(it.toURI().toURL()) }
+        }
+
         return URLClassLoader(
             urls.toTypedArray(),
-            ClassLoader.getSystemClassLoader(),
+            MacOSExtensionLoader::class.java.classLoader,
         )
+    }
+
+    /**
+     * Find the directory containing shared library JARs (source-api-jvm.jar, common-jvm.jar, etc.).
+     *
+     * Search order:
+     * 1. `macos/libs/` relative to working directory (development via gradlew run)
+     * 2. `../libs/` relative to app bundle Contents (packaged .app)
+     * 3. `libs/` relative to working directory (any other setup)
+     */
+    private fun findSharedLibsDir(): File {
+        val cwd = File(System.getProperty("user.dir", "."))
+
+        val candidates = listOf(
+            File(cwd, "macos/libs"),
+            File(cwd, "libs"),
+            File("../Resources/libs"),
+            File("../lib/libs"),
+        )
+
+        return candidates.firstOrNull { it.isDirectory } ?: File(cwd, "libs")
     }
 
     /**
@@ -346,11 +401,11 @@ object MacOSExtensionLoader {
                         }
                     }
                 } catch (e: NoClassDefFoundError) {
-                    logger.error(e) { "Failed to instantiate source class $className — missing JVM dependency (converted APK has android.* refs)" }
-                    throw e
+                    logger.warn { "Skipping $className — missing JVM dependency: ${e.message}" }
+                    emptyList()
                 } catch (e: Exception) {
-                    logger.error(e) { "Failed to instantiate source class: $className" }
-                    throw e
+                    logger.warn { "Skipping $className — instantiation failed: ${e.message}" }
+                    emptyList()
                 }
         }
     }

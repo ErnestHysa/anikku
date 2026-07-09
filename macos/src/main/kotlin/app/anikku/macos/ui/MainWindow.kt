@@ -13,6 +13,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.style.TextOverflow
+import app.anikku.macos.platform.logging.UIActionLogger
 import app.anikku.macos.ui.components.AnimatedTabFade
 import app.anikku.macos.ui.screens.BrowseScreen
 import app.anikku.macos.ui.screens.HistoryScreen
@@ -65,6 +66,8 @@ fun MainWindow() {
                 orderedTabs.getOrNull(index)?.let { tab ->
                     tabNavigator.current = tab
                     currentTabIndex = index
+                    val tabNames = listOf("Library", "Updates", "History", "Browse", "More")
+                    UIActionLogger.logNavigation("MenuShortcut", tabNames.getOrElse(index) { "?" }, "tab=$index")
                 }
             }
             onDispose {
@@ -82,6 +85,8 @@ fun MainWindow() {
                     currentTabIndex = currentTabIndex,
                     onSelectTab = { index ->
                         orderedTabs.getOrNull(index)?.let { tab ->
+                            val tabNames = listOf("Library", "Updates", "History", "Browse", "More")
+                            UIActionLogger.logNavigation("NavigationRail", tabNames.getOrElse(index) { "?" }, "tab=$index")
                             tabNavigator.current = tab
                             currentTabIndex = index
                         }

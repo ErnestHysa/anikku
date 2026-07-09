@@ -64,6 +64,7 @@ import app.anikku.macos.platform.data.LocalDownloadManager
 import app.anikku.macos.platform.data.LocalHistoryRepository
 import app.anikku.macos.platform.download.MacOSDownloadManager
 import app.anikku.macos.platform.extension.MacOSExtensionManager
+import app.anikku.macos.platform.logging.UIActionLogger
 import app.anikku.macos.platform.media.MacOSHttpServer
 import app.anikku.macos.ui.AnikkuScreen
 import app.anikku.macos.ui.components.LocalToastHost
@@ -73,7 +74,6 @@ import app.anikku.macos.ui.components.PlaybackStateBadge
 import app.anikku.macos.ui.components.VideoQualityBadge
 import app.anikku.macos.ui.components.ToastDuration
 import app.anikku.macos.ui.screens.models.EpisodeModel
-import app.anikku.macos.ui.screens.models.MockData
 import app.anikku.macos.ui.screens.models.toEpisodeModel
 import cafe.adriel.voyager.core.screen.ScreenKey
 import cafe.adriel.voyager.core.screen.uniqueScreenKey
@@ -126,14 +126,16 @@ data class PlayerScreen(
      * Resolve the video URL for a given episode.
      * Priority:
      * 1. Local file (if downloaded) → serve via MacOSHttpServer
-     * 2. Source API (if extension is available)
-     * 3. null (mock/fallback mode)
+     * 2. Source API (if extension is available) — uses the full [SEpisode] from
+     *    the source so all fields (name, episode_number, url, etc.) are populated
+     * 3. null (fallback mode)
      */
     private suspend fun resolveVideoUrl(
-        episodeUrl: String?,
+        sEpisode: SEpisode?,
         episodeNumber: Double,
         httpServer: MacOSHttpServer?,
         onQuality: (resolution: Int?, label: String?) -> Unit = { _, _ -> },
+        onError: ((String) -> Unit)? = null,
     ): String? {
         // Priority 1: Local download
         if (downloadManager != null && episodeNumber > 0) {
@@ -146,19 +148,24 @@ data class PlayerScreen(
             }
         }
 
-        // Priority 2: Source API
-        if (sourceId != null && episodeUrl != null) {
+        // Priority 2: Source API — use full SEpisode with all fields populated
+        if (sourceId != null && sEpisode != null) {
+            val episodeUrl = try { sEpisode.url } catch (_: Exception) { null }
             val source = extensionManager?.getSource(sourceId)
-            if (source != null) {
+            if (source != null && episodeUrl != null) {
                 try {
-                    val sEpisode = SEpisode.create().apply { url = episodeUrl }
                     val videos = source.getVideoList(sEpisode)
                     if (videos.isNotEmpty()) {
                         val best = videos.firstOrNull { it.preferred } ?: videos.first()
                         onQuality(best.resolution, best.videoTitle.takeIf { it.isNotBlank() })
+                        UIActionLogger.logVideoResolution(sourceId, episodeUrl, best.videoUrl.take(80))
                         return best.videoUrl
+                    } else {
+                        UIActionLogger.logVideoResolution(sourceId, episodeUrl, "no_videos_found")
                     }
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    UIActionLogger.logVideoResolution(sourceId, episodeUrl, "error: ${e::class.simpleName}: ${e.message?.take(50)}")
+                    onError?.invoke("Video resolution failed: ${e.message?.take(60)}")
                     // Fall through
                 }
             }
@@ -215,8 +222,10 @@ data class PlayerScreen(
         val isHflip by playerViewModel.isHflip.collectAsState()
         val isVflip by playerViewModel.isVflip.collectAsState()
 
-        // State: episode data from source or MockData
+        // State: episode data from source
+        // Keep the original SEpisode objects so we can pass full data to getVideoList()
         var allEpisodes by remember { mutableStateOf<MutableList<EpisodeModel>>(mutableListOf()) }
+        var sourceEpisodes by remember { mutableStateOf<List<SEpisode>>(emptyList()) }
         var currentEpisodeIndex by remember { mutableIntStateOf(0) }
         var animeTitle by remember { mutableStateOf("Unknown") }
         var videoUrlToLoad by remember { mutableStateOf<String?>(null) }
@@ -225,6 +234,10 @@ data class PlayerScreen(
         var isLoading by remember { mutableStateOf(true) }
         var isOfflinePlayback by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
+
+        UIActionLogger.logScreenOpen("PlayerScreen", mapOf(
+            "animeId" to animeId, "episodeId" to episodeId, "sourceId" to sourceId
+        ))
 
         // On mount: initialize mpv and fetch episode data
         LaunchedEffect(Unit) {
@@ -239,27 +252,32 @@ data class PlayerScreen(
                         val sAnime = eu.kanade.tachiyomi.animesource.model.SAnime.create().apply {
                             url = episodeUrl.substringBeforeLast("/")
                         }
-                        val sourceEpisodes = source.getEpisodeList(sAnime)
-                        allEpisodes = sourceEpisodes.map { it.toEpisodeModel(animeId) }.toMutableList()
-                        val idx = sourceEpisodes.indexOfFirst { it.url == episodeUrl }
+                        val fetchedEpisodes = source.getEpisodeList(sAnime)
+                        sourceEpisodes = fetchedEpisodes
+                        allEpisodes = fetchedEpisodes.map { it.toEpisodeModel(animeId) }.toMutableList()
+                        val idx = fetchedEpisodes.indexOfFirst { it.url == episodeUrl }
                         if (idx >= 0) currentEpisodeIndex = idx
                         usedSource = true
                     }
-                } catch (_: Exception) { }
+                } catch (e: Exception) {
+                    toastHost.show("Failed to fetch episodes: ${e.message?.take(60)}", ToastDuration.LONG)
+                }
             }
 
             // Step 2: Determine starting episode number for local-file check
             val currentEpisodeNumber = allEpisodes.getOrNull(currentEpisodeIndex)?.episodeNumber ?: 0.0
 
-            // Step 3: Resolve video URL — checks local files first, then source
+            // Step 3: Resolve video URL — use the full SEpisode with all fields populated
+            val currentSEpisode = sourceEpisodes.getOrNull(currentEpisodeIndex)
             val resolvedUrl = resolveVideoUrl(
-                episodeUrl = episodeUrl,
+                sEpisode = currentSEpisode,
                 episodeNumber = currentEpisodeNumber,
                 httpServer = httpServer,
                 onQuality = { res, label ->
                     videoQualityResolution = res
                     videoQualityLabel = label
                 },
+                onError = { msg -> toastHost.show(msg, ToastDuration.LONG) },
             )
 
             // Determine if this is offline playback
@@ -269,10 +287,8 @@ data class PlayerScreen(
             if (resolvedUrl != null) {
                 videoUrlToLoad = resolvedUrl
             } else if (!usedSource && allEpisodes.isEmpty()) {
-                // Fallback: no local file, no source — use MockData
-                allEpisodes = MockData.sampleEpisodes.filter { it.animeId == animeId }.toMutableList()
-                currentEpisodeIndex = allEpisodes.indexOfFirst { it.id == episodeId }.coerceAtLeast(0)
-                animeTitle = MockData.sampleAnime.find { it.id == animeId }?.title ?: "Unknown"
+                // No source data available — show loading completed with no video
+                isLoading = false
             } else if (resolvedUrl == null) {
                 // File is downloaded but transfer to httpServer failed — still mark as downloaded
                 videoUrlToLoad = null
@@ -289,10 +305,13 @@ data class PlayerScreen(
             }
         }
 
-        // Update anime title from MockData if unknown
+        // Update anime title from episode data if unknown
         LaunchedEffect(allEpisodes) {
-            if (animeTitle == "Unknown" && allEpisodes.isNotEmpty()) {
-                animeTitle = MockData.sampleAnime.find { it.id == animeId }?.title ?: "Unknown"
+            if (animeTitle == "Unknown" && allEpisodes.isNotEmpty() && sourceId != null) {
+                val source = extensionManager?.getSource(sourceId)
+                if (source != null && source is eu.kanade.tachiyomi.source.CatalogueSource) {
+                    // Title stays as "Unknown" when no source is available
+                }
             }
         }
 
@@ -380,29 +399,37 @@ data class PlayerScreen(
                     val direction = if (index > oldIndex) "next" else "previous"
                     toastHost.show("$direction episode: ${String.format("%.0f", episode.episodeNumber)}", ToastDuration.SHORT)
 
-                    // Resolve new episode's video URL — check local first, then source
+                    // Resolve new episode's video URL — use full SEpisode with all fields
                     scope.launch {
                         isOfflinePlayback = downloadManager != null &&
                             episode.episodeNumber > 0 &&
                             downloadManager.isDownloaded(animeId, episode.episodeNumber)
 
+                        val se = sourceEpisodes.getOrNull(index)
                         val resolvedUrl = resolveVideoUrl(
-                            episodeUrl = episode.url,
+                            sEpisode = se,
                             episodeNumber = episode.episodeNumber,
                             httpServer = httpServer,
                             onQuality = { res, label ->
                                 videoQualityResolution = res
                                 videoQualityLabel = label
                             },
+                            onError = { msg -> toastHost.show(msg, ToastDuration.LONG) },
                         )
                         if (resolvedUrl != null) {
                             videoUrlToLoad = resolvedUrl
                         } else if (sourceId != null && episode.url != null) {
-                            // Fall back to source API
+                            // Fall back to source API — build full SEpisode from EpisodeModel
                             val source = extensionManager?.getSource(sourceId)
                             if (source != null) {
                                 try {
-                                    val sEpisode = SEpisode.create().apply { url = episode.url }
+                                    val sEpisode = SEpisode.create().apply {
+                                        url = episode.url
+                                        name = episode.name
+                                        episode_number = episode.episodeNumber.toFloat()
+                                        date_upload = episode.dateUpload
+                                        scanlator = episode.scanlator
+                                    }
                                     val videos = source.getVideoList(sEpisode)
                                     if (videos.isNotEmpty()) {
                                         videoUrlToLoad = videos.first().videoUrl
@@ -546,6 +573,38 @@ private fun PlayerContent(
         Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("Loading episode...", style = MaterialTheme.typography.bodyLarge, color = Color.White.copy(alpha = 0.5f))
+            }
+        }
+        return
+    }
+
+    // Show error state when source was needed but not available and we have no episodes
+    if (!isMPVAvailable && episodes.isEmpty() && currentEpisode == null) {
+        Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
+                Icon(
+                    Icons.Outlined.PlayCircle,
+                    contentDescription = null,
+                    modifier = Modifier.size(64.dp),
+                    tint = Color.White.copy(alpha = 0.2f),
+                )
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    animeTitle.ifBlank { "Episode not found" },
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color.White.copy(alpha = 0.5f),
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Could not load episode. The source extension may need to be updated or reinstalled.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.3f),
+                    modifier = Modifier.padding(horizontal = 32.dp),
+                )
+                Spacer(Modifier.height(24.dp))
+                IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Go back", tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
+                }
             }
         }
         return

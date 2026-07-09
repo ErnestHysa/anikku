@@ -48,6 +48,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.anikku.macos.platform.extension.MacOSExtensionManager
+import app.anikku.macos.platform.logging.UIActionLogger
 import app.anikku.macos.ui.AnikkuScreen
 import app.anikku.macos.ui.components.LocalToastHost
 import app.anikku.macos.ui.components.ToastDuration
@@ -117,7 +118,9 @@ data class ExtensionsScreen(
                             }
                         }
                     }
-                } catch (_: Exception) { }
+                } catch (e: Exception) {
+                    toastHost.show("Failed to fetch extensions: ${e.message?.take(60)}", ToastDuration.LONG)
+                }
                 hasAutoFetched = true
                 isFetching = false
             }
@@ -178,7 +181,8 @@ data class ExtensionsScreen(
                             InstalledExtensionCard(
                                 extension = ext,
                                 onRemove = {
-                                    extensionManager?.removeExtension(ext)
+                                                    UIActionLogger.logExtension(ext.name, "remove", ext.pkgName)
+                                extensionManager?.removeExtension(ext)
                                     toastHost.show("Removed ${ext.name}", ToastDuration.SHORT)
                                 },
                             )
@@ -248,12 +252,14 @@ data class ExtensionsScreen(
                                     scope.launch {
                                         installingPkg = ext.pkgName
                                         try {
-                                            extensionManager?.installExtension(ext) { step ->
+                                            UIActionLogger.logExtension(ext.name, "install", ext.pkgName)
+                                        extensionManager?.installExtension(ext) { step ->
                                                 when (step) {
                                                     is InstallStep.Downloading -> {
                                                         installProgress = step.progress
                                                     }
                                                     is InstallStep.Complete -> {
+                                                        UIActionLogger.logExtension(ext.name, "installed", ext.pkgName)
                                                         toastHost.show("Installed ${ext.name}", ToastDuration.SHORT)
                                                     }
                                                     is InstallStep.Error -> {

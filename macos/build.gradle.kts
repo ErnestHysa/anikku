@@ -86,6 +86,14 @@ dependencies {
     // JSON processing
     implementation(libs.org.json)
 
+    // Jackson — required by many keiyoushi extensions for JSON parsing
+    // Must match the version used by the extensions (2.15+ for ObjectNode.remove(EnumSet))
+    implementation("com.fasterxml.jackson.core:jackson-core:2.17.2")
+    implementation("com.fasterxml.jackson.core:jackson-databind:2.17.2")
+    implementation("com.fasterxml.jackson.core:jackson-annotations:2.17.2")
+    implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.17.2")
+    implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-xml:2.17.2")
+
     // Testing
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.compose.ui.test)
@@ -94,6 +102,7 @@ dependencies {
 }
 
 tasks.test {
+    dependsOn("buildTestExtensionJar")
     useJUnitPlatform()
     testLogging {
         events("passed", "failed", "skipped")
@@ -135,7 +144,9 @@ tasks.register<Exec>("rebuildSourceApiJars") {
         "bash", "-c",
         "./gradlew :source-api:jvmJar :core:common:jvmJar --no-daemon -q && " +
         "cp \$(ls source-api/build/libs/source-api-jvm-*.jar | grep -v -- -sources | head -1) macos/libs/source-api-jvm.jar && " +
-        "cp \$(ls core/common/build/libs/common-jvm-*.jar | grep -v -- -sources | head -1) macos/libs/common-jvm.jar",
+        "cp \$(ls core/common/build/libs/common-jvm-*.jar | grep -v -- -sources | head -1) macos/libs/common-jvm.jar && " +
+        "echo '=== Copying extension runtime deps ===' && " +
+        "bash macos/scripts/copy-extension-deps.sh",
     )
 }
 

@@ -42,6 +42,7 @@ import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import app.anikku.macos.platform.logging.UIActionLogger
 import app.anikku.macos.platform.extension.MacOSExtensionManager
 import app.anikku.macos.ui.AnikkuScreen
 import cafe.adriel.voyager.navigator.LocalNavigator
@@ -194,18 +195,18 @@ object BrowseTab : AnikkuScreen(), Tab {
                 items(
                     items = filteredSources,
                     key = { it.id },
-                ) { source ->
-                    SourceItem(
-                        sourceName = source.name,
-                        sourceLang = source.lang,
-                        onClick = {
-                            navigator.push(SourceBrowseScreen(
-                                sourceId = source.id,
-                                sourceName = source.name,
-                                extensionManager = extensionManager,
-                            ))
-                        },
-                    )
+                ) { source ->                        SourceItem(
+                            sourceName = source.name,
+                            sourceLang = source.lang,
+                            onClick = {
+                                UIActionLogger.logClick("BrowseTab", source.name, "select source", "id=${source.id}")
+                                navigator.push(SourceBrowseScreen(
+                                    sourceId = source.id,
+                                    sourceName = source.name,
+                                    extensionManager = extensionManager,
+                                ))
+                            },
+                        )
                 }
             }
         }

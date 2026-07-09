@@ -5,12 +5,26 @@ import eu.kanade.tachiyomi.animesource.model.SEpisode
 
 /**
  * Convert an [SAnime] from the source API into the local [AnimeModel] for rendering.
+ *
+ * Guards against [UninitializedPropertyAccessException] for `lateinit` properties
+ * that some sources may forget to set (like [url] and [title]).
  * Uses the anime URL's hash as a stable ID for navigation.
  */
 fun SAnime.toAnimeModel(sourceId: Long = 0L): AnimeModel {
+    val safeUrl = try {
+        url
+    } catch (_: UninitializedPropertyAccessException) {
+        ""
+    }
+    val safeTitle = try {
+        title
+    } catch (_: UninitializedPropertyAccessException) {
+        ""
+    }
+
     return AnimeModel(
-        id = (url.hashCode()).toLong().let { if (it == 0L) 1L else it },
-        title = this.title,
+        id = if (safeUrl.isNotBlank()) safeUrl.hashCode().toLong().let { if (it == 0L) 1L else it } else 1L,
+        title = safeTitle,
         source = sourceId,
         author = this.author,
         artist = this.artist,
@@ -18,7 +32,7 @@ fun SAnime.toAnimeModel(sourceId: Long = 0L): AnimeModel {
         genre = this.getGenres(),
         status = this.status,
         thumbnailUrl = this.thumbnail_url,
-        url = this.url,
+        url = safeUrl,
         favorite = false,
         coverLastModified = 0L,
     )
@@ -26,15 +40,29 @@ fun SAnime.toAnimeModel(sourceId: Long = 0L): AnimeModel {
 
 /**
  * Convert an [SEpisode] from the source API into the local [EpisodeModel] for rendering.
+ *
+ * Guards against [UninitializedPropertyAccessException] for `lateinit` properties
+ * that some sources may forget to set.
  * Uses the episode URL's hash as a stable ID for navigation.
  */
 fun SEpisode.toEpisodeModel(animeId: Long = 0L): EpisodeModel {
+    val safeUrl = try {
+        url
+    } catch (_: UninitializedPropertyAccessException) {
+        ""
+    }
+    val safeName = try {
+        name
+    } catch (_: UninitializedPropertyAccessException) {
+        "Unknown"
+    }
+
     return EpisodeModel(
-        id = (url.hashCode()).toLong().let { if (it == 0L) 1L else it },
+        id = (safeUrl.hashCode()).toLong().let { if (it == 0L) 1L else it },
         animeId = animeId,
-        name = this.name,
+        name = safeName,
         episodeNumber = this.episode_number.toDouble(),
-        url = this.url,
+        url = safeUrl,
         seen = false,
         bookmark = false,
         dateUpload = this.date_upload,

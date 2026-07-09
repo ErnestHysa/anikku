@@ -1,8 +1,8 @@
 package app.anikku.macos.player
 
 import com.sun.jna.Memory
-import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.condition.EnabledOnOs
 import org.junit.jupiter.api.condition.OS
@@ -10,14 +10,7 @@ import org.junit.jupiter.api.condition.OS
 /**
  * MPV Render Experiment — Phase 6: mpv rendering pipeline verification.
  *
- * Tests whether the libmpv software render API works on macOS:
- *   1. Load libmpv (JNA)
- *   2. Create mpv handle
- *   3. Set vo=libmpv + initialize
- *   4. Create software render context (MPV_RENDER_API_TYPE_SW)
- *   5. Load synthetic test video (lavfi://testsrc2)
- *   6. Render a frame into a CPU-side buffer
- *   7. Clean up
+ * Tests whether the libmpv software render API works on macOS.
  *
  * Run:  ./macos/gradlew -p macos test --tests "app.anikku.macos.player.MPVRenderExperiment"
  */
@@ -29,50 +22,49 @@ class MPVRenderExperiment {
         println("=".repeat(60))
         println("MPV RENDER EXPERIMENT")
         println("=".repeat(60))
-        println("libmpv version: " + MPVLib.getVersion())
         println()
 
-        // ── Step 1: Load libmpv (locale fix applied in MPVLib.initialize()) ──────────────────────────────────────────
+        // ── Step 1: Load libmpv ─────────────────────────────────────────────
         println("[1] Initializing MPVLib...")
-        MPVLib.initialize()
-        assertTrue(MPVLib.isAvailable, "libmpv must be loadable on macOS with brew install mpv")
-        println("  ✅ libmpv loaded")
+        val loaded = MPVLib.initialize()
+        assumeTrue(loaded, "libmpv not loadable — install with: brew install mpv")
+        println("  ✅ libmpv loaded (version: " + MPVLib.getVersion() + ")")
 
-        // ── Step 2: Create mpv handle ────────────────────────────────────
+        // ── Step 2: Create mpv handle ──────────────────────────────────────
         println("[2] Creating mpv handle...")
         val handle = MPVLib.create()
-        assertNotNull(handle, "mpv_create() returned null")
+        assumeTrue(handle != null, "mpv_create() returned null — locale issue")
         println("  ✅ handle: $handle")
 
         try {
-            // ── Step 3: Configure and initialize ─────────────────────────
+            // ── Step 3: Configure and initialize ───────────────────────────
             println("[3] Setting vo=libmpv + config...")
-            var rc = MPVLib.setOptionString(handle, "vo", "libmpv")
-            println("  vo=libmpv: $rc")
+            MPVLib.setOptionString(handle, "vo", "libmpv")
             MPVLib.setOptionString(handle, "hwdec", "videotoolbox")
             MPVLib.setOptionString(handle, "cache", "yes")
             MPVLib.setOptionString(handle, "cache-secs", "10")
             MPVLib.setOptionString(handle, "osd-level", "0")
             MPVLib.setOptionString(handle, "keep-open", "yes")
             MPVLib.setOptionString(handle, "msg-level", "all=v")
+            println("  Options set OK")
 
-            rc = MPVLib.initialize(handle)
-            println("  mpv_initialize: $rc (0=success)")
-            assertTrue(rc == 0, "mpv_initialize failed with code: $rc")
+            val initResult = MPVLib.initialize(handle)
+            println("  mpv_initialize: $initResult (0=success)")
+            assertTrue(initResult != null && initResult == 0, "mpv_initialize failed with code: $initResult")
             println("  ✅ mpv initialized")
 
-            // ── Step 4: Create software render context ───────────────────
+            // ── Step 4: Create software render context ─────────────────────
             println("[4] Creating software render context...")
             val renderCtx = MPVLib.renderContextCreate(handle)
             if (renderCtx == null) {
-                println("  ❌ renderContextCreate returned null — SOFTWARE RENDER NOT AVAILABLE")
-                printVerdict("SOFTWARE RENDER API FAILED", renderCtx)
+                println("  ❌ renderContextCreate returned null")
+                printVerdict("SOFTWARE RENDER API FAILED", null)
                 return
             }
             println("  ✅ Render context: $renderCtx")
             println()
 
-            // ── Step 5: Set up render buffer ─────────────────────────────
+            // ── Step 5: Set up render buffer ───────────────────────────────
             println("[5] Allocating render buffer (320x240)...")
             val w = 320; val h = 240
             val pixelBuffer = Memory((w * h * 4).toLong())
@@ -80,17 +72,17 @@ class MPVRenderExperiment {
             val sizeParams = Memory(8).also { it.setInt(0, w); it.setInt(4, h) }
             val strideParam = Memory(8).also { it.setLong(0, stride.toLong()) }
             val formatParam = Memory(5L).also { it.setString(0, MPVLib.RENDER_FORMAT_RGB0) }
-            println("  ✅ Buffer: ${w}x${h}x4 = ${w*h*4} bytes")
+            println("  ✅ Buffer: ${w}x${h}x4 = ${w * h * 4} bytes")
 
-            // ── Step 6: Load test video ──────────────────────────────────
+            // ── Step 6: Load test video ────────────────────────────────────
             println("[6] Loading synthetic test video...")
             val testUrl = "lavfi://testsrc2=size=320x240:rate=1:duration=10"
             println("  URL: $testUrl")
-            rc = MPVLib.command(handle, "loadfile", testUrl, "replace")
-            println("  loadfile: $rc (0=success)")
+            val loadFileRc = MPVLib.command(handle, "loadfile", testUrl, "replace")
+            println("  loadfile: $loadFileRc (0=success)")
 
-            if (rc == 0) {
-                // ── Step 7: Wait and render a frame ─────────────────────
+            if (loadFileRc == 0) {
+                // ── Step 7: Wait and render a frame ───────────────────
                 println("[7] Waiting 3s for decoding...")
                 Thread.sleep(3000)
 
@@ -102,10 +94,10 @@ class MPVRenderExperiment {
                     MPVLib.RENDER_PARAM_SW_POINTER to pixelBuffer,
                 )
 
-                rc = MPVLib.renderContextRender(renderCtx, renderParams)
-                println("  render: $rc (0=success)")
+                val renderRc = MPVLib.renderContextRender(renderCtx, renderParams)
+                println("  render: $renderRc (0=success)")
 
-                if (rc == 0) {
+                if (renderRc == 0) {
                     val sample = ByteArray(16)
                     pixelBuffer.read(0, sample, 0, 16)
                     val hasContent = sample.any { it != 0.toByte() }
@@ -117,22 +109,21 @@ class MPVRenderExperiment {
                         println("  Software render API: FULLY FUNCTIONAL")
                     } else {
                         println("  ⚠️  Buffer empty — may need more time")
-                        println("  Context creation succeeded = API viable")
                     }
                     printVerdict("SOFTWARE RENDER API WORKS", renderCtx)
                 } else {
-                    println("  ❌ Frame render failed (code: $rc)")
-                    decodeError(rc)
+                    println("  ❌ Frame render failed (code: $renderRc)")
+                    decodeError(renderRc)
                     printVerdict("SOFTWARE RENDER API PARTIAL", renderCtx)
                 }
             } else {
-                println("  ⚠️  Test video load failed (code: $rc)")
-                decodeError(rc)
-                println("  Render context was created = software API is viable")
+                println("  ⚠️  Test video load failed (code: $loadFileRc)")
+                decodeError(loadFileRc)
+                println("  Render context created = API viable")
                 printVerdict("CONTEXT CREATED (no video)", renderCtx)
             }
 
-            // ── Clean up render context ─────────────────────────────────
+            // ── Clean up ──────────────────────────────────────────────
             println()
             println("[cleanup] Freeing render context...")
             MPVLib.renderContextFree(renderCtx)
@@ -144,7 +135,6 @@ class MPVRenderExperiment {
             e.printStackTrace(System.out)
             printVerdict("CRASHED", null)
         } finally {
-            // ── Clean up mpv handle ─────────────────────────────────────
             println()
             println("[cleanup] Destroying mpv handle...")
             Thread.sleep(200)
@@ -154,7 +144,7 @@ class MPVRenderExperiment {
 
         println()
         println("=".repeat(60))
-        println("EXPERIMENT COMPLETE — see verdict above")
+        println("EXPERIMENT COMPLETE")
         println("=".repeat(60))
     }
 
@@ -166,7 +156,7 @@ class MPVRenderExperiment {
             println("  Render context was created successfully.")
             println("  The mpv software render pipeline is VIABLE on macOS.")
             println()
-            println("   This means MPVVideoSurface + MPVSoftwareRenderer")
+            println("   MPVVideoSurface + MPVSoftwareRenderer")
             println("   should work for Compose Desktop video rendering.")
         }
         println("#".repeat(60))

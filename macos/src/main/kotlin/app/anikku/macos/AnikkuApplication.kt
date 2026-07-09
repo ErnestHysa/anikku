@@ -13,6 +13,7 @@ import app.anikku.macos.platform.extension.MacOSExtensionLoader
 import app.anikku.macos.platform.extension.MacOSExtensionManager
 import app.anikku.macos.platform.logging.CrashReporter
 import app.anikku.macos.platform.logging.MacOSLogger
+import app.anikku.macos.platform.logging.UIActionLogger
 import app.anikku.macos.platform.network.MacOSCookieJar
 import app.anikku.macos.platform.network.MacOSNetworkHelper
 import app.anikku.macos.platform.notification.MacOSNotificationManager
@@ -78,6 +79,9 @@ class AnikkuApplication {
         // 3. Deploy bundled extensions on first launch (Phase 3.3)
         deployBundledExtensions()
 
+        // 3b. Initialize UI Action Logger (verbose debugging for development)
+        UIActionLogger.initialize(storageProvider.logsDirectory, verboseLevel = 2)
+
         // 4. Initialize preferences (JSON file-backed)
         val prefsFile = File(storageProvider.dataDirectory, "preferences.json")
         preferenceStore = MacOSPreferenceStore(prefsFile)
@@ -89,7 +93,22 @@ class AnikkuApplication {
         networkHelper = MacOSNetworkHelper(storageProvider)
         cookieJar = networkHelper.cookieJar
 
+        // 5.5. Start Koin BEFORE extension loading — extensions use injectLazy (Koin) to
+        // resolve NetworkHelper and other dependencies during construction.
+        startKoin {
+            modules(
+                platformModule(this@AnikkuApplication),
+                domainModule(this@AnikkuApplication),
+                appModule(this@AnikkuApplication),
+            )
+        }
+
         // 6. Initialize extension system (Phase 3.3)
+        // IMPORTANT: startKoin() must run before this — MacOSExtensionManager.initExtensions()
+        // calls MacOSExtensionLoader.loadExtensions() which instantiates extension source
+        // classes. Those source classes use injectLazy<> delegates from AnimeHttpSource
+        // which resolve via Koin's GlobalContext. Without Koin started first, they throw
+        // "KoinApplication has not been started".
         extensionManager = MacOSExtensionManager(storageProvider, networkHelper)
 
         // 7. Initialize storage manager (Phase 2.1)
@@ -126,14 +145,7 @@ class AnikkuApplication {
             version = "1.0.0",
         )
 
-        // 10. Start Koin with modular dependency injection
-        startKoin {
-            modules(
-                platformModule(this@AnikkuApplication),
-                domainModule(this@AnikkuApplication),
-                appModule(this@AnikkuApplication),
-            )
-        }
+        // (startKoin moved to step 5.5 — must run before extension loading at step 6)
 
         MacOSLogger.getLogger<AnikkuApplication>()
             .info("Anikku macOS application initialized")
