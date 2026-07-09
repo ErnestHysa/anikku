@@ -281,10 +281,10 @@ class MacOSDatabaseDriver(
             )
         """.trimIndent(), 0)
 
-        // Insert default extension repo
+        // Insert default extension repo — macOS-optimized JAR repo
         driver.execute(null, """
             INSERT OR IGNORE INTO extension_repos(_id, url, name)
-            VALUES (0, 'https://raw.githubusercontent.com/keiyoushi/extensions/repo/', 'keiyoushi')
+            VALUES (0, 'https://raw.githubusercontent.com/ErnestHysa/anikku-extensions-jar/main/', 'Anikku macOS Extensions')
         """.trimIndent(), 0)
 
         // =====================================================================

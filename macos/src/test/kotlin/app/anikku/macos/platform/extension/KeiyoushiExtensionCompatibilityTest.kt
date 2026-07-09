@@ -12,13 +12,16 @@ import java.io.File
  *
  * ## Key finding
  *
- * The keiyoushi/extensions repo distributes 1,350+ extensions as **Android APKs**
+ * The keiyoushi/extensions repo distributes extensions as **Android APKs**
  * (DEX bytecode + AndroidManifest.xml metadata). These cannot be loaded by a JVM
- * directly. For macOS compatibility, extensions must be recompiled against the
- * JVM target of source-api and packaged as JARs with META-INF/extension.json.
+ * directly. For macOS compatibility, extensions should be built from source via
+ * the build-keiyoushi-from-source.sh script, which clones yuzono/anime-extensions
+ * and compiles clean JVM JARs against the source-api stubs.
+ *
+ * Pre-converted JVM JARs are available from the Anikku macOS Extensions repo:
+ *   https://github.com/ErnestHysa/anikku-extensions-jar
  *
  * The `ExtensionLoadingTest` class proves the JVM-compiled JAR pipeline works.
- * This test documents the APK compatibility gap.
  */
 class KeiyoushiExtensionCompatibilityTest {
 

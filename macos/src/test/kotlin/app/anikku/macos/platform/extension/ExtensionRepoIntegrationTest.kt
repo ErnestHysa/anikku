@@ -237,21 +237,20 @@ class ExtensionRepoIntegrationTest {
     // ── Real keiyoushi index tests (network-dependent) ────────────
 
     @Test
-    fun `fetch keiyoushi index parses correctly`() = runBlocking {
+    fun `fetch anime extension index from macOS JAR repo`() = runBlocking {
         val (testManager, tempDir) = createIsolatedManager()
         try {
-            val repoUrl = "https://raw.githubusercontent.com/keiyoushi/extensions/repo/"
+            // Use the Anikku macOS Extensions JAR repo (anime extensions pre-converted for JVM)
+            val repoUrl = "https://raw.githubusercontent.com/ErnestHysa/anikku-extensions-jar/main/"
             val extensions = testManager.findAvailableExtensions(repoUrl, force = true)
 
             if (extensions.isEmpty()) {
                 // Network may be unavailable — skip assertions gracefully
-                println("WARNING: keiyoushi index returned empty — network may be unavailable")
+                println("WARNING: macOS JAR repo returned empty — network may be unavailable")
                 return@runBlocking
             }
 
-            Assert.assertTrue("Should fetch at least 500 extensions", extensions.size >= 500)
-            Assert.assertTrue("Should have 'all' lang extensions", extensions.any { it.lang == "all" })
-            Assert.assertTrue("Should have English extensions", extensions.any { it.lang == "en" })
+            Assert.assertTrue("Should fetch anime extensions", extensions.size >= 1)
 
             val sample = extensions.first()
             Assert.assertNotNull("Name", sample.name)
@@ -264,9 +263,6 @@ class ExtensionRepoIntegrationTest {
 
             val allInRange = extensions.all { it.libVersion in 12.0..15.0 }
             Assert.assertTrue("All libVersions in [12, 15]", allInRange)
-
-            val versions = extensions.map { it.libVersion }.distinct()
-            Assert.assertTrue("Multiple libVersions", versions.size >= 2)
         } finally {
             testManager.close()
             tempDir.deleteRecursively()

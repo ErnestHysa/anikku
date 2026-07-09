@@ -51,6 +51,9 @@ BUILD_LOG="${TEMP_BASE}/build-log.txt"
 SALMANBAPPI_INDEX="https://raw.githubusercontent.com/salmanbappi/extensions-repo/main/index.min.json"
 SALMANBAPPI_APK_BASE="https://raw.githubusercontent.com/salmanbappi/extensions-repo/main/apk"
 
+# keiyoushi/extensions is a primarily-manga APK repo.
+# For dedicated anime extension sources, use yuzono/anime-extensions instead
+# with the batch-build-keiyoushi-from-source.sh script (clean JVM compilation).
 KEIYOUSHI_INDEX="https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"
 KEIYOUSHI_APK_BASE="https://raw.githubusercontent.com/keiyoushi/extensions/repo/apk"
 

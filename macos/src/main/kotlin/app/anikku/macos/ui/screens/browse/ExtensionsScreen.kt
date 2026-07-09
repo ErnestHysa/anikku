@@ -85,9 +85,8 @@ data class ExtensionsScreen(
         val untrustedExtensions by (extensionManager?.untrustedExtensionsFlow?.collectAsState() ?: remember { mutableStateOf(emptyList()) })
 
         var selectedTab by remember { mutableStateOf(0) } // 0=Installed, 1=Available, 2=Repos, 3=Untrusted
-        // Default anime extension repos — these have actual anime streaming sources
-        // (unlike keiyoushi/extensions which is primarily manga)
-        // Default repos — the macOS extension repo is tried first, then community repos
+        // Default repos — the macOS-optimized JAR repo is tried first,
+        // then the community manga/anime APK repo as fallback
         val defaultRepoUrl = "https://raw.githubusercontent.com/ErnestHysa/anikku-extensions-jar/main/"
         val fallbackRepoUrls = listOf(
             defaultRepoUrl,
@@ -360,17 +359,17 @@ data class ExtensionsScreen(
                         Spacer(Modifier.height(12.dp))
                     }
 
-                    // Pre-configured repos — macOS-optimized first, then community
+                    // Pre-configured repos — macOS-optimized JARs first, then community APK repo
                     val repoInfo = listOf(
                         Triple(
                             defaultRepoUrl,
                             "Anikku macOS Extensions",
-                            "Pre-converted JARs for macOS — allanime, gogoanime, and more"
+                            "Pre-converted JVM JARs for macOS — built from yuzono/anime-extensions sources"
                         ),
                         Triple(
                             "https://raw.githubusercontent.com/keiyoushi/extensions/repo/",
                             "keiyoushi/extensions",
-                            "Community extension repo — primarily manga, includes some anime sources"
+                            "Community APK repo — primarily manga (some anime sources via dex2jar)"
                         ),
                     )
 

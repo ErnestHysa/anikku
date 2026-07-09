@@ -165,17 +165,23 @@ tasks.named("compileKotlin") {
 }
 
 /**
- * Download a keiyoushi extension APK for reference/testing.
+ * Download an anime extension JAR or APK for reference/testing.
+ *
+ * By default downloads from the Anikku macOS Extensions JAR repo.
+ * Alternatively, download an APK from keiyoushi/extensions for reference.
  *
  * Usage:
  *   ./macos/gradlew -p macos downloadKeiyoushiExtension
  *   ./macos/gradlew -p macos downloadKeiyoushiExtension -PextName=gogoanime
+ *
+ * For building extensions from anime source (yuzono/anime-extensions),
+ * use buildKeiyoushiExtension or batchBuildKeiyoushiExtensions instead.
  */
 tasks.register<Exec>("downloadKeiyoushiExtension") {
-    description = "Download a keiyoushi extension APK for reference"
+    description = "Download an extension JAR/APK for reference"
     group = "verification"
 
-    val extNameFilter = project.findProperty("extName") as? String ?: ""
+    val extNameFilter = project.findProperty("extName") as? String ?: "allanime"
     val extensionsDir = "${System.getProperty("user.home")}/Library/Application Support/Anikku/extensions"
     val D = "$"
 
@@ -183,27 +189,53 @@ tasks.register<Exec>("downloadKeiyoushiExtension") {
         "bash", "-c",
         """
 set -euo pipefail
-INDEX_URL="https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"
 OUT_DIR="$extensionsDir"
 mkdir -p "${D}OUT_DIR"
+
+# Try the Anikku macOS JAR repo first (preferred), fall back to keiyoushi APK repo
+JAR_INDEX="https://raw.githubusercontent.com/ErnestHysa/anikku-extensions-jar/main/index.min.json"
+APK_INDEX="https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"
+
 PYTHON_SCRIPT='import sys, json
 data = json.load(sys.stdin)
 ext_name = "$extNameFilter".lower().strip()
 for ext in data:
     name = ext.get("name", "").lower()
     lang = ext.get("lang", "")
-    if ext_name:
-        if ext_name in name:
-            print(json.dumps(ext)); sys.exit(0)
-    else:
-        if lang == "en":
-            print(json.dumps(ext)); sys.exit(0)
+    pkg = ext.get("pkg", "").lower()
+    apk = ext.get("apk", "").lower()
+    if ext_name in name or ext_name in pkg or ext_name in apk:
+        print(json.dumps(ext)); sys.exit(0)
 if data: print(json.dumps(data[0]))
 else: print("ERROR: Empty index"); sys.exit(1)'
-EXT_JSON=$(curl -sL "${D}INDEX_URL" | python3 -c "${D}PYTHON_SCRIPT")
-APK_NAME=$(echo "${D}EXT_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['apk'])")
-curl -sL "https://raw.githubusercontent.com/keiyoushi/extensions/repo/apk/${D}APK_NAME" -o "${D}OUT_DIR/${D}APK_NAME"
-echo "Downloaded $(wc -c < "${D}OUT_DIR/${D}APK_NAME") bytes — APK for reference (not JVM-compatible)"
+
+# Try JAR repo first
+JAR_JSON=$(curl -sL "${D}JAR_INDEX" | python3 -c "${D}PYTHON_SCRIPT" 2>/dev/null || echo "")
+if [ -n "${D}JAR_JSON" ]; then
+    APK_NAME=$(echo "${D}JAR_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)["apk"])" 2>/dev/null || echo "")
+    if [ -n "${D}APK_NAME" ]; then
+        curl -sL "https://raw.githubusercontent.com/ErnestHysa/anikku-extensions-jar/main/${D}APK_NAME" -o "${D}OUT_DIR/${D}APK_NAME"
+        if [ -s "${D}OUT_DIR/${D}APK_NAME" ]; then
+            echo "Downloaded $(wc -c < "${D}OUT_DIR/${D}APK_NAME") bytes — JAR from Anikku macOS repo"
+            exit 0
+        fi
+    fi
+fi
+
+# Fall back to APK repo
+APK_JSON=$(curl -sL "${D}APK_INDEX" | python3 -c "${D}PYTHON_SCRIPT" 2>/dev/null || echo "")
+if [ -n "${D}APK_JSON" ]; then
+    APK_NAME=$(echo "${D}APK_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)["apk"])" 2>/dev/null || echo "")
+    if [ -n "${D}APK_NAME" ]; then
+        curl -sL "https://raw.githubusercontent.com/keiyoushi/extensions/repo/apk/${D}APK_NAME" -o "${D}OUT_DIR/${D}APK_NAME"
+        echo "Downloaded $(wc -c < "${D}OUT_DIR/${D}APK_NAME") bytes — APK from keiyoushi/extensions (not JVM-compatible)"
+        echo "For JVM-compatible JARs, use: ./gradlew buildKeiyoushiExtension -PbuildKeiyoushiExtName=<name>"
+        exit 0
+    fi
+fi
+
+echo "ERROR: Could not find extension matching '$extNameFilter' in either repo"
+exit 1
 """.trimIndent(),
     )
 }

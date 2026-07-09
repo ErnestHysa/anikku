@@ -40,8 +40,9 @@
 #
 # Extension repos used:
 #   - salmanbappi/extensions-repo (APK format) — 43+ anime extensions
-#   - keiyoushi/extensions (APK format) — manga/anime extensions (note: uses
-#     Tachiyomi manga API, not Anikku anime API — may not work on macOS)
+#   - keiyoushi/extensions (APK format) — primarily manga extensions.
+#     For anime sources, use batch-build-keiyoushi-from-source.sh instead
+#     which compiles from yuzono/anime-extensions source code into clean JVM JARs.
 #   - msrofficial/anime-repo (APK format) — additional anime extensions
 
 set -euo pipefail 2>/dev/null || set -eu  # pipefail supported on bash 4+

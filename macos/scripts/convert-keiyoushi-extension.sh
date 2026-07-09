@@ -51,8 +51,16 @@ TEMP_DIR="/tmp/anikku-extension-convert"
 # Extension repos
 SALMANBAPPI_INDEX="https://raw.githubusercontent.com/salmanbappi/extensions-repo/main/index.min.json"
 SALMANBAPPI_APK_BASE="https://raw.githubusercontent.com/salmanbappi/extensions-repo/main/apk"
+# keiyoushi/extensions is a primarily-manga APK repo (not anime source).
+# For anime extensions, use yuzono/anime-extensions with build-keiyoushi-from-source.sh
+# or use the pre-converted JARs from the Anikku macOS Extensions repo.
 KEIYOUSHI_INDEX="https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"
 KEIYOUSHI_APK_BASE="https://raw.githubusercontent.com/keiyoushi/extensions/repo/apk"
+
+# >>> PREFERRED: Build from anime source instead <<<
+# Use macos/scripts/build-keiyoushi-from-source.sh --pkg <name>
+# This clones yuzono/anime-extensions and compiles clean JVM JARs,
+# avoiding the Android APK→dex2jar conversion entirely.
 
 D2J_DEX2JAR="$(which d2j-dex2jar 2>/dev/null || echo "/opt/homebrew/bin/d2j-dex2jar")"
 # Find jar/javac/javap commands — search common JDK locations on macOS
