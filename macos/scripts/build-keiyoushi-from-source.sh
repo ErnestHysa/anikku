@@ -357,6 +357,7 @@ log "  Resolving dependencies..."
 find_dep "org.jetbrains.kotlinx" "kotlinx-coroutines-core-jvm" && log "    coroutines ✓"
 find_dep "org.jetbrains.kotlinx" "kotlinx-serialization-json-jvm" && log "    serialization ✓"
 find_dep "org.jetbrains.kotlinx" "kotlinx-serialization-core-jvm" && log "    serialization-core ✓"
+find_dep "org.jetbrains.kotlinx" "kotlinx-serialization-protobuf-jvm" && log "    serialization-protobuf ✓" || true
 find_dep "com.squareup.okhttp3" "okhttp-jvm" || find_dep "com.squareup.okhttp3" "okhttp" && log "    okhttp ✓"
 find_dep "com.squareup.okio" "okio-jvm" && log "    okio ✓"
 find_dep "org.jsoup" "jsoup" && log "    jsoup ✓"
@@ -410,6 +411,44 @@ for lib_dir in "${GIT_CLONE_DIR}"/lib-*/ "${GIT_CLONE_DIR}/common/" "${GIT_CLONE
         log "  -> WARNING: compilation failed (${local_exit}) - $(head -1 "${TEMP_DIR}/${lib_name}-compile.log" 2>/dev/null)"
     fi
 done
+
+# Compile the forked keiyoushi-utils module (pure JVM port)
+KEIYOUSHI_UTILS_DIR="${PROJECT_DIR}/keiyoushi-utils/src/main/kotlin"
+if [ -d "$KEIYOUSHI_UTILS_DIR" ]; then
+    UTILS_NAME="keiyoushi-utils"
+    UTILS_CLASSES="${SHARED_LIBS_DIR}/${UTILS_NAME}"
+    if [ -d "$UTILS_CLASSES" ]; then
+        cached_classes=$(find "$UTILS_CLASSES" -name '*.class' 2>/dev/null | wc -l | tr -d ' ')
+        [ "$cached_classes" -gt 0 ] && compiled_ok=true || { rm -rf "$UTILS_CLASSES"; compiled_ok=false; }
+    else
+        compiled_ok=false
+    fi
+
+    if [ "$compiled_ok" != true ]; then
+        find "$KEIYOUSHI_UTILS_DIR" -name "*.kt" > "${TEMP_DIR}/${UTILS_NAME}-sources.txt" 2>/dev/null || true
+        utils_src_count=$(wc -l < "${TEMP_DIR}/${UTILS_NAME}-sources.txt" 2>/dev/null || echo 0)
+        if [ "$utils_src_count" -gt 0 ]; then
+            log "Compiling: ${UTILS_NAME} (${utils_src_count} files, pure JVM port)..."
+            mkdir -p "$UTILS_CLASSES"
+            set +e
+            kotlinc -cp "${CLASSPATH}" -d "$UTILS_CLASSES" -jvm-target 17 @"${TEMP_DIR}/${UTILS_NAME}-sources.txt" 2>"${TEMP_DIR}/${UTILS_NAME}-compile.log"
+            utils_exit=$?
+            set -e
+            utils_class_count=$(find "$UTILS_CLASSES" -name "*.class" 2>/dev/null | wc -l)
+            if [ "$utils_class_count" -gt 0 ]; then
+                add_to_cp "$UTILS_CLASSES"
+                log "  -> ${utils_class_count} classes ✓"
+            else
+                log "  -> FAILED: $(head -3 "${TEMP_DIR}/${UTILS_NAME}-compile.log" 2>/dev/null)"
+            fi
+        fi
+    else
+        # Cached from previous run — add to classpath
+        add_to_cp "$UTILS_CLASSES"
+        cached_count=$(find "$UTILS_CLASSES" -name '*.class' 2>/dev/null | wc -l | tr -d ' ')
+        log "keiyoushi-utils already compiled (${cached_count} cached classes) ✓"
+    fi
+fi
 
 # ---------------------------------------------------------------------------
 # Step 4: Compile the extension

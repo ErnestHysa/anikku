@@ -104,6 +104,9 @@ dependencies {
     // Extensions using aniyomi.lib.* will need this added when the artifact becomes public.
     // implementation("com.github.aniyomiorg:aniyomi-lib:bdc8184127")
 
+    // kotlinx.serialization-protobuf — needed by keiyoushi-utils Protobuf.kt
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-protobuf-jvm:1.9.0")
+
     // Testing
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.compose.ui.test)
