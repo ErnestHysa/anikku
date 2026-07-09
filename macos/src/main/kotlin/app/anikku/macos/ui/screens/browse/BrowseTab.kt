@@ -97,6 +97,10 @@ object BrowseTab : AnikkuScreen(), Tab {
             installedExtensions.flatMap { ext ->
                 ext.sources.filterIsInstance<Source>()
             }
+            // Deduplicate by source id to prevent "Key already used" crashes
+            // when multiple extensions (e.g. auto-deployed + repo-installed)
+            // provide sources with the same id.
+            .distinctBy { it.id }
         }
 
         var searchQuery by remember { mutableStateOf("") }
