@@ -94,6 +94,16 @@ dependencies {
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.17.2")
     implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-xml:2.17.2")
 
+    // Apache Commons — used by extensions (StringSubstitutor, encoding, utilities)
+    implementation("org.apache.commons:commons-text:1.12.0")
+    implementation("commons-codec:commons-codec:1.17.1")
+    implementation("org.apache.commons:commons-lang3:3.17.0")
+
+    // Aniyomi lib — custom extractors used by some yuzono extensions
+    // (DoodExtractor, StreamWishExtractor, etc.) — NOT currently available on JitPack.
+    // Extensions using aniyomi.lib.* will need this added when the artifact becomes public.
+    // implementation("com.github.aniyomiorg:aniyomi-lib:bdc8184127")
+
     // Testing
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.compose.ui.test)

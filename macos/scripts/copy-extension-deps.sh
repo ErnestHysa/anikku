@@ -55,6 +55,11 @@ DEPS=(
 
     # HTML parsing (used by many source scrapers)
     "org.jsoup/jsoup"
+
+    # Apache Commons — used by extensions for StringSubstitutor, encoding, etc.
+    "org.apache.commons/commons-text"
+    "commons-codec/commons-codec"
+    "org.apache.commons/commons-lang3"
 )
 
 for dep in "${DEPS[@]}"; do
