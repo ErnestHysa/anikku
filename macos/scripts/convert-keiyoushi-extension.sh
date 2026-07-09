@@ -2,45 +2,42 @@
 #
 # convert-keiyoushi-extension.sh
 # ==============================
-# Converts a keiyoushi Android APK extension to a macOS-compatible JAR.
+# Converts an Android APK extension to a macOS-compatible JAR using dex2jar.
 #
 # This script:
-# 1. Downloads a keiyoushi extension APK (or uses an existing one)
+# 1. Downloads an extension APK (or uses an existing one)
 # 2. Extracts extension metadata from the APK
-# 3. Decompiles DEX bytecode to Java source using jadx
-# 4. Patches Android API references to JVM equivalents
-# 5. Compiles the Java source with javac against source-api JARs
-# 6. Packages everything into a JAR with META-INF/extension.json
-# 7. Places the JAR in the Anikku extensions directory
+# 3. Converts DEX bytecode directly to JVM class files using dex2jar
+#    (avoids decompilation+recompilation issues with R8-obfuscated code)
+# 4. Detects source classes from the converted JAR
+# 5. Generates META-INF/extension.json with proper metadata
+# 6. Places the JAR in the Anikku extensions directory
 #
 # Usage:
-#   ./convert-keiyoushi-extension.sh [--apk <path-to-apk>] [--pkg <pkg-name>] [--url <download-url>]
+#   ./convert-keiyoushi-extension.sh [--apk <path>] [--pkg <name>]
 #
 # Examples:
-#   # Download and convert the first English extension from keiyoushi repo
-#   ./convert-keiyoushi-extension.sh
+#   # Download and convert allanime from salmanbappi repo
+#   ./convert-keiyoushi-extension.sh --pkg allanime
 #
 #   # Convert an existing APK file
 #   ./convert-keiyoushi-extension.sh --apk ~/Downloads/gogocdn.apk
 #
-#   # Convert with explicit package name and download URL
-#   ./convert-keiyoushi-extension.sh --pkg gogocdn
-#
 # Requirements:
-# - jadx (brew install jadx)
-# - JDK 17+ (with javac)
-# - curl, unzip, python3
-# - The Anikku source-api JARs (macos/libs/source-api-jvm.jar, macos/libs/common-jvm.jar)
+#   - dex2jar (brew install dex2jar)
+#   - JDK 17+ (for jar command)
+#   - curl, unzip, python3
 #
-# Notes:
-# - Decompiled code may contain Android API references that won't compile.
-#   The script attempts basic patching but some extensions may fail to build.
-# - Obfuscated extensions (most keiyoushi ones) produce decompiled code with
-#   meaningless class names. The script still attempts to compile them.
-# - For production use, extensions should be compiled from source as JVM bytecode
-#   using the approach described in macos/docs/MIGRATION-GUIDE.md.
+# Why dex2jar instead of jadx+recompile:
+#   Android APKs are typically R8/proguard-obfuscated, producing
+#   decompiled Java source that won't recompile. dex2jar converts
+#   the DEX bytecode directly to JVM .class files, preserving all
+#   method bodies and class structure. The resulting JAR references
+#   Android API classes (android.*) at the bytecode level, which
+#   MacOSExtensionLoader handles gracefully by catching
+#   NoClassDefFoundError at runtime.
 
-set -euo pipefail
+set -euo pipefail 2>/dev/null || set -eu  # pipefail supported on bash 4+; macOS default bash 3.2 falls back
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Configuration
@@ -51,14 +48,35 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 EXTENSIONS_DIR="${HOME}/Library/Application Support/Anikku/extensions"
 TEMP_DIR="/tmp/anikku-extension-convert"
 
+# Extension repos
+SALMANBAPPI_INDEX="https://raw.githubusercontent.com/salmanbappi/extensions-repo/main/index.min.json"
+SALMANBAPPI_APK_BASE="https://raw.githubusercontent.com/salmanbappi/extensions-repo/main/apk"
 KEIYOUSHI_INDEX="https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"
 KEIYOUSHI_APK_BASE="https://raw.githubusercontent.com/keiyoushi/extensions/repo/apk"
 
-SOURCE_API_JAR="${PROJECT_DIR}/libs/source-api-jvm.jar"
-COMMON_JVM_JAR="${PROJECT_DIR}/libs/common-jvm.jar"
-
-# Android API stubs — we create minimal stub interfaces so decompiled code can compile
-# These replace android.* references with JVM-compatible no-ops
+D2J_DEX2JAR="$(which d2j-dex2jar 2>/dev/null || echo "/opt/homebrew/bin/d2j-dex2jar")"
+# Find jar/javac/javap commands — search common JDK locations on macOS
+JAR_CMD=""
+JAVAC_CMD=""
+JAVAP_CMD=""
+for cmd in jar javac javap; do
+    for candidate in \
+        "${JAVA_HOME}/bin/$cmd" \
+        "/opt/homebrew/opt/openjdk@17/bin/$cmd" \
+        "/opt/homebrew/opt/openjdk@21/bin/$cmd" \
+        "/opt/homebrew/opt/openjdk/bin/$cmd" \
+        "/usr/bin/$cmd" \
+        $(which $cmd 2>/dev/null || true); do
+        if [ -n "$candidate" ] && [ -f "$candidate" ]; then
+            case "$cmd" in
+                jar) JAR_CMD="$candidate" ;;
+                javac) JAVAC_CMD="$candidate" ;;
+                javap) JAVAP_CMD="$candidate" ;;
+            esac
+            break
+        fi
+    done
+done
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Functions
@@ -68,8 +86,12 @@ log() { echo "[*] $*"; }
 err() { echo "[!] $*" >&2; }
 
 cleanup() {
-    log "Cleaning up temporary files..."
-    rm -rf "${TEMP_DIR}"
+    if [ "${KEEP_TEMP:-false}" != "true" ]; then
+        log "Cleaning up temporary files..."
+        rm -rf "${TEMP_DIR}"
+    else
+        log "Keeping temporary files at: ${TEMP_DIR}"
+    fi
 }
 trap cleanup EXIT
 
@@ -77,14 +99,20 @@ usage() {
     cat <<EOF
 Usage: $(basename "$0") [OPTIONS]
 
-Convert a keiyoushi APK extension to a macOS JAR extension.
+Convert an Android extension APK to a macOS JAR extension.
 
 Options:
   --apk <path>    Path to an existing APK file
-  --pkg <name>    Package name of the extension to download (e.g., gogocdn)
+  --pkg <name>    Package name keyword to download (e.g., allanime, gogocdn)
   --lang <code>   Language filter for auto-download (default: en)
+  --from-repo <r> Repo source: salmanbappi (default) or keiyoushi
   --keep-temp     Keep temporary files for debugging
   --help          Show this help
+
+Examples:
+  ./convert-keiyoushi-extension.sh --pkg allanime
+  ./convert-keiyoushi-extension.sh --pkg allanime --from-repo keiyoushi
+  ./convert-keiyoushi-extension.sh --apk ~/Downloads/extension.apk
 EOF
     exit 0
 }
@@ -96,6 +124,7 @@ EOF
 APK_PATH=""
 PKG_NAME=""
 LANG_FILTER="en"
+REPO_SOURCE="salmanbappi"
 KEEP_TEMP=false
 
 while [[ $# -gt 0 ]]; do
@@ -103,6 +132,7 @@ while [[ $# -gt 0 ]]; do
         --apk) APK_PATH="$2"; shift 2 ;;
         --pkg) PKG_NAME="$2"; shift 2 ;;
         --lang) LANG_FILTER="$2"; shift 2 ;;
+        --from-repo) REPO_SOURCE="$2"; shift 2 ;;
         --keep-temp) KEEP_TEMP=true; shift ;;
         --help|-h) usage ;;
         *) err "Unknown option: $1"; usage ;;
@@ -115,25 +145,23 @@ done
 
 log "Checking prerequisites..."
 
-if ! command -v jadx &>/dev/null; then
-    err "jadx is required. Install with: brew install jadx"
+if [ ! -f "$D2J_DEX2JAR" ]; then
+    D2J_DEX2JAR="/opt/homebrew/Cellar/dex2jar/*/bin/d2j-dex2jar"
+    D2J_DEX2JAR=$(ls $D2J_DEX2JAR 2>/dev/null | head -1 || echo "")
+fi
+if [ ! -f "$D2J_DEX2JAR" ]; then
+    err "d2j-dex2jar not found. Install: brew install dex2jar"
     exit 1
 fi
 
-if ! command -v javac &>/dev/null && [ ! -f "${JAVA_HOME}/bin/javac" ]; then
-    err "JDK 17+ with javac is required."
-    err "Set JAVA_HOME to a JDK 17 installation."
+if [ -z "$JAR_CMD" ]; then
+    err "jar command not found. Ensure JDK 17+ is installed."
+    err "Try: export JAVA_HOME=/opt/homebrew/opt/openjdk@17"
     exit 1
 fi
 
-JAVAC="${JAVAC:-${JAVA_HOME}/bin/javac}"
-JAVA="${JAVA:-${JAVA_HOME}/bin/java}"
-
-if [ ! -f "$SOURCE_API_JAR" ] || [ ! -f "$COMMON_JVM_JAR" ]; then
-    err "source-api JARs not found at ${PROJECT_DIR}/libs/"
-    err "Build them first: cd ${PROJECT_DIR} && ./gradlew -p macos rebuildSourceApiJars"
-    exit 1
-fi
+log "  d2j-dex2jar: ${D2J_DEX2JAR}"
+log "  jar: ${JAR_CMD}"
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Step 1: Get the APK
@@ -149,61 +177,83 @@ if [ -n "$APK_PATH" ]; then
     fi
     cp "$APK_PATH" "${TEMP_DIR}/extension.apk"
 else
-    log "Fetching keiyoushi extension index..."
-    INDEX=$(curl -sL "$KEIYOUSHI_INDEX")
-
-    if [ -z "$INDEX" ]; then
-        err "Failed to fetch keiyoushi index"
-        exit 1
+    log "Fetching extension index from ${REPO_SOURCE}..."
+    if [ "$REPO_SOURCE" = "keiyoushi" ]; then
+        INDEX_URL="$KEIYOUSHI_INDEX"
+        APK_BASE="$KEIYOUSHI_APK_BASE"
+    else
+        INDEX_URL="$SALMANBAPPI_INDEX"
+        APK_BASE="$SALMANBAPPI_APK_BASE"
     fi
 
-    log "Finding extension${PKG_NAME:+ matching '$PKG_NAME'}${LANG_FILTER:+ (lang: $LANG_FILTER)}..."
+    INDEX=$(curl -sL --connect-timeout 15 "$INDEX_URL" 2>/dev/null || echo "[]")
+    EXT_COUNT=$(echo "$INDEX" | python3 -c "import sys,json; data=json.load(sys.stdin); print(len(data))" 2>/dev/null || echo "0")
+    log "  Found ${EXT_COUNT} extensions in index"
+
+    log "Finding extension matching '${PKG_NAME}' (lang: ${LANG_FILTER})..."
 
     EXT_JSON=$(echo "$INDEX" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
 pkg_filter = '${PKG_NAME}'.lower()
 lang_filter = '${LANG_FILTER}'
+found = []
 for ext in data:
-    name = ext.get('pkg', '').lower()
+    pkg = ext.get('pkg', '').lower()
+    name = ext.get('name', '').lower()
+    apk = ext.get('apk', '').lower()
     lang = ext.get('lang', '')
-    if pkg_filter and pkg_filter not in name:
-        continue
-    if lang_filter and lang != lang_filter:
-        continue
-    if pkg_filter or lang_filter:
-        print(json.dumps(ext))
+    if pkg_filter and (pkg_filter in pkg or pkg_filter in name or pkg_filter in apk):
+        if lang_filter and lang != lang_filter:
+            continue
+        found.append(ext)
         break
-    if lang == 'en':
-        print(json.dumps(ext))
-        break
-if not pkg_filter and not lang_filter:
-    # First extension in the list
+if not found and pkg_filter:
+    # Broader match
+    for ext in data:
+        pkg = ext.get('pkg', '').lower()
+        if pkg_filter in pkg:
+            found.append(ext)
+            break
+if not found and not pkg_filter:
     if data:
-        print(json.dumps(data[0]))
+        found.append(data[0])
+if found:
+    print(json.dumps(found[0]))
+else:
+    print('')
 " 2>/dev/null)
 
     if [ -z "$EXT_JSON" ]; then
-        err "No matching extension found in keiyoushi index"
+        err "No matching extension found for '${PKG_NAME}' in ${REPO_SOURCE} index"
         exit 1
     fi
 
-    EXT_NAME=$(echo "$EXT_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('name','unknown'))")
-    EXT_PKG=$(echo "$EXT_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('pkg',''))")
-    EXT_APK=$(echo "$EXT_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('apk',''))")
-    EXT_LANG=$(echo "$EXT_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('lang',''))")
+    EXT_NAME=$(echo "$EXT_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('name','unknown'))" 2>/dev/null || echo "$PKG_NAME")
+    EXT_PKG=$(echo "$EXT_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('pkg',''))" 2>/dev/null || echo "")
+    EXT_APK=$(echo "$EXT_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('apk',''))" 2>/dev/null || echo "")
+    EXT_LANG=$(echo "$EXT_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('lang',''))" 2>/dev/null || echo "$LANG_FILTER")
+    IS_NSFW=$(echo "$EXT_JSON" | python3 -c "import sys,json; print('true' if json.load(sys.stdin).get('nsfw',0) == 1 else 'false')" 2>/dev/null || echo "false")
+
+    if [ -z "$EXT_PKG" ]; then
+        EXT_PKG="eu.kanade.tachiyomi.extension.${EXT_LANG:-en}.${PKG_NAME}"
+    fi
 
     log "Found: ${EXT_NAME} (${EXT_PKG}, lang: ${EXT_LANG})"
 
-    APK_URL="${KEIYOUSHI_APK_BASE}/${EXT_APK}"
+    APK_URL="${APK_BASE}/${EXT_APK}"
     log "Downloading from: ${APK_URL}"
-    curl -sL --connect-timeout 30 -o "${TEMP_DIR}/extension.apk" "$APK_URL"
-    FILE_SIZE=$(wc -c < "${TEMP_DIR}/extension.apk")
+    if ! curl -sL --connect-timeout 30 -o "${TEMP_DIR}/extension.apk" "$APK_URL" 2>/dev/null || [ ! -s "${TEMP_DIR}/extension.apk" ]; then
+        err "Failed to download APK from ${APK_URL}"
+        exit 1
+    fi
+
+    FILE_SIZE=$(stat -f%z "${TEMP_DIR}/extension.apk" 2>/dev/null || echo "0")
     log "Downloaded ${FILE_SIZE} bytes"
 
     if [ "$FILE_SIZE" -lt 1000 ]; then
         err "Downloaded file too small (${FILE_SIZE} bytes) — probably a 404"
-        cat "${TEMP_DIR}/extension.apk"
+        cat "${TEMP_DIR}/extension.apk" | head -c 200
         exit 1
     fi
 fi
@@ -212,388 +262,21 @@ fi
 # Step 2: Extract metadata from APK
 # ──────────────────────────────────────────────────────────────────────────────
 
-log "Extracting extension metadata from APK..."
+log "Extracting metadata from APK..."
 
-# Extract AndroidManifest.xml and parse metadata
-unzip -o "${TEMP_DIR}/extension.apk" AndroidManifest.xml -d "${TEMP_DIR}" 2>/dev/null || true
-
-# Try to extract metadata values using aapt2 or fallback to Python parsing
-# For now, use jadx to extract the extension.json-style metadata
-# We read the keiyoushi index values since AndroidManifest.xml is binary
-
-# Extract metadata from the keiyoushi index
-if [ -z "${EXT_JSON:-}" ]; then
-    # Try to extract metadata from the APK itself using jadx
-    jadx -e "${TEMP_DIR}/extension.apk" 2>/dev/null | head -5 || true
-fi
-
-# Parse AndroidManifest binary XML to extract version info
-# Use Python's androguard or just read the raw strings from the APK
-log "Extracting version info from APK..."
-strings "${TEMP_DIR}/extension.apk" | grep -E "^[0-9]+\\.[0-9]+(\\.[0-9]+)?$" | head -5
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Step 3: Decompile DEX to Java source using jadx
-# ──────────────────────────────────────────────────────────────────────────────
-
-log "Decompiling APK with jadx..."
-mkdir -p "${TEMP_DIR}/jadx-output"
-jadx -d "${TEMP_DIR}/jadx-output" "${TEMP_DIR}/extension.apk" 2>&1 | tail -3
-
-JAVA_SRC_DIR="${TEMP_DIR}/jadx-output/sources"
-if [ ! -d "$JAVA_SRC_DIR" ]; then
-    JAVA_SRC_DIR="${TEMP_DIR}/jadx-output"
-fi
-
-SRC_COUNT=$(find "$JAVA_SRC_DIR" -name "*.java" 2>/dev/null | wc -l)
-log "Decompiled ${SRC_COUNT} Java source files"
-
-if [ "$SRC_COUNT" -eq 0 ]; then
-    err "No Java source files were decompiled"
-    exit 1
-fi
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Step 4: Patch Android API references
-# ──────────────────────────────────────────────────────────────────────────────
-
-log "Patching Android API references..."
-
-# Create Android stub classes
-STUB_DIR="${TEMP_DIR}/android-stubs"
-mkdir -p "${STUB_DIR}/android/util"
-mkdir -p "${STUB_DIR}/android/content"
-mkdir -p "${STUB_DIR}/android/net"
-mkdir -p "${STUB_DIR}/android/os"
-mkdir -p "${STUB_DIR}/android/text"
-mkdir -p "${STUB_DIR}/android/graphics"
-mkdir -p "${STUB_DIR}/java/io"
-
-# Create android.util.Log stub
-cat > "${STUB_DIR}/android/util/Log.java" << 'ANDROID_STUB'
-package android.util;
-
-public class Log {
-    public static final int VERBOSE = 2;
-    public static final int DEBUG = 3;
-    public static final int INFO = 4;
-    public static final int WARN = 5;
-    public static final int ERROR = 6;
-    public static final int ASSERT = 7;
-
-    public static int v(String tag, String msg) { return 0; }
-    public static int d(String tag, String msg) { return 0; }
-    public static int i(String tag, String msg) { return 0; }
-    public static int w(String tag, String msg) { return 0; }
-    public static int e(String tag, String msg) { return 0; }
-    public static int v(String tag, String msg, Throwable tr) { return 0; }
-    public static int d(String tag, String msg, Throwable tr) { return 0; }
-    public static int i(String tag, String msg, Throwable tr) { return 0; }
-    public static int w(String tag, String msg, Throwable tr) { return 0; }
-    public static int e(String tag, String msg, Throwable tr) { return 0; }
-    public static String getStackTraceString(Throwable tr) { return ""; }
-}
-ANDROID_STUB
-
-# Create android.os.Build stub
-cat > "${STUB_DIR}/android/os/Build.java" << 'ANDROID_STUB'
-package android.os;
-
-public class Build {
-    public static final String VERSION_CODES = "";
-    public static class VERSION {
-        public static final String RELEASE = "15";
-        public static final int SDK_INT = 35;
-        public static final String CODENAME = "REL";
-    }
-    public static class VERSION_CODES {
-        public static final int BASE = 1;
-        public static final int JELLY_BEAN = 16;
-        public static final int KITKAT = 19;
-        public static final int LOLLIPOP = 21;
-        public static final int M = 23;
-        public static final int N = 24;
-        public static final int O = 26;
-        public static final int P = 28;
-    }
-    public static final String BRAND = "generic";
-    public static final String MODEL = "Anikku-macOS";
-    public static final String MANUFACTURER = "unknown";
-    public static final String DEVICE = "generic";
-}
-ANDROID_STUB
-
-# Create android.text.TextUtils stub
-cat > "${STUB_DIR}/android/text/TextUtils.java" << 'ANDROID_STUB'
-package android.text;
-
-public class TextUtils {
-    public static boolean isEmpty(CharSequence str) {
-        return str == null || str.length() == 0;
-    }
-    public static boolean isBlank(CharSequence str) {
-        return str == null || str.toString().trim().isEmpty();
-    }
-    public static String join(CharSequence delimiter, Iterable<?> tokens) {
-        StringBuilder sb = new StringBuilder();
-        for (Object token : tokens) {
-            if (sb.length() > 0) sb.append(delimiter);
-            sb.append(token);
-        }
-        return sb.toString();
-    }
-}
-ANDROID_STUB
-
-# Create android.net.Uri stub
-cat > "${STUB_DIR}/android/net/Uri.java" << 'ANDROID_STUB'
-package android.net;
-
-import java.io.UnsupportedEncodingException;
-import java.net.URLEncoder;
-import java.net.URLDecoder;
-import java.util.regex.Pattern;
-import java.util.regex.Matcher;
-
-public class Uri {
-    private final String uriString;
-
-    private Uri(String uri) { this.uriString = uri; }
-
-    public static Uri parse(String uriString) {
-        return new Uri(uriString);
-    }
-
-    public static Uri EMPTY = new Uri("");
-
-    public String getScheme() {
-        int idx = uriString.indexOf(':');
-        return idx > 0 ? uriString.substring(0, idx) : "";
-    }
-
-    public String getHost() {
-        try {
-            java.net.URL url = new java.net.URL(uriString);
-            return url.getHost();
-        } catch (Exception e) {
-            return "";
-        }
-    }
-
-    public String getPath() {
-        try {
-            java.net.URL url = new java.net.URL(uriString);
-            return url.getPath();
-        } catch (Exception e) {
-            return "";
-        }
-    }
-
-    public String getQuery() {
-        try {
-            java.net.URL url = new java.net.URL(uriString);
-            return url.getQuery();
-        } catch (Exception e) {
-            return "";
-        }
-    }
-
-    public String getQueryParameter(String key) {
-        String query = getQuery();
-        if (query == null || query.isEmpty()) return null;
-        Pattern p = Pattern.compile(key + "=([^&]+)");
-        Matcher m = p.matcher(query);
-        return m.find() ? m.group(1) : null;
-    }
-
-    public static String encode(String s) {
-        try { return URLEncoder.encode(s, "UTF-8"); }
-        catch (UnsupportedEncodingException e) { return s; }
-    }
-
-    public static String decode(String s) {
-        try { return URLDecoder.decode(s, "UTF-8"); }
-        catch (UnsupportedEncodingException e) { return s; }
-    }
-
-    public String toString() { return uriString; }
-
-    public static class Builder {
-        private StringBuilder sb = new StringBuilder();
-        public Builder scheme(String scheme) { sb.append(scheme).append("://"); return this; }
-        public Builder authority(String authority) { sb.append(authority); return this; }
-        public Builder path(String path) { sb.append(path); return this; }
-        public Builder appendQueryParameter(String key, String value) {
-            sb.append(sb.indexOf("?") > 0 ? '&' : '?').append(key).append('=').append(value);
-            return this;
-        }
-        public Builder fragment(String fragment) { sb.append('#').append(fragment); return this; }
-        public Uri build() { return new Uri(sb.toString()); }
-    }
-
-    public static Builder buildUpon() { return new Builder(); }
-}
-ANDROID_STUB
-
-# Create android.content.Context stub (minimal)
-cat > "${STUB_DIR}/android/content/Context.java" << 'ANDROID_STUB'
-package android.content;
-
-public class Context {
-    public static final int MODE_PRIVATE = 0;
-    public SharedPreferences getSharedPreferences(String name, int mode) {
-        return new SharedPreferences();
-    }
-}
-ANDROID_STUB
-
-# Create android.content.SharedPreferences stub
-cat > "${STUB_DIR}/android/content/SharedPreferences.java" << 'ANDROID_STUB'
-package android.content;
-
-import java.util.*;
-
-public class SharedPreferences {
-    public interface Editor {
-        Editor putString(String key, String value);
-        Editor putInt(String key, int value);
-        Editor putLong(String key, long value);
-        Editor putFloat(String key, float value);
-        Editor putBoolean(String key, boolean value);
-        Editor remove(String key);
-        Editor clear();
-        boolean commit();
-        void apply();
-    }
-
-    public String getString(String key, String defValue) { return defValue; }
-    public int getInt(String key, int defValue) { return defValue; }
-    public long getLong(String key, long defValue) { return defValue; }
-    public float getFloat(String key, float defValue) { return defValue; }
-    public boolean getBoolean(String key, boolean defValue) { return defValue; }
-    public boolean contains(String key) { return false; }
-    public Map<String, ?> getAll() { return new HashMap<>(); }
-    public Editor edit() { return null; }
-    public void registerOnSharedPreferenceChangeListener(OnSharedPreferenceChangeListener listener) {}
-    public void unregisterOnSharedPreferenceChangeListener(OnSharedPreferenceChangeListener listener) {}
-
-    public interface OnSharedPreferenceChangeListener {
-        void onSharedPreferenceChanged(SharedPreferences prefs, String key);
-    }
-}
-ANDROID_STUB
-
-# Create android.os.Bundle stub
-cat > "${STUB_DIR}/android/os/Bundle.java" << 'ANDROID_STUB'
-package android.os;
-
-import java.util.*;
-
-public class Bundle {
-    private Map<String, Object> map = new HashMap<>();
-    public Bundle() {}
-    public void putString(String key, String value) { map.put(key, value); }
-    public void putInt(String key, int value) { map.put(key, value); }
-    public void putLong(String key, long value) { map.put(key, value); }
-    public void putBoolean(String key, boolean value) { map.put(key, value); }
-    public void putSerializable(String key, java.io.Serializable value) { map.put(key, value); }
-    public String getString(String key) { return (String) map.get(key); }
-    public String getString(String key, String defValue) { return (String) map.getOrDefault(key, defValue); }
-    public int getInt(String key, int defValue) { return (int) map.getOrDefault(key, defValue); }
-    public long getLong(String key, long defValue) { return (long) map.getOrDefault(key, defValue); }
-    public boolean getBoolean(String key, boolean defValue) { return (boolean) map.getOrDefault(key, defValue); }
-    public boolean containsKey(String key) { return map.containsKey(key); }
-    public Set<String> keySet() { return map.keySet(); }
-}
-ANDROID_STUB
-
-# Stub for other common Android references
-mkdir -p "${STUB_DIR}/android/provider"
-cat > "${STUB_DIR}/android/provider/Browser.java" << 'ANDROID_STUB'
-package android.provider;
-public class Browser {
-    public static final String EXTRA_HEADERS = "extra_headers";
-}
-ANDROID_STUB
-
-# Compile Android stubs
-log "Compiling Android API stubs..."
-STUB_CLASSES="${TEMP_DIR}/stubs"
-mkdir -p "$STUB_CLASSES"
-find "${STUB_DIR}" -name "*.java" -exec \
-    "$JAVAC" -d "$STUB_CLASSES" {} + 2>&1 | tail -5
-log "Android stubs compiled"
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Step 5: Compile the decompiled Java source
-# ──────────────────────────────────────────────────────────────────────────────
-
-log "Compiling decompiled Java source..."
-CLASSES_DIR="${TEMP_DIR}/classes"
-mkdir -p "$CLASSES_DIR"
-
-# Build classpath: stubs + source-api + common-jvm
-CLASSPATH="${STUB_CLASSES}:${SOURCE_API_JAR}:${COMMON_JVM_JAR}"
-
-# Find all Java source files (there may be many)
-find "$JAVA_SRC_DIR" -name "*.java" > "${TEMP_DIR}/sources.txt"
-SRC_COUNT=$(wc -l < "${TEMP_DIR}/sources.txt")
-log "Found ${SRC_COUNT} Java source files to compile"
-
-# Compile (may fail for obfuscated code — that's expected)
-"$JAVAC" \
-    -d "$CLASSES_DIR" \
-    -cp "$CLASSPATH" \
-    -source 17 -target 17 \
-    @ "${TEMP_DIR}/sources.txt" 2>&1 | tail -20
-
-CLASS_COUNT=$(find "$CLASSES_DIR" -name "*.class" 2>/dev/null | wc -l)
-log "Compilation produced ${CLASS_COUNT} .class files"
-
-if [ "$CLASS_COUNT" -eq 0 ]; then
-    err "Compilation failed — no .class files produced"
-    err "The decompiled extension source may be obfuscated or contain Android-specific code"
-    err "that cannot be patched automatically."
-    err ""
-    err "Alternative: Build the extension from source as JVM bytecode."
-    err "See macos/docs/MIGRATION-GUIDE.md for details."
-    exit 1
-fi
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Step 6: Generate extension.json from APK metadata
-# ──────────────────────────────────────────────────────────────────────────────
-
-log "Generating extension metadata..."
-
-# Extract metadata from the keiyoushi index (or from the APK)
-NAME="${EXT_NAME:-}"
-PKG="${EXT_PKG:-}"
-APK_FILE="${EXT_APK:-}"
-LANG="${EXT_LANG:-}"
-
-# Try to extract version from the APK's AndroidManifest binary XML
-# Use aapt2 if available, otherwise parse with python
-if [ -z "${PKG:-}" ]; then
-    # Fallback: extract from AndroidManifest.xml
-    # Parse the APK using basic binary XML parsing
-    PKG=$(python3 -c "
+# Extract version info from AndroidManifest.xml (binary XML, parse as latin-1)
+APK_PKG=$(python3 -c "
 import zipfile, re
 with zipfile.ZipFile('${TEMP_DIR}/extension.apk') as z:
     try:
         data = z.read('AndroidManifest.xml')
-        # Binary XML - extract package name as ASCII string near the package attribute
         text = data.decode('latin-1')
         m = re.search(r'package=\"([^\"]+)\"', text)
-        if m: print(m.group(1))
-        else:
-            m = re.search(r'([a-z]+\\.[a-z]+\\.[a-z]+[^\"]*)', text)
-            if m: print(m.group(1))
-    except: pass
-" 2>/dev/null) || PKG="unknown.extension"
-fi
+        print(m.group(1) if m else '${EXT_PKG}')
+    except:
+        print('${EXT_PKG}')
+" 2>/dev/null || echo "${EXT_PKG}")
 
-# Extract versionName and versionCode
 VERSION_NAME=$(python3 -c "
 import zipfile, re
 with zipfile.ZipFile('${TEMP_DIR}/extension.apk') as z:
@@ -601,10 +284,10 @@ with zipfile.ZipFile('${TEMP_DIR}/extension.apk') as z:
         data = z.read('AndroidManifest.xml')
         text = data.decode('latin-1')
         m = re.search(r'versionName=\"([^\"]+)\"', text)
-        if m: print(m.group(1))
-        else: print('1.0.0')
-    except: print('1.0.0')
-" 2>/dev/null) || VERSION_NAME="1.0.0"
+        print(m.group(1) if m else '1.0.0')
+    except:
+        print('1.0.0')
+" 2>/dev/null || echo "1.0.0")
 
 VERSION_CODE=$(python3 -c "
 import zipfile, re
@@ -613,91 +296,272 @@ with zipfile.ZipFile('${TEMP_DIR}/extension.apk') as z:
         data = z.read('AndroidManifest.xml')
         text = data.decode('latin-1')
         m = re.search(r'versionCode=\"?([0-9]+)\"?', text)
-        if m: print(m.group(1))
-        else: print('100')
-    except: print('100')
-" 2>/dev/null) || VERSION_CODE="100"
+        print(m.group(1) if m else '100')
+    except:
+        print('100')
+" 2>/dev/null || echo "100")
 
-# Determine lib version from versionName (part before last .)
-LIB_VERSION=$(echo "$VERSION_NAME" | python3 -c "
-import sys
-v = sys.stdin.read().strip()
-try:
-    parts = v.rsplit('.', 1)
-    if len(parts) > 1:
-        print(float(parts[0]))
-    else:
-        print('15.0')
-except:
-    print('15.0')
-" 2>/dev/null) || LIB_VERSION="15.0"
+# The app's MacOSExtensionLoader expects libVersion in the range [12, 15].
+# Hardcode to 14 (the latest supported version) rather than trying to
+# derive it from the original APK's version name (which is typically 1.x).
+LIB_VERSION=14
 
-# Find the source class names from the decompiled code
-SOURCE_CLASSES=$(find "$CLASSES_DIR" -name "*.class" 2>/dev/null | \
-    sed "s|${CLASSES_DIR}/||; s|/|.|g; s|\.class||" | \
-    grep -vE "(R\$|R\$layout|R\$id|R\$string|R\$drawable|BuildConfig|Manifest)" | \
-    head -5 | tr '\n' ';' | sed 's/;$//')
+log "  Package: ${APK_PKG}"
+log "  Version: ${VERSION_NAME} (code: ${VERSION_CODE})"
+log "  libVersion: ${LIB_VERSION}"
+log "  Language: ${EXT_LANG:-en}"
 
-if [ -z "$SOURCE_CLASSES" ]; then
-    err "No source classes found in compiled output"
-    SOURCE_CLASSES="${PKG}.MainSource"
+# ──────────────────────────────────────────────────────────────────────────────
+# Step 3: Convert DEX to JVM bytecode using dex2jar
+# ──────────────────────────────────────────────────────────────────────────────
+
+log "Converting DEX to JVM bytecode with d2j-dex2jar..."
+
+D2J_OUTPUT="${TEMP_DIR}/extension-dex2jar.jar"
+
+set +e
+"$D2J_DEX2JAR" -f -o "$D2J_OUTPUT" "${TEMP_DIR}/extension.apk" 2>"${TEMP_DIR}/dex2jar-err.log"
+D2J_EXIT=$?
+set -e
+
+if [ ! -f "$D2J_OUTPUT" ] || [ ! -s "$D2J_OUTPUT" ]; then
+    err "d2j-dex2jar conversion failed (exit code: ${D2J_EXIT})"
+    err "Error log:"
+    sed 's/^/  /' "${TEMP_DIR}/dex2jar-err.log" 2>/dev/null | head -15
+    exit 1
 fi
 
-log "Package: ${PKG}"
-log "Version: ${VERSION_NAME} (code: ${VERSION_CODE})"
-log "libVersion: ${LIB_VERSION}"
-log "Source classes: ${SOURCE_CLASSES}"
-log "Language: ${LANG:-en}"
+D2J_SIZE=$(stat -f%z "$D2J_OUTPUT" 2>/dev/null || echo "0")
+CLASS_COUNT=$("$JAR_CMD" tf "$D2J_OUTPUT" 2>/dev/null | grep -c '\.class$' || echo "0")
 
-# Write extension.json
-cat > "${TEMP_DIR}/extension.json" << JSON
+log "  Output: ${D2J_SIZE} bytes, ${CLASS_COUNT} classes"
+
+if [ "$CLASS_COUNT" -eq 0 ]; then
+    err "No class files found in dex2jar output"
+    exit 1
+fi
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Step 4: Detect source classes
+# ──────────────────────────────────────────────────────────────────────────────
+
+log "Detecting source classes..."
+
+# Disable set -e for source class detection, as javap may fail or return odd
+# exit codes for some classes in obfuscated/dex-converted JARs.
+set +e
+
+SOURCE_CLASSES=""
+
+# Extract and scan each non-library class
+SCAN_DIR="${TEMP_DIR}/scan"
+mkdir -p "$SCAN_DIR"
+cd "$SCAN_DIR"
+"$JAR_CMD" xf "$D2J_OUTPUT" 2>/dev/null || true
+
+for classfile in $(find . -name '*.class' -path '*/eu/kanade/tachiyomi/animeextension/*' -not -name '*\$*' -not -name 'R.class' -not -name 'BuildConfig.class' 2>/dev/null | head -10); do
+    # Only check the class declaration line (first 1-2 lines of javap output)
+    # to avoid false positives from generic method bounds like "? extends Source"
+    SUPERTYPE=$("$JAVAP_CMD" -p "$classfile" 2>/dev/null | head -2 | grep -E '(extends|implements)')
+    # Check for ANY source API parent class — includes direct parents like AnimeHttpSource
+    # AND indirect parents like extensions.utils.Source (which extends AnimeHttpSource)
+    if echo "$SUPERTYPE" | grep -qiE '(Source|Catalogue|Configurable|AnimeHttp|HttpSource|tachiyomi|animesource)'; then
+        SOURCE_CLASSES=$(echo "$classfile" | sed 's|^\./||; s|/|.|g; s|\.class||')
+        log "  Found source class via bytecode: ${SOURCE_CLASSES}"
+        break
+    fi
+done
+
+# Fallback: just use the package name as the source class if above didn't find anything
+if [ -z "$SOURCE_CLASSES" ]; then
+    # Look for any non-library class in the main package
+    for classfile in $(find . -name '*.class' -not -name '*\$*' 2>/dev/null | \
+        grep -vE '(android/|java/|javax/|kotlin/|dalvik/|okhttp|okio|jsoup|org/apache|com/fasterxml|com/google)' | head -10); do
+        CLASS_NAME=$(echo "$classfile" | sed 's|^\./||; s|/|.|g; s|\.class||')
+        # Only check class declaration line (avoids false positives from generic bounds)
+        SUPERTYPE=$("$JAVAP_CMD" -p "$classfile" 2>/dev/null | head -2 | grep -E '(extends|implements)')
+        # Accept classes that extend something in the tachiyomi/animesource package
+        if echo "$SUPERTYPE" | grep -qiE '(tachiyomi|animesource)'; then
+            SOURCE_CLASSES="$CLASS_NAME"
+            log "  Found source class via fallback scan: ${SOURCE_CLASSES}"
+            break
+        fi
+    done
+fi
+
+if [ -z "$SOURCE_CLASSES" ]; then
+    log "  WARNING: Could not determine source class, using package name as fallback"
+    SOURCE_CLASSES="$APK_PKG"
+fi
+
+log "  Source class: ${SOURCE_CLASSES}"
+
+# Re-enable set -e
+set -e
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Step 5: Package with META-INF/extension.json
+# ──────────────────────────────────────────────────────────────────────────────
+
+log "Packaging final extension JAR..."
+
+JAR_NAME="${APK_PKG}.jar"
+FINAL_JAR="${TEMP_DIR}/${JAR_NAME}"
+
+# Create META-INF directory
+META_DIR="${TEMP_DIR}/META-INF"
+mkdir -p "$META_DIR"
+
+cat > "${META_DIR}/extension.json" << JSONEOF
 {
-  "name": "Aniyomi: ${NAME:-$PKG}",
-  "pkgName": "${PKG}",
+  "name": "Aniyomi: ${EXT_NAME:-${PKG_NAME}}",
+  "pkgName": "${APK_PKG}",
   "versionName": "${VERSION_NAME}",
   "versionCode": ${VERSION_CODE:-100},
   "libVersion": ${LIB_VERSION:-15.0},
-  "lang": "${LANG:-en}",
-  "isNsfw": false,
+  "lang": "${EXT_LANG:-en}",
+  "isNsfw": ${IS_NSFW:-false},
   "isTorrent": false,
   "sourceClass": "${SOURCE_CLASSES}",
   "pkgFactory": null,
   "hasReadme": false,
   "hasChangelog": false
 }
-JSON
+JSONEOF
 
-log "Generated extension.json:"
-cat "${TEMP_DIR}/extension.json"
+log "  extension.json:"
+sed 's/^/    /' "${META_DIR}/extension.json"
+
+# Merge dex2jar output with extension.json into a clean JAR
+# Strategy: Extract both JAR and metadata into a temp dir, then repack
+MERGE_DIR="${TEMP_DIR}/merge"
+rm -rf "$MERGE_DIR"
+mkdir -p "$MERGE_DIR"
+
+cd "$MERGE_DIR"
+"$JAR_CMD" xf "$D2J_OUTPUT" 2>/dev/null || true
+
+# Add/overwrite our META-INF/extension.json
+mkdir -p "${MERGE_DIR}/META-INF"
+cp "${META_DIR}/extension.json" "${MERGE_DIR}/META-INF/"
+
+# Also remove any unwanted META-INF entries from the original JAR
+rm -f "${MERGE_DIR}/META-INF/MANIFEST.MF" 2>/dev/null || true
+rm -f "${MERGE_DIR}/META-INF/CERT.RSA" 2>/dev/null || true
+rm -f "${MERGE_DIR}/META-INF/CERT.SF" 2>/dev/null || true
+rm -f "${MERGE_DIR}/META-INF/ANDROIDD.SF" 2>/dev/null || true
+rm -f "${MERGE_DIR}/META-INF/ANDROIDD.RSA" 2>/dev/null || true
+
+# Repack everything
+cd "$MERGE_DIR"
+"$JAR_CMD" cf "$FINAL_JAR" . 2>/dev/null || true
+
+JAR_SIZE=$(stat -f%z "$FINAL_JAR" 2>/dev/null || echo "0")
+log "  Final JAR: ${JAR_SIZE} bytes, ${CLASS_COUNT} classes"
+
+if [ ! -f "$FINAL_JAR" ] || [ ! -s "$FINAL_JAR" ]; then
+    err "JAR packaging failed"
+    exit 1
+fi
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Step 7: Package as JAR
+# Step 5b: Inject missing typealias bridge classes
 # ──────────────────────────────────────────────────────────────────────────────
 
-log "Packaging extension JAR..."
-JAR_NAME="${PKG}.jar"
-JAR_PATH="${TEMP_DIR}/${JAR_NAME}"
+log "Injecting missing typealias bridge classes for runtime bytecode compatibility..."
 
-cd "$CLASSES_DIR"
-mkdir -p META-INF
-cp "${TEMP_DIR}/extension.json" META-INF/
+# The source-api uses Kotlin typealiases (e.g., typealias CatalogueSource = AnimeCatalogueSource)
+# which work at compile time but don't create real JVM .class files. Converted Android
+# extension JARs reference these class names at the bytecode level, causing
+# ClassNotFoundException at runtime. We inject small Java bridge interfaces that
+# extend the real animesource classes, providing the missing .class files.
 
-jar cf "${JAR_PATH}" META-INF/ $(find . -name "*.class" 2>/dev/null)
+SOURCE_API_JAR="${PROJECT_DIR}/libs/source-api-jvm.jar"
+COMMON_JVM_JAR="${PROJECT_DIR}/libs/common-jvm.jar"
+STUBS_DIR="${TEMP_DIR}/stubs"
+mkdir -p "$STUBS_DIR"
 
-log "JAR created at: ${JAR_PATH}"
-log "JAR contents:"
-jar tf "${JAR_PATH}"
+# Find javac
+JAVAC_CMD=""
+for candidate in \
+    "${JAVA_HOME}/bin/javac" \
+    "/opt/homebrew/opt/openjdk@17/bin/javac" \
+    "/opt/homebrew/opt/openjdk@21/bin/javac" \
+    "/opt/homebrew/opt/openjdk/bin/javac" \
+    $(which javac 2>/dev/null || true); do
+    if [ -n "$candidate" ] && [ -f "$candidate" ]; then
+        JAVAC_CMD="$candidate"
+        break
+    fi
+done
+
+if [ -n "$JAVAC_CMD" ] && [ -f "$SOURCE_API_JAR" ]; then
+    log "  Found javac: ${JAVAC_CMD}"
+    
+    # Create the CatalogueSource bridge
+    cat > "${STUBS_DIR}/CatalogueSource.java" << 'JAVAEOF'
+package eu.kanade.tachiyomi.source;
+
+/**
+ * Real JVM bridge interface for bytecode compatibility.
+ * Converted extension JARs reference this class name at runtime.
+ * Extends the real AnimeCatalogueSource so all methods are available.
+ */
+public interface CatalogueSource extends eu.kanade.tachiyomi.animesource.AnimeCatalogueSource {
+}
+JAVAEOF
+    
+    # Create the Source bridge
+    cat > "${STUBS_DIR}/Source.java" << 'JAVAEOF'
+package eu.kanade.tachiyomi.source;
+
+/**
+ * Real JVM bridge interface for bytecode compatibility.
+ */
+public interface Source extends eu.kanade.tachiyomi.animesource.AnimeSource {
+}
+JAVAEOF
+
+    log "  Compiling bridge stubs..."
+    "$JAVAC_CMD" -cp "${SOURCE_API_JAR}:${COMMON_JVM_JAR}" -d "${STUBS_DIR}/classes" \
+        "${STUBS_DIR}/CatalogueSource.java" "${STUBS_DIR}/Source.java" 2>"${TEMP_DIR}/javac-err.log" || {
+        log "  WARNING: Bridge stub compilation failed (non-fatal):"
+        sed 's/^/    /' "${TEMP_DIR}/javac-err.log" 2>/dev/null | head -5
+    }
+    
+    # Inject bridge classes into the final JAR if they were compiled
+    if [ -d "${STUBS_DIR}/classes" ]; then
+        BRIDGE_CLASSES=$(find "${STUBS_DIR}/classes" -name '*.class' 2>/dev/null)
+        BRIDGE_COUNT=$(echo "$BRIDGE_CLASSES" | wc -l | tr -d ' ')
+        if [ "$BRIDGE_COUNT" -gt 0 ]; then
+            log "  Injecting ${BRIDGE_COUNT} bridge class(es) into extension JAR..."
+            cd "${STUBS_DIR}/classes"
+            # Use explicit file list to avoid shell expansion issues with find
+            INJECT_PATHS=""
+            for cls in $BRIDGE_CLASSES; do
+                rel_path="${cls#${STUBS_DIR}/classes/}"
+                INJECT_PATHS="$INJECT_PATHS $rel_path"
+            done
+            "$JAR_CMD" uf "$FINAL_JAR" $INJECT_PATHS 2>&1 || log "  WARNING: jar uf failed (exit code: $?)"
+            UPDATED_SIZE=$(stat -f%z "$FINAL_JAR" 2>/dev/null || echo "0")
+            UPDATED_CLASSES=$("$JAR_CMD" tf "$FINAL_JAR" 2>/dev/null | grep -c '\.class$' || echo "0")
+            log "  Updated JAR: ${UPDATED_SIZE} bytes, ${UPDATED_CLASSES} classes"
+        fi
+    fi
+else
+    log "  Skipping bridge injection: javac or source-api JAR not found"
+fi
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Step 8: Install to extensions directory
+# Step 6: Install to extensions directory
 # ──────────────────────────────────────────────────────────────────────────────
 
 log "Installing extension..."
 mkdir -p "${EXTENSIONS_DIR}"
-cp "${JAR_PATH}" "${EXTENSIONS_DIR}/${JAR_NAME}"
-log "Installed to: ${EXTENSIONS_DIR}/${JAR_NAME}"
+cp "$FINAL_JAR" "${EXTENSIONS_DIR}/${JAR_NAME}"
+log "  Installed to: ${EXTENSIONS_DIR}/${JAR_NAME}"
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ├─────────────────────────────────────────────────────────────────────────────
 # Summary
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -705,15 +569,18 @@ log ""
 log "═══════════════════════════════════════════════════════════════"
 log "  Extension conversion complete!"
 log "═══════════════════════════════════════════════════════════════"
-log "  Name:     ${NAME:-unknown}"
-log "  Package:  ${PKG}"
+log "  Name:     ${EXT_NAME:-${PKG_NAME}}"
+log "  Package:  ${APK_PKG}"
+log "  Version:  ${VERSION_NAME} (${VERSION_CODE})"
 log "  JAR:      ${EXTENSIONS_DIR}/${JAR_NAME}"
 log "  Classes:  ${CLASS_COUNT}"
+log "  Size:     ${JAR_SIZE} bytes"
+log "  Source:   ${SOURCE_CLASSES}"
 log ""
 log "  To test:"
 log "    1. Launch the Anikku macOS app"
 log "    2. Go to Browse tab"
-log "    3. Find '${NAME:-$PKG}' in the source list"
+log "    3. Find '${EXT_NAME:-${PKG_NAME}}' in the source list"
 log "    4. Click to browse anime"
 log "    5. Select an anime to see episodes"
 log "    6. Play an episode to test mpv streaming"

@@ -99,9 +99,18 @@ fun main() = application {
         }
         val onSettings = { TabSwitchHandler.switchTo(4) }
         val onOpenBackup = { /* Future: open file picker for .tachibk backup */ }
-        val onAbout = { showAboutDialog = true }
+        // Track whether the About dialog was opened from the menu Check for Updates
+        var autoCheckUpdates by remember { mutableStateOf(false) }
+
+        val onAbout = { showAboutDialog = true; autoCheckUpdates = false }
+        val onCheckForUpdates = {
+            showAboutDialog = true
+            autoCheckUpdates = true
+        }
         (window as? Frame)?.let { frame ->
-            MacOSMenuBarFactory.attach(frame, onQuit, onSettings, onOpenBackup, onAbout)
+            MacOSMenuBarFactory.attach(
+                frame, onQuit, onSettings, onOpenBackup, onAbout, onCheckForUpdates,
+            )
         }
 
         // Phase 9.2: Initialize global keyboard shortcuts
@@ -115,9 +124,14 @@ fun main() = application {
         // Phase 5.6: Wire extension manager to BrowseTab
         BrowseTab.setExtensionManager(app.extensionManager)
 
-        // Phase 9.6: Initialize Dock integration
-        MacOSDockManager.setBadgeCount(0) // Clear badge on launch
-        MacOSDockManager.createDockMenu() // Create dock menu with Play/Pause and Next Episode
+        // Phase 9.6: Initialize Dock integration (non-fatal — app works without dock features)
+        try {
+            MacOSDockManager.setBadgeCount(0) // Clear badge on launch
+            MacOSDockManager.createDockMenu() // Create dock menu with Play/Pause and Next Episode
+        } catch (e: Exception) {
+            // Dock features are best-effort; app continues without them
+            println("[AnikkuApp] Dock integration failed (non-fatal): ${e.message}")
+        }
 
         val trackerManager = remember {
             TrackerManager(
@@ -155,7 +169,11 @@ fun main() = application {
                 }
 
                 if (showAboutDialog) {
-                    AboutDialog(onCloseRequest = { showAboutDialog = false })
+                    AboutDialog(
+                        onCloseRequest = { showAboutDialog = false },
+                        updateChecker = app.appUpdateChecker,
+                        autoCheck = autoCheckUpdates,
+                    )
                 }
             }
         }

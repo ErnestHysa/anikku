@@ -16,11 +16,18 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -29,30 +36,60 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogWindow
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.rememberDialogState
+import app.anikku.macos.platform.update.AppUpdateChecker
+import app.anikku.macos.platform.update.UpdateInfo
 import app.anikku.macos.platform.web.BrowserLauncher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * About dialog for Anikku macOS.
  *
  * Displays app name, version, description, and a clickable link to the
- * GitHub repository. The "Open GitHub" button launches the system browser
- * via [BrowserLauncher.openSafe].
- *
- * Shown as a lightweight dialog window — centered on the parent window.
+ * GitHub repository. Includes a "Check for Updates" button that queries
+ * the GitHub Releases API and shows update status.
  *
  * @param onCloseRequest Called when the user wants to close the dialog.
+ * @param updateChecker The AppUpdateChecker instance to use for update checks.
+ *                      If null, the check button is disabled.
+ * @param autoCheck If true, automatically starts the update check when the
+ *                  dialog opens (used when triggered from menu bar).
  */
 @Composable
 fun AboutDialog(
     onCloseRequest: () -> Unit,
+    updateChecker: AppUpdateChecker? = null,
+    autoCheck: Boolean = false,
 ) {
+    val scope = rememberCoroutineScope()
+    var updateState by remember {
+        mutableStateOf<UpdateState>(
+            if (autoCheck && updateChecker != null) UpdateState.Checking else UpdateState.Idle,
+        )
+    }
+
+    // Auto-trigger the update check when dialog is opened from menu bar
+    if (autoCheck && updateChecker != null) {
+        LaunchedEffect(Unit) {
+            val update = withContext(Dispatchers.IO) {
+                updateChecker.checkForUpdateSync()
+            }
+            updateState = if (update != null) {
+                UpdateState.Available(update)
+            } else {
+                UpdateState.UpToDate
+            }
+        }
+    }
+
     DialogWindow(
         onCloseRequest = onCloseRequest,
         title = "About Anikku",
         state = rememberDialogState(
             position = WindowPosition(Alignment.Center),
-            width = 400.dp,
-            height = 320.dp,
+            width = 420.dp,
+            height = 400.dp,
         ),
         resizable = false,
     ) {
@@ -122,9 +159,123 @@ fun AboutDialog(
                     textAlign = TextAlign.Center,
                 )
 
-                Spacer(Modifier.height(20.dp))
+                Spacer(Modifier.height(16.dp))
 
-                // GitHub link button — opens system browser via BrowserLauncher
+                // ── Update Check Section ─────────────────────────────────
+                when (val state = updateState) {
+                    is UpdateState.Idle -> {
+                        if (updateChecker != null) {
+                            OutlinedButton(
+                                onClick = {
+                                    scope.launch {
+                                        updateState = UpdateState.Checking
+                                        val update = withContext(Dispatchers.IO) {
+                                            updateChecker.checkForUpdateSync()
+                                        }
+                                        updateState = if (update != null) {
+                                            UpdateState.Available(update)
+                                        } else {
+                                            UpdateState.UpToDate
+                                        }
+                                    }
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.primary,
+                                ),
+                            ) {
+                                Text("Check for Updates")
+                            }
+                        } else {
+                            Text(
+                                text = "Auto-update not available",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+
+                    is UpdateState.Checking -> {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            LinearProgressIndicator(
+                                modifier = Modifier.fillMaxWidth(0.6f),
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = "Checking for updates...",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+
+                    is UpdateState.Available -> {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = "Update Available!",
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = state.update.tagName,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Button(
+                                onClick = {
+                                    BrowserLauncher.openSafe(state.update.downloadUrl)
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                            ) {
+                                Text("Download Update")
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            OutlinedButton(
+                                onClick = {
+                                    updateState = UpdateState.Idle
+                                },
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                ),
+                            ) {
+                                Text("Dismiss")
+                            }
+                        }
+                    }
+
+                    is UpdateState.UpToDate -> {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = "Anikku is up to date!",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            OutlinedButton(
+                                onClick = { updateState = UpdateState.Idle },
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.primary,
+                                ),
+                            ) {
+                                Text("Check Again")
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(16.dp))
+
+                HorizontalDivider()
+
+                Spacer(Modifier.height(12.dp))
+
+                // GitHub link button
                 OutlinedButton(
                     onClick = {
                         BrowserLauncher.openSafe("https://github.com/komikku-app/anikku")
@@ -137,7 +288,7 @@ fun AboutDialog(
                     Text("Open GitHub Repository")
                 }
 
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(12.dp))
 
                 // Close button
                 Button(
@@ -150,4 +301,14 @@ fun AboutDialog(
             }
         }
     }
+}
+
+/**
+ * Internal state for the update check UI flow.
+ */
+private sealed class UpdateState {
+    data object Idle : UpdateState()
+    data object Checking : UpdateState()
+    data class Available(val update: UpdateInfo) : UpdateState()
+    data object UpToDate : UpdateState()
 }

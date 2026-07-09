@@ -238,18 +238,29 @@ class MacOSExtensionManager(
     // -------------------------------------------------------------------------
 
     /**
-     * Download and install an extension JAR.
+     * Download and install an extension.
+     *
+     * The repo serves Android APK files. On macOS these must be converted to
+     * JVM JARs via jadx decompilation + javac recompilation. If jadx is not
+     * installed, the APK is saved with a .apk extension and will be converted
+     * on the next app startup (via [MacOSExtensionLoader.loadExtensions]).
      */
     suspend fun installExtension(
         extension: Extension.Available,
         onProgress: ((InstallStep) -> Unit)? = null,
     ) {
         val apkUrl = "${extension.repoUrl}/apk/${extension.apkName}"
-        val tempFile = File(extensionsDir, "${extension.pkgName}.jar.tmp")
-        val finalFile = File(extensionsDir, "${extension.pkgName}.jar")
+        val apkTmpFile = File(extensionsDir, "${extension.pkgName}.apk.tmp")
+        val finalJar = File(extensionsDir, "${extension.pkgName}.jar")
+        val apkFile = File(extensionsDir, "${extension.pkgName}.apk")
 
         try {
             onProgress?.invoke(InstallStep.Downloading(0f))
+
+            // Remove any previous downloads or JARs for this package
+            apkFile.delete()
+            apkTmpFile.delete()
+            finalJar.delete()
 
             val request = Request.Builder()
                 .url(apkUrl)
@@ -257,13 +268,13 @@ class MacOSExtensionManager(
                 .build()
 
             val response = networkHelper.client.newCall(request).execute()
-
             if (!response.isSuccessful) {
                 throw IOException("Download failed: ${response.code} ${response.message}")
             }
 
+            // Download to temp file
             response.body?.byteStream()?.use { input ->
-                tempFile.outputStream().use { output ->
+                apkTmpFile.outputStream().use { output ->
                     val buffer = ByteArray(8 * 1024)
                     val contentLength = response.body?.contentLength() ?: -1L
                     var bytesRead: Int
@@ -283,24 +294,90 @@ class MacOSExtensionManager(
 
             onProgress?.invoke(InstallStep.Installing)
 
-            // Replace existing JAR
-            if (finalFile.exists()) {
-                finalFile.delete()
+            // Rename temp to .apk/.tmp after successful download
+            apkTmpFile.renameTo(apkFile)
+
+            // Determine whether the downloaded file is a pre-converted JAR or an APK
+            val isPreConvertedJar = extension.apkName.endsWith(".jar", ignoreCase = true)
+
+            if (isPreConvertedJar) {
+                // Pre-converted JAR from repo — rename directly (atomic on same filesystem)
+                logger.info { "Extension is already a JAR: ${extension.pkgName}" }
+                apkFile.renameTo(finalJar)
+                logger.info { "Installed JAR directly: ${extension.pkgName} (${finalJar.length()} bytes)" }
+            } else if (DexClassLoader.isAvailable()) {
+                // APK — needs jadx conversion
+                logger.info { "Converting APK to JAR: ${extension.pkgName}" }
+                val sourceApiJar = findSourceApiJar()
+                val commonJvmJar = findCommonJvmJar()
+                val success = DexClassLoader.convertToJar(apkFile, finalJar, sourceApiJar, commonJvmJar)
+
+                if (success && finalJar.isFile && finalJar.length() > 0) {
+                    apkFile.delete()
+                    logger.info { "Converted ${extension.pkgName} to JAR (${finalJar.length()} bytes)" }
+                } else {
+                    // Conversion failed — clean up both APK and broken JAR
+                    apkFile.delete()
+                    finalJar.delete()
+                    logger.warn { "APK conversion failed for ${extension.pkgName}. User should install jadx and retry." }
+                    throw IOException("Conversion failed. Ensure jadx is installed (brew install jadx) and retry.")
+                }
+            } else {
+                // No jadx available — keep APK for batch conversion on startup
+                logger.info { "jadx not available — ${extension.pkgName}.apk saved for batch conversion on restart" }
             }
-            tempFile.renameTo(finalFile)
 
             onProgress?.invoke(InstallStep.Complete)
 
-            // Load only the newly installed extension
+            // Load the newly installed extension
             reloadExtension(extension.pkgName)
-
             logger.info { "Installed extension: ${extension.pkgName}" }
         } catch (e: Exception) {
-            tempFile.delete()
+            apkTmpFile.delete()
             logger.error(e) { "Failed to install extension: ${extension.pkgName}" }
             onProgress?.invoke(InstallStep.Error(e.message ?: "Unknown error"))
-            throw e
+            // Don't throw — let the UI show the error message gracefully
         }
+    }
+
+    /**
+     * Locate [source-api-jvm.jar] needed for APK-to-JAR conversion.
+     *
+     * Search order:
+     * 1. Bundled in the .app Resources (when running from DMG)
+     * 2. Project libs/ directory (during development via gradlew run)
+     * 3. Current working directory
+     */
+    private fun findSourceApiJar(): File? {
+        val cwd = File(System.getProperty("user.dir", "."))
+        val candidates = listOf(
+            // Bundled in .app/Contents/Resources/libs/
+            File("../Resources/libs/source-api-jvm.jar"),
+            File("../lib/libs/source-api-jvm.jar"),
+            // Project root (development)
+            File(cwd, "macos/libs/source-api-jvm.jar"),
+            File(cwd, "libs/source-api-jvm.jar"),
+            // Current directory
+            File("macos/libs/source-api-jvm.jar"),
+            File("libs/source-api-jvm.jar"),
+        )
+        return candidates.firstOrNull { it.isFile }
+    }
+
+    /**
+     * Locate [common-jvm.jar] needed for APK-to-JAR conversion.
+     */
+    private fun findCommonJvmJar(): File? {
+        val cwd = File(System.getProperty("user.dir", "."))
+        val candidates = listOf(
+            File("../Resources/libs/common-jvm.jar"),
+            File("../lib/libs/common-jvm.jar"),
+            File(cwd, "macos/libs/common-jvm.jar"),
+            File(cwd, "libs/common-jvm.jar"),
+            File("macos/libs/common-jvm.jar"),
+            File("libs/common-jvm.jar"),
+        )
+        return candidates.firstOrNull { it.isFile }
     }
 
     /**

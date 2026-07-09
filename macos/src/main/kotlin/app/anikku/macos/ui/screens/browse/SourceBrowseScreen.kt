@@ -57,7 +57,9 @@ import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.currentOrThrow
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.source.CatalogueSource
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 /**
  * Source browse screen — shows anime catalog from a selected source.
@@ -95,20 +97,28 @@ data class SourceBrowseScreen(
 
             val source = extensionManager?.getSource(sourceId)
             if (source is CatalogueSource) {
+                // Run the suspend call on IO dispatcher — extensions may do blocking I/O
                 try {
-                    val page = source.getPopularAnime(page = 1)
+                    val page = withContext(Dispatchers.IO) {
+                        source.getPopularAnime(page = 1)
+                    }
                     animeList = page.animes.map { it.toAnimeModel(sourceId) }
+                } catch (e: NoClassDefFoundError) {
+                    errorMessage = "Extension has missing JVM dependencies: ${e.message}. " +
+                        "This source may need a JVM-compatible build."
+                    animeList = MockData.sampleAnime
+                    usingFallback = true
                 } catch (e: Exception) {
-                    errorMessage = "Source API error: ${e.message}"
+                    errorMessage = "${e::class.simpleName}: ${e.message}"
                     animeList = MockData.sampleAnime
                     usingFallback = true
                 }
             } else if (source != null) {
-                errorMessage = "Source does not support catalog browsing"
+                errorMessage = "Source does not support catalog browsing (missing CatalogueSource interface)"
                 animeList = MockData.sampleAnime
                 usingFallback = true
             } else {
-                errorMessage = "Source not found. Showing sample data."
+                errorMessage = "Source not found — install an extension via the Extensions tab"
                 animeList = MockData.sampleAnime
                 usingFallback = true
             }

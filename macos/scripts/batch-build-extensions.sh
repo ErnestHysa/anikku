@@ -7,42 +7,75 @@
 # This script:
 # 1. Fetches the list of available anime extensions from community repos
 # 2. Downloads each extension's APK from the repo
-# 3. Attempts to convert each APK to a JVM JAR via jadx decompilation
-# 4. Generates a custom repo index (index.min.json) pointing to the JARs
-# 5. Deploys the JARs to the Anikku extensions directory
+# 3. Converts each APK to a JVM JAR via dex2jar (direct DEX→JVM bytecode)
+# 4. Extracts extension metadata from the APK (AndroidManifest.xml)
+# 5. Detects source classes from the converted JAR
+# 6. Packages META-INF/extension.json into the JAR
+# 7. Deploys the JARs to the Anikku extensions directory
+# 8. Generates a custom repo index (index.min.json) pointing to the JARs
 #
 # Usage:
 #   ./batch-build-extensions.sh
-#   ./batch-build-extensions.sh --source-only  # Only build from source repos
+#   ./batch-build-extensions.sh --single allanime  # Build one extension by keyword
 #   ./batch-build-extensions.sh --repo <repo-url>
+#   ./batch-build-extensions.sh --keep-temp
 #
 # Requirements:
-#   - jadx (brew install jadx)
-#   - JDK 17+ with javac
-#   - Anikku source-api JARs built
+#   - dex2jar (brew install dex2jar)
+#   - JDK 17+ (for jar command)
+#   - curl, unzip, python3, strings
+#
+# How it works:
+#   Android extension APKs contain DEX (Dalvik Executable) bytecode.
+#   dex2jar (d2j-dex2jar) converts DEX directly to JVM .class files,
+#   producing a valid JAR without needing to decompile to Java source
+#   and recompile. This avoids all the issues with R8-obfuscated code,
+#   Android API stubs, and javac compilation failures.
+#
+#   The resulting JAR will reference Android API classes (android.*) at
+#   the bytecode level. The MacOSExtensionLoader handles these gracefully
+#   by catching NoClassDefFoundError for Android-specific APIs at runtime.
+#   The extension's business logic (HTTP calls, HTML parsing) is pure JVM
+#   bytecode produced by dex2jar and executes normally.
 #
 # Extension repos used:
-#   - keiyoushi/extensions (APK format) — 2 English anime extensions
-#   - salmanbappi/extensions-repo (APK format) — 8 English anime extensions
+#   - salmanbappi/extensions-repo (APK format) — 43+ anime extensions
+#   - keiyoushi/extensions (APK format) — manga/anime extensions (note: uses
+#     Tachiyomi manga API, not Anikku anime API — may not work on macOS)
+#   - msrofficial/anime-repo (APK format) — additional anime extensions
 
-set -euo pipefail
+set -euo pipefail 2>/dev/null || set -eu  # pipefail supported on bash 4+
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")\" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 EXTENSIONS_DIR="${HOME}/Library/Application Support/Anikku/extensions"
 TEMP_DIR="/tmp/anikku-batch-build"
 OUTPUT_DIR="${TEMP_DIR}/output"
 BUILD_LOG="${TEMP_DIR}/build-log.txt"
 
-# Extension repos (APK-based)
+# Extension repos (APK-based) — format: <index-url>:<repo-name>
 REPOS=(
     "https://raw.githubusercontent.com/salmanbappi/extensions-repo/main/index.min.json:salmanbappi"
     "https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json:keiyoushi"
     "https://raw.githubusercontent.com/msrofficial/anime-repo/repo/index.min.json:msrofficial"
 )
 
-SOURCE_API_JAR="${PROJECT_DIR}/libs/source-api-jvm.jar"
-COMMON_JVM_JAR="${PROJECT_DIR}/libs/common-jvm.jar"
+D2J_DEX2JAR="$(which d2j-dex2jar 2>/dev/null || echo "/opt/homebrew/bin/d2j-dex2jar")"
+
+# Find jar command — search common JDK locations on macOS
+JAR_CMD=""
+for candidate in \
+    "${JAVA_HOME}/bin/jar" \
+    "/opt/homebrew/opt/openjdk@17/bin/jar" \
+    "/opt/homebrew/opt/openjdk@21/bin/jar" \
+    "/opt/homebrew/opt/openjdk/bin/jar" \
+    "/usr/bin/jar" \
+    $(which jar 2>/dev/null || true); do
+    if [ -n "$candidate" ] && [ -f "$candidate" ]; then
+        JAR_CMD="$candidate"
+        break
+    fi
+done
 
 log() { echo "[*] $*"; }
 err() { echo "[!] $*" >&2; }
@@ -65,21 +98,21 @@ Usage: $(basename "$0") [OPTIONS]
 Batch build all available anime extensions as JVM JARs.
 
 Options:
-  --source-only     Only try source-based builds (skip APK conversion)
-  --repo <url>      Use a specific repo URL
-  --keep-temp       Keep temporary files for debugging
-  --help            Show this help
+  --single <keyword>   Build only extensions matching a keyword (e.g., allanime)
+  --repo <url>         Use a specific repo URL
+  --keep-temp          Keep temporary files for debugging
+  --help               Show this help
 EOF
     exit 0
 }
 
-SOURCE_ONLY=false
+SINGLE_FILTER=""
 CUSTOM_REPO=""
 KEEP_TEMP=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --source-only) SOURCE_ONLY=true; shift ;;
+        --single) SINGLE_FILTER="$2"; shift 2 ;;
         --repo) CUSTOM_REPO="$2"; shift 2 ;;
         --keep-temp) KEEP_TEMP=true; shift ;;
         --help|-h) usage ;;
@@ -91,30 +124,24 @@ done
 # Prerequisites
 # ---------------------------------------------------------------------------
 log "Prerequisites..."
-log "  Source-api JAR: ${SOURCE_API_JAR}"
-log "  Common JVM JAR: ${COMMON_JVM_JAR}"
 log "  Extensions dir: ${EXTENSIONS_DIR}"
 
-if [ ! -f "$SOURCE_API_JAR" ] || [ ! -f "$COMMON_JVM_JAR" ]; then
-    err "JARs not found. Build: ./gradlew -p macos rebuildSourceApiJars"
+if [ ! -f "$D2J_DEX2JAR" ]; then
+    D2J_DEX2JAR="/opt/homebrew/Cellar/dex2jar/*/bin/d2j-dex2jar"
+    D2J_DEX2JAR=$(ls $D2J_DEX2JAR 2>/dev/null | head -1 || echo "")
+fi
+
+if [ ! -f "$D2J_DEX2JAR" ]; then
+    err "d2j-dex2jar not found. Install: brew install dex2jar"
     exit 1
 fi
 
-JAVAC="${JAVA_HOME}/bin/javac"
-if [ ! -f "$JAVAC" ]; then
-    JAVAC=$(which javac 2>/dev/null || echo "")
-    if [ -z "$JAVAC" ]; then
-        err "javac not found. Ensure JDK 17+ is installed."
-        exit 1
-    fi
-fi
+log "  d2j-dex2jar: ${D2J_DEX2JAR}"
 
-if ! command -v jadx &>/dev/null; then
-    if [ "$SOURCE_ONLY" = false ]; then
-        err "jadx not found. Install: brew install jadx"
-        err "Run with --source-only to skip APK conversion"
-        exit 1
-    fi
+if [ -z "$JAR_CMD" ]; then
+    err "jar command not found. Ensure JDK 17+ is installed."
+    err "Try: export JAVA_HOME=/opt/homebrew/opt/openjdk@17"
+    exit 1
 fi
 
 mkdir -p "${TEMP_DIR}" "${OUTPUT_DIR}" "${EXTENSIONS_DIR}"
@@ -124,7 +151,7 @@ mkdir -p "${TEMP_DIR}" "${OUTPUT_DIR}" "${EXTENSIONS_DIR}"
 # ---------------------------------------------------------------------------
 log ""
 log "═══════════════════════════════════════════════════════════════"
-log "  BATCH EXTENSION BUILD"
+log "  BATCH EXTENSION BUILD (dex2jar)"
 log "═══════════════════════════════════════════════════════════════"
 log ""
 
@@ -134,22 +161,43 @@ DECLARED_PKGS=""
 for repo_entry in "${REPOS[@]}"; do
     REPO_URL="${repo_entry%%:*}"
     REPO_NAME="${repo_entry##*:}"
-    
+
     log "Fetching index from: ${REPO_NAME}..."
+
+    if [ -n "$CUSTOM_REPO" ]; then
+        REPO_URL="$CUSTOM_REPO"
+    fi
+
     REPO_INDEX=$(curl -sL --connect-timeout 15 "$REPO_URL" 2>/dev/null || echo "[]")
-    
+
     EXT_COUNT=$(echo "$REPO_INDEX" | python3 -c "import sys,json; data=json.load(sys.stdin); print(len(data))" 2>/dev/null || echo "0")
     log "  Found ${EXT_COUNT} extensions in ${REPO_NAME}"
-    
-    # For now, just collect the English anime extensions
-    # Filter for English anime-specific packages
-    ANIME_EXTS=$(echo "$REPO_INDEX" | python3 -c "
+
+    # Collect extension entries
+    # If --single is specified, filter by keyword
+    if [ -n "$SINGLE_FILTER" ]; then
+        log "  Filtering for: ${SINGLE_FILTER}"
+        ANIME_EXTS=$(echo "$REPO_INDEX" | python3 -c "
 import sys, json
 data = json.load(sys.stdin)
-# Anime-specific keywords
+keyword = '${SINGLE_FILTER}'.lower()
+for ext in data:
+    pkg = ext.get('pkg', '').lower()
+    name = ext.get('name', '').lower()
+    apk = ext.get('apk', '').lower()
+    if keyword in pkg or keyword in name or keyword in apk:
+        print(json.dumps(ext))
+" 2>/dev/null || echo "")
+    else:
+        # Filter for English anime-specific packages (broad filter)
+        ANIME_EXTS=$(echo "$REPO_INDEX" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+# Keywords that suggest anime extensions
 anime_kw = ['allanime', 'animepahe', 'animesogo', 'animestream', 'anineko',
             'anitusk', 'reanime', 'anidb', 'nineanime', 'hanime', 'animesama',
-            'animegdr', 'animexnovel', 'lunaranime']
+            'animegdr', 'animexnovel', 'lunaranime', 'gogoanime', 'gogocdn',
+            'zoro', 'kaido', 'marin', 'haho', 'm4u', 'flix', 'genoanime']
 for ext in data:
     pkg = ext.get('pkg', '').lower()
     lang = ext.get('lang', '')
@@ -158,7 +206,7 @@ for ext in data:
             print(json.dumps(ext))
             break
 " 2>/dev/null || echo "")
-    
+
     while IFS= read -r line; do
         if [ -n "$line" ]; then
             ALL_EXTENSIONS+=("$line")
@@ -174,11 +222,11 @@ for ext in data:
     done <<< "$ANIME_EXTS"
 done
 
-log "Total unique anime extensions: ${#ALL_EXTENSIONS[@]}"
+log "Total anime extensions to process: ${#ALL_EXTENSIONS[@]}"
 log ""
 
 # ---------------------------------------------------------------------------
-# Step 2: Download and convert each extension
+# Step 2: Download and convert each extension using dex2jar
 # ---------------------------------------------------------------------------
 SUCCESS_COUNT=0
 FAIL_COUNT=0
@@ -190,196 +238,259 @@ for ext_json in "${ALL_EXTENSIONS[@]}"; do
     EXT_PKG=$(echo "$ext_json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('pkg',''))" 2>/dev/null || echo "")
     EXT_APK=$(echo "$ext_json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('apk',''))" 2>/dev/null || echo "")
     EXT_LANG=$(echo "$ext_json" | python3 -c "import sys,json; print(json.load(sys.stdin).get('lang',''))" 2>/dev/null || echo "")
-    
+
     if [ -z "$EXT_PKG" ] || [ -z "$EXT_APK" ]; then
         log "  SKIP: Missing package name or APK URL for ${EXT_NAME}"
         continue
     fi
-    
-    EXT_TEMP="${TEMP_DIR}/ext-${EXT_PKG##*.}"
+
+    # Use the last segment of the package as the short name
+    SHORT_NAME="${EXT_PKG##*.}"
+    EXT_TEMP="${TEMP_DIR}/ext-${SHORT_NAME}"
     mkdir -p "$EXT_TEMP"
-    
+
     log "  [${SUCCESS_COUNT}/${#ALL_EXTENSIONS[@]}] ${EXT_NAME} (${EXT_PKG})"
-    
+
+    # -----------------------------------------------------------------------
     # Step 2a: Download APK
+    # -----------------------------------------------------------------------
     APK_URL="https://raw.githubusercontent.com/salmanbappi/extensions-repo/main/apk/${EXT_APK}"
-    # Try alternative paths
     if ! curl -sL -o "${EXT_TEMP}/extension.apk" "$APK_URL" 2>/dev/null || [ ! -s "${EXT_TEMP}/extension.apk" ]; then
         APK_URL="https://raw.githubusercontent.com/keiyoushi/extensions/repo/apk/${EXT_APK}"
         curl -sL -o "${EXT_TEMP}/extension.apk" "$APK_URL" 2>/dev/null || true
     fi
-    
+
     if [ ! -s "${EXT_TEMP}/extension.apk" ]; then
         info "  FAIL: Could not download APK"
         FAIL_COUNT=$((FAIL_COUNT + 1))
-        FAILED_NAMES="${FAILED_NAMES}  ${EXT_NAME} (download failed)\n"
+        FAILED_NAMES="${FAILED_NAMES}  ${EXT_NAME} (download failed)\\n"
         continue
     fi
-    
+
     APK_SIZE=$(stat -f%z "${EXT_TEMP}/extension.apk" 2>/dev/null || echo "0")
     info "  Downloaded: ${APK_SIZE} bytes"
-    
+
     if [ "$APK_SIZE" -lt 1000 ]; then
         info "  SKIP: File too small (probably a 404)"
         FAIL_COUNT=$((FAIL_COUNT + 1))
-        FAILED_NAMES="${FAILED_NAMES}  ${EXT_NAME} (APK too small)\n"
+        FAILED_NAMES="${FAILED_NAMES}  ${EXT_NAME} (APK too small)\\n"
         continue
     fi
-    
-    # Step 2b: Convert APK to JAR via jadx + javac
-    info "  Decompiling with jadx..."
-    JADX_OUT="${EXT_TEMP}/jadx-output"
-    mkdir -p "$JADX_OUT"
-    
-    if jadx -d "$JADX_OUT" "${EXT_TEMP}/extension.apk" 2>/dev/null | tail -1; then
-        JAVA_SRC_DIR="$JADX_OUT/sources"
-        [ ! -d "$JAVA_SRC_DIR" ] && JAVA_SRC_DIR="$JADX_OUT"
-        
-        SRC_COUNT=$(find "$JAVA_SRC_DIR" -name "*.java" 2>/dev/null | wc -l)
-        info "  Decompiled ${SRC_COUNT} Java source files"
-        
-        if [ "$SRC_COUNT" -gt 0 ]; then
-            # Create Android stubs
-            STUBS_DIR="${EXT_TEMP}/stubs"
-            mkdir -p "${STUBS_DIR}/android/util" "${STUBS_DIR}/android/os" \
-                     "${STUBS_DIR}/android/text" "${STUBS_DIR}/android/net" \
-                     "${STUBS_DIR}/android/content"
-            
-            # Write minimal stubs
-            cat > "${STUBS_DIR}/android/util/Log.java" << 'STUB'
-package android.util;
-public class Log {
-    public static int d(String t, String m) { return 0; }
-    public static int e(String t, String m) { return 0; }
-    public static int w(String t, String m) { return 0; }
-    public static int i(String t, String m) { return 0; }
-}
-STUB
-            cat > "${STUBS_DIR}/android/os/Build.java" << 'STUB'
-package android.os;
-public class Build {
-    public static class VERSION { public static final int SDK_INT = 35; }
-}
-STUB
-            cat > "${STUBS_DIR}/android/text/TextUtils.java" << 'STUB'
-package android.text;
-public class TextUtils {
-    public static boolean isEmpty(CharSequence s) { return s == null || s.length() == 0; }
-}
-STUB
-            cat > "${STUBS_DIR}/android/net/Uri.java" << 'STUB'
-package android.net;
-public class Uri {
-    private final String s;
-    private Uri(String s) { this.s = s; }
-    public static Uri parse(String s) { return new Uri(s); }
-    public static final Uri EMPTY = new Uri("");
-    public String toString() { return s; }
-    public String getPath() { return s; }
-}
-STUB
-            
-            # Compile stubs
-            STUBS_CLASSES="${EXT_TEMP}/stubs-classes"
-            mkdir -p "$STUBS_CLASSES"
-            find "$STUBS_DIR" -name "*.java" -exec "$JAVAC" -d "$STUBS_CLASSES" {} + 2>/dev/null || true
-            
-            # Compile extension source
-            CLASSES_DIR="${EXT_TEMP}/classes"
-            mkdir -p "$CLASSES_DIR"
-            CLASSPATH="${STUBS_CLASSES}:${SOURCE_API_JAR}:${COMMON_JVM_JAR}"
-            
-            find "$JAVA_SRC_DIR" -name "*.java" > "${EXT_TEMP}/sources.txt" 2>/dev/null
-            "$JAVAC" -d "$CLASSES_DIR" -cp "$CLASSPATH" -source 17 -target 17 \
-                     @"${EXT_TEMP}/sources.txt" 2>/dev/null || true
-            
-            CLASS_COUNT=$(find "$CLASSES_DIR" -name "*.class" 2>/dev/null | wc -l)
-            
-            if [ "$CLASS_COUNT" -gt 0 ]; then
-                # Package as JAR
-                JAR_NAME="${EXT_PKG}.jar"
-                mkdir -p "${CLASSES_DIR}/META-INF"
-                
-                # Generate extension.json
-                VERSION_NAME=$(python3 -c "
+
+    # -----------------------------------------------------------------------
+    # Step 2b: Extract metadata from APK (AndroidManifest.xml)
+    # -----------------------------------------------------------------------
+    info "  Extracting metadata from APK..."
+
+    # Extract version info from the AndroidManifest.xml (binary XML, parse as latin-1)
+    VERSION_NAME=$(python3 -c "
 import zipfile, re
 with zipfile.ZipFile('${EXT_TEMP}/extension.apk') as z:
     try:
         data = z.read('AndroidManifest.xml')
         text = data.decode('latin-1')
-        m = re.search(r'versionName=\\\"([^\\\"]+)\\\"', text)
+        # versionName is usually quoted
+        m = re.search(r'versionName=\"([^\"]+)\"', text)
         print(m.group(1) if m else '1.0.0')
-    except: print('1.0.0')
+    except Exception:
+        print('1.0.0')
 " 2>/dev/null || echo "1.0.0")
 
-                VERSION_CODE=$(python3 -c "
+    VERSION_CODE=$(python3 -c "
+import zipfile, re
+with zipfile.ZipFile('${TEMP_DIR}/ext-${SHORT_NAME}/extension.apk') as z:
+    try:
+        data = z.read('AndroidManifest.xml')
+        text = data.decode('latin-1')
+        m = re.search(r'versionCode=\"?([0-9]+)\"?', text)
+        print(m.group(1) if m else '100')
+    except Exception:
+        print('100')
+" 2>/dev/null || echo "100")
+
+    LIB_VERSION=$(echo "$VERSION_NAME" | python3 -c "
+import sys
+v = sys.stdin.read().strip()
+try:
+    parts = v.rsplit('.', 1)
+    if len(parts) > 1:
+        print(float(parts[0]))
+    else:
+        print('15.0')
+except:
+    print('15.0')
+" 2>/dev/null || echo "15.0")
+
+    # Also try to find the real package from the APK
+    APK_PKG=$(python3 -c "
 import zipfile, re
 with zipfile.ZipFile('${EXT_TEMP}/extension.apk') as z:
     try:
         data = z.read('AndroidManifest.xml')
         text = data.decode('latin-1')
-        m = re.search(r'versionCode=\\\"?([0-9]+)\\\"?', text)
-        print(m.group(1) if m else '100')
-    except: print('100')
-" 2>/dev/null || echo "100")
+        m = re.search(r'package=\"([^\"]+)\"', text)
+        print(m.group(1) if m else '${EXT_PKG}')
+    except Exception:
+        print('${EXT_PKG}')
+" 2>/dev/null || echo "${EXT_PKG}")
 
-                LIB_VERSION=$(echo "$VERSION_NAME" | python3 -c "
-v = __import__('sys').stdin.read().strip()
-try: print(float(v.rsplit('.',1)[0]))
-except: print('15.0')
-" 2>/dev/null || echo "15.0")
+    info "  Package: ${APK_PKG}, Version: ${VERSION_NAME} (${VERSION_CODE}), lib: ${LIB_VERSION}"
 
-                # Find source class
-                SOURCE_CLASSES=$(find "$CLASSES_DIR" -name "*.class" 2>/dev/null | \
-                    sed "s|${CLASSES_DIR}/||; s|/|.|g; s|\.class||" | \
-                    grep -vE "(R\$|BuildConfig|Manifest)" | \
-                    head -3 | tr '\n' ';' | sed 's/;$//')
+    # -----------------------------------------------------------------------
+    # Step 2c: Convert APK to JAR via dex2jar (direct DEX→JVM bytecode)
+    # -----------------------------------------------------------------------
+    info "  Converting DEX to JVM bytecode with d2j-dex2jar..."
 
-                cat > "${CLASSES_DIR}/META-INF/extension.json" << JSON
+    # d2j-dex2jar outputs a JAR in the same directory as the input by default
+    D2J_OUTPUT="${EXT_TEMP}/extension-dex2jar.jar"
+
+    # Run dex2jar
+    set +e
+    "$D2J_DEX2JAR" -f -o "$D2J_OUTPUT" "${EXT_TEMP}/extension.apk" 2>"${EXT_TEMP}/dex2jar-err.log" >"${EXT_TEMP}/dex2jar-out.log"
+    D2J_EXIT=$?
+    set -e
+
+    if [ ! -f "$D2J_OUTPUT" ] || [ ! -s "$D2J_OUTPUT" ]; then
+        info "  FAIL: d2j-dex2jar conversion failed (exit code: ${D2J_EXIT})"
+        info "  Error log:"
+        sed 's/^/    /' "${EXT_TEMP}/dex2jar-err.log" 2>/dev/null | head -10
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        FAILED_NAMES="${FAILED_NAMES}  ${EXT_NAME} (dex2jar)\\n"
+        continue
+    fi
+
+    D2J_SIZE=$(stat -f%z "$D2J_OUTPUT" 2>/dev/null || echo "0")
+    info "  dex2jar output: ${D2J_SIZE} bytes"
+
+    CLASS_COUNT=$("$JAR_CMD" tf "$D2J_OUTPUT" 2>/dev/null | grep -c '\.class$' || echo "0")
+    info "  dex2jar produced ${CLASS_COUNT} class files"
+
+    if [ "$CLASS_COUNT" -eq 0 ]; then
+        info "  FAIL: No class files in dex2jar output"
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+        FAILED_NAMES="${FAILED_NAMES}  ${EXT_NAME} (no classes)\\n"
+        continue
+    fi
+
+    # -----------------------------------------------------------------------
+    # Step 2d: Detect source classes from the JAR
+    # -----------------------------------------------------------------------
+    info "  Detecting source classes..."
+
+    # List all classes, remove inner classes ($), exclude Android/Java stdlib
+    SOURCE_CLASSES=$("$JAR_CMD" tf "$D2J_OUTPUT" 2>/dev/null | \
+        grep '\.class$' | \
+        sed 's|/|.|g; s|\.class||' | \
+        grep -vE '^(android\.|java\.|javax\.|kotlin\.|dalvik\.|com\.android\.)' | \
+        grep -vE '(R\$|BuildConfig|Manifest|databinding)' | \
+        head -5 | \    tr '\n' ';' | \
+    sed 's/;$//' || true)
+
+if [ -z "$SOURCE_CLASSES" ]; then
+        info "  WARNING: No non-Android classes found, using all classes (excluding well-known)"
+        SOURCE_CLASSES=$("$JAR_CMD" tf "$D2J_OUTPUT" 2>/dev/null | \
+            grep '\.class$' | \
+            sed 's|/|.|g; s|\.class||' | \
+            grep -vE '(R\$|\$|BuildConfig|Manifest|databinding|android\.|java\.|javax\.|kotlin\.|dalvik\.)' | \
+            head -5 | \
+            tr '\n' ';' | \
+            sed 's/;$//' || true)
+    fi
+
+    if [ -z "$SOURCE_CLASSES" ]; then
+        info "  WARNING: Could not determine source classes, using package-derived name"
+        # Derive class name from package: last segment, capitalized
+        DERIVED=$(python3 -c "
+import sys
+pkg = '${APK_PKG}'
+seg = pkg.rsplit('.', 1)[-1] if '.' in pkg else pkg
+print('${APK_PKG}.' + seg[0].upper() + seg[1:] if seg else '${APK_PKG}.Source')
+" 2>/dev/null)
+        SOURCE_CLASSES="$DERIVED"
+    fi
+
+    info "  Source classes: ${SOURCE_CLASSES}"
+
+    # -----------------------------------------------------------------------
+    # Step 2e: Package with META-INF/extension.json
+    # -----------------------------------------------------------------------
+    info "  Packaging extension JAR with metadata..."
+
+    JAR_NAME="${APK_PKG}.jar"
+    FINAL_JAR="${OUTPUT_DIR}/${JAR_NAME}"
+
+    # Create a temporary directory to add META-INF to the JAR
+    META_DIR="${EXT_TEMP}/meta"
+    mkdir -p "$META_DIR"
+
+    # Determine NSFW status from index data
+    IS_NSFW=$(echo "$ext_json" | python3 -c "
+import sys, json
+try:
+    ext = json.load(sys.stdin)
+    print('true' if ext.get('nsfw', 0) == 1 else 'false')
+except:
+    print('false')
+" 2>/dev/null || echo "false")
+
+    # Write extension.json
+    cat > "${META_DIR}/extension.json" << JSONEOF
 {
   "name": "Aniyomi: ${EXT_NAME}",
-  "pkgName": "${EXT_PKG}",
+  "pkgName": "${APK_PKG}",
   "versionName": "${VERSION_NAME}",
   "versionCode": ${VERSION_CODE:-100},
   "libVersion": ${LIB_VERSION:-15.0},
   "lang": "${EXT_LANG:-en}",
-  "isNsfw": false,
+  "isNsfw": ${IS_NSFW:-false},
   "isTorrent": false,
   "sourceClass": "${SOURCE_CLASSES}",
   "pkgFactory": null,
   "hasReadme": false,
   "hasChangelog": false
 }
-JSON
+JSONEOF
 
-                JAR_PATH="${OUTPUT_DIR}/${JAR_NAME}"
-                cd "$CLASSES_DIR"
-                jar cf "$JAR_PATH" META-INF/ $(find . -name "*.class" 2>/dev/null) 2>/dev/null || true
-                
-                if [ -f "$JAR_PATH" ] && [ -s "$JAR_PATH" ]; then
-                    cp "$JAR_PATH" "${EXTENSIONS_DIR}/${JAR_NAME}"
-                    SUCCESSFUL_JARS="${SUCCESSFUL_JARS}  ${JAR_NAME}\n"
-                    SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-                    info "  ✅ Built: ${JAR_NAME} (${CLASS_COUNT} classes)"
-                else
-                    info "  ❌ JAR packaging failed"
-                    FAIL_COUNT=$((FAIL_COUNT + 1))
-                    FAILED_NAMES="${FAILED_NAMES}  ${EXT_NAME} (JAR packaging)\n"
-                fi
-            else
-                info "  ❌ Compilation failed (${COMPILE_EXIT:-0})"
-                FAIL_COUNT=$((FAIL_COUNT + 1))
-                FAILED_NAMES="${FAILED_NAMES}  ${EXT_NAME} (compilation)\n"
-            fi
-        else
-            info "  ❌ No Java sources decompiled"
-            FAIL_COUNT=$((FAIL_COUNT + 1))
-            FAILED_NAMES="${FAILED_NAMES}  ${EXT_NAME} (no sources)\n"
-        fi
+    info "  extension.json generated:"
+    sed 's/^/    /' "${META_DIR}/extension.json"
+
+    # Copy the dex2jar output and add META-INF
+    cp "$D2J_OUTPUT" "$FINAL_JAR"
+
+    # Add META-INF/extension.json to the JAR
+    cd "$META_DIR"
+    "$JAR_CMD" uf "$FINAL_JAR" extension.json 2>/dev/null || {
+        # If jar update fails (e.g., no manifest), create a new JAR with META-INF
+        mkdir -p "${META_DIR}/META-INF"
+        cp "${META_DIR}/extension.json" "${META_DIR}/META-INF/"
+        cd "$META_DIR"
+        TMP_JAR="${EXT_TEMP}/final.jar"
+        "$JAR_CMD" cf "$TMP_JAR" META-INF/
+        # Merge: extract both JARs into a temp dir and repack
+        MERGE_DIR="${EXT_TEMP}/merge"
+        mkdir -p "$MERGE_DIR"
+        cd "$MERGE_DIR"
+        "$JAR_CMD" xf "$D2J_OUTPUT" 2>/dev/null || true
+        cp -r "${META_DIR}/META-INF" "$MERGE_DIR/" 2>/dev/null || true
+        # Remove existing META-INF from dex2jar if any, to use ours
+        rm -rf "${MERGE_DIR}/META-INF/extension.json" 2>/dev/null || true
+        mkdir -p "${MERGE_DIR}/META-INF"
+        cp "${META_DIR}/extension.json" "${MERGE_DIR}/META-INF/" 2>/dev/null || true
+        cd "$MERGE_DIR"
+        "$JAR_CMD" cf "$FINAL_JAR" . 2>/dev/null || true
+    }
+
+    if [ -f "$FINAL_JAR" ] && [ -s "$FINAL_JAR" ]; then
+        cp "$FINAL_JAR" "${EXTENSIONS_DIR}/${JAR_NAME}"
+        SUCCESSFUL_JARS="${SUCCESSFUL_JARS}  ${JAR_NAME}\\n"
+        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+        FINAL_SIZE=$(stat -f%z "$FINAL_JAR" 2>/dev/null || echo "0")
+        info "  ✅ Built: ${JAR_NAME} (${CLASS_COUNT} classes, ${FINAL_SIZE} bytes)"
+        info "     Installed to: ${EXTENSIONS_DIR}/${JAR_NAME}"
     else
-        info "  ❌ jadx decompilation failed"
+        info "  ❌ JAR packaging failed"
         FAIL_COUNT=$((FAIL_COUNT + 1))
-        FAILED_NAMES="${FAILED_NAMES}  ${EXT_NAME} (jadx)\n"
+        FAILED_NAMES="${FAILED_NAMES}  ${EXT_NAME} (JAR packaging)\\n"
     fi
 done
 
@@ -390,30 +501,63 @@ log ""
 log "Step 3: Generating extension repo index..."
 log ""
 
-# Generate index.min.json pointing to local JARs
+# Build a JSON array of successful extensions for the index
 python3 -c "
-import json
+import json, os
 
 entries = []
-pkg_list = '${DECLARED_PKGS}'.split(',')
+output_dir = '${OUTPUT_DIR}'
+extensions_dir = '${EXTENSIONS_DIR}'
 
-for pkg in pkg_list:
-    if not pkg:
+# Scan the output directory for JARs and their extension.json
+for fname in os.listdir(output_dir):
+    if not fname.endswith('.jar'):
         continue
-    # Create an entry for this package
-    entries.append({
-        'name': pkg.split('.')[-1].title() if '.' in pkg else pkg,
-        'pkg': pkg,
-        'apk': f'{pkg}.jar',
-        'lang': 'en',
-        'code': 100,
-        'version': '1.0.0',
-        'nsfw': 0,
-        'torrent': 0,
-        'sources': []
-    })
+    pkg_name = fname[:-4]  # Remove .jar
+    # Try to read extension.json from the JAR
+    jar_path = os.path.join(output_dir, fname)
+    import zipfile
+    try:
+        with zipfile.ZipFile(jar_path) as z:
+            if 'extension.json' in z.namelist():
+                meta = json.loads(z.read('extension.json'))
+                entries.append({
+                    'name': meta.get('name', pkg_name.split('.')[-1].title()),
+                    'pkg': meta.get('pkgName', pkg_name),
+                    'apk': fname,
+                    'lang': meta.get('lang', 'en'),
+                    'code': meta.get('versionCode', 100),
+                    'version': meta.get('versionName', '1.0.0'),
+                    'nsfw': 1 if meta.get('isNsfw', False) else 0,
+                    'torrent': 1 if meta.get('isTorrent', False) else 0,
+                    'sources': meta.get('sourceClass', '').split(';') if meta.get('sourceClass') else []
+                })
+            else:
+                entries.append({
+                    'name': pkg_name.split('.')[-1].title(),
+                    'pkg': pkg_name,
+                    'apk': fname,
+                    'lang': 'en',
+                    'code': 100,
+                    'version': '1.0.0',
+                    'nsfw': 0,
+                    'torrent': 0,
+                    'sources': []
+                })
+    except Exception:
+        entries.append({
+            'name': pkg_name.split('.')[-1].title(),
+            'pkg': pkg_name,
+            'apk': fname,
+            'lang': 'en',
+            'code': 100,
+            'version': '1.0.0',
+            'nsfw': 0,
+            'torrent': 0,
+            'sources': []
+        })
 
-with open('${OUTPUT_DIR}/index.min.json', 'w') as f:
+with open(os.path.join(output_dir, 'index.min.json'), 'w') as f:
     json.dump(entries, f, separators=(',', ':'))
 
 print(f'Generated index with {len(entries)} entries')

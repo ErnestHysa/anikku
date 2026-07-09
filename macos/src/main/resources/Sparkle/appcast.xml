@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  appcast.xml — Sparkle-compatible appcast feed for Anikku macOS.
+
+  This file is the appcast feed for Sparkle auto-updates. It lists available
+  releases with download URLs, version numbers, and DSA/EdDSA signatures.
+
+  The companion script scripts/generate-appcast.sh automates the creation
+  of this file from GitHub Releases.
+
+  ## Build-time placement
+
+  During development, use the sample appcast below pointing to your local
+  test server. For production, generate this file with generate-appcast.sh
+  and host it at the URL specified in Info.plist's SUFeedURL.
+
+  ## Regenerating
+
+  When a new release is published on GitHub:
+  1. Download the .dmg from the release
+  2. Run: ./scripts/generate-appcast.sh --version X.Y.Z \
+         --dmg /path/to/Anikku-X.Y.Z.dmg \
+         --signing-key /path/to/ed25519-key.pem
+  3. Upload the updated appcast.xml to your server
+-->
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Anikku macOS Appcast</title>
+    <description>Most recent changes to Anikku macOS</description>
+    <language>en</language>
+
+    <!--
+      TEMPLATE ITEM — Copy and replace for each release:
+
+    <item>
+      <title>Version 1.0.1</title>
+      <sparkle:version>1.0.1</sparkle:version>
+      <sparkle:shortVersionString>1.0.1</sparkle:shortVersionString>
+      <pubDate>Mon, 08 Jul 2026 00:00:00 +0000</pubDate>
+      <enclosure
+        url="https://github.com/komikku-app/anikku/releases/download/v1.0.1/Anikku-1.0.1.dmg"
+        sparkle:edSignature="BASE64_EDDSA_SIGNATURE"
+        length="TOTAL_BYTES"
+        type="application/octet-stream" />
+      <sparkle:releaseNotesLink>
+        https://github.com/komikku-app/anikku/releases/tag/v1.0.1
+      </sparkle:releaseNotesLink>
+    </item>
+
+    -->
+  </channel>
+</rss>

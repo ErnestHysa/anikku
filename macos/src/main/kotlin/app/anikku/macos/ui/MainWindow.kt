@@ -12,7 +12,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import app.anikku.macos.ui.components.AnimatedTabFade
 import app.anikku.macos.ui.screens.BrowseScreen
@@ -20,6 +19,8 @@ import app.anikku.macos.ui.screens.HistoryScreen
 import app.anikku.macos.ui.screens.LibraryScreen
 import app.anikku.macos.ui.screens.MoreScreen
 import app.anikku.macos.ui.screens.UpdatesScreen
+import cafe.adriel.voyager.navigator.CurrentScreen
+import cafe.adriel.voyager.navigator.Navigator
 import cafe.adriel.voyager.navigator.tab.CurrentTab
 import cafe.adriel.voyager.navigator.tab.Tab
 import cafe.adriel.voyager.navigator.tab.TabNavigator
@@ -87,9 +88,29 @@ fun MainWindow() {
                     },
                 )
 
-                // Tab content with saveable-state-safe fade transition
+                // Tab content with saveable-state-safe fade transition.
+                // Each tab gets its own nested Navigator so that non-Tab screens
+                // pushed from inside the tab (e.g. ExtensionsScreen, AnimeDetailScreen,
+                // SourceBrowseScreen) go to the inner navigator's stack instead of
+                // polluting the TabNavigator's stack. This prevents the
+                // ClassCastException in tabNavigator.current which internally does
+                // navigator.items.last() as Tab.
                 AnimatedTabFade(contentKey = orderedTabs[currentTabIndex].key) {
-                    CurrentTab()
+                    // Each tab gets its own nested Navigator so that non-Tab screens
+                    // pushed from inside the tab (e.g. ExtensionsScreen, AnimeDetailScreen,
+                    // SourceBrowseScreen) go to the inner navigator's stack instead of
+                    // polluting the TabNavigator's stack. This prevents the
+                    // ClassCastException in tabNavigator.current which internally does
+                    // navigator.items.last() as Tab.
+                    //
+                    // IMPORTANT: Use CurrentScreen() here, NOT CurrentTab().
+                    // CurrentScreen() renders whatever is on top of the inner Navigator's
+                    // stack — initially the tab content, but also any pushed screens.
+                    // CurrentTab() always renders the tab content and ignores pushes,
+                    // making navigation "appear to do nothing."
+                    Navigator(orderedTabs[currentTabIndex]) { _ ->
+                        CurrentScreen()
+                    }
                 }
             }
         }

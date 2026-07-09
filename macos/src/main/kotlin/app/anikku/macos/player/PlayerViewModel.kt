@@ -151,28 +151,30 @@ class PlayerViewModel {
             val handle = MPVLib.create()
             mpvHandle = handle
             _handle.value = handle
+            logger.info { "🚀 MPV_CORE: mpv handle created" }
 
             // Configure mpv
             configureMPV(handle)
 
             val result = MPVLib.initialize(handle)
             if (result < 0) {
-                logger.error { "mpv_initialize failed with code: $result" }
+                logger.error { "🚀 MPV_CORE: mpv_initialize failed with code: $result" }
                 _handle.value = null
                 mpvHandle = null
                 MPVLib.destroy(handle)
                 _playbackState.value = PlaybackState.ERROR
                 return
             }
+            logger.info { "🚀 MPV_CORE: mpv initialized successfully (vo=libmpv, hwdec=videotoolbox)" }
 
             // Create software render context
             val renderer = MPVSoftwareRenderer(handle)
             if (renderer.create()) {
                 softwareRenderer = renderer
                 _renderer.value = renderer
-                logger.info { "Software renderer created and exposed" }
+                logger.info { "🚀 MPV_RENDER: software render context created (MPV_RENDER_API_TYPE_SW)" }
             } else {
-                logger.warn { "Software renderer creation failed — video will not render" }
+                logger.warn { "🚀 MPV_RENDER: software render context creation FAILED — video will not render" }
             }
 
             // Start event loop
@@ -204,21 +206,26 @@ class PlayerViewModel {
                             _playbackState.value = PlaybackState.PLAYING
                             _isPaused.value = false
                             updateDuration()
+                            logger.info { "🎬 VIDEO_FILE: file loaded into mpv — starting playback" }
                         }
                         MPVLib.MPV_EVENT_END_FILE -> {
                             _playbackState.value = PlaybackState.ENDED
+                            logger.info { "🎬 VIDEO_FILE: playback ended" }
                         }
                         MPVLib.MPV_EVENT_VIDEO_RECONFIG -> {
-                            logger.debug { "Video reconfig event" }
                             // Query the video dimensions from mpv
                             val w = MPVLib.getPropertyInt(handle, "dwidth", 0)
                             val h = MPVLib.getPropertyInt(handle, "dheight", 0)
                             if (w > 0 && h > 0) {
                                 softwareRenderer?.updateVideoSize(w, h)
+                                logger.info { "🎬 VIDEO_RECONFIG: video dimensions detected: ${w}x${h}" }
+                            } else {
+                                logger.debug { "🎬 VIDEO_RECONFIG: event received (no usable dimensions yet)" }
                             }
                         }
                         MPVLib.MPV_EVENT_PLAYBACK_RESTART -> {
                             _playbackState.value = PlaybackState.PLAYING
+                            logger.info { "🎬 VIDEO_RESTART: playback restarted after seek/load" }
                         }
                         MPVLib.MPV_EVENT_SEEK -> {
                             _playbackState.value = PlaybackState.SEEKING
@@ -241,7 +248,7 @@ class PlayerViewModel {
             }
 
             _playbackState.value = PlaybackState.IDLE
-            logger.info { "MPV player initialized successfully" }
+            logger.info { "🚀 PLAYER_READY: mpv player fully initialized and awaiting video" }
         } catch (e: Exception) {
             logger.error(e) { "Failed to initialize MPV player" }
             _playbackState.value = PlaybackState.ERROR
@@ -324,7 +331,7 @@ class PlayerViewModel {
 
         currentUrl = url
         _playbackState.value = PlaybackState.LOADING
-        logger.info { "Loading episode: $url" }
+        logger.info { "🎬 VIDEO_LOAD: loading episode into mpv: $url" }
 
         try {
             MPVLib.command(handle, "loadfile", url, "replace")

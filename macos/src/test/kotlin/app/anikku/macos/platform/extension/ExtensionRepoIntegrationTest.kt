@@ -76,6 +76,15 @@ class ExtensionRepoIntegrationTest {
 
     // ── MockWebServer tests (isolated, no network dependency) ──────
 
+    /**
+     * Verifies that the libVersion filter correctly accepts version `"14.1"`.
+     * The index format version `"14.1"` must produce `libVersion = 14.0`
+     * via [MacOSExtensionManager]'s internal [extractLibVersion] logic
+     * (which does `version.substringBeforeLast('.').toDouble()`).
+     *
+     * Version `"14.1"` → `14.0` passes the `>= 12 && <= 15` filter.
+     * Previously we used `"1.0.0"` → `1.0` which failed the filter.
+     */
     @Test
     fun `download with progress callback reports all steps`() = runBlocking {
         val sampleJar = File(sampleJarPath)

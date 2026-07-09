@@ -3,6 +3,7 @@ package app.anikku.macos.player
 import com.sun.jna.Library
 import com.sun.jna.Memory
 import com.sun.jna.Native
+import com.sun.jna.NativeLibrary
 import com.sun.jna.Pointer
 import com.sun.jna.ptr.LongByReference
 import com.sun.jna.ptr.PointerByReference
@@ -54,6 +55,10 @@ object MPVLib {
     fun initialize() {
         if (isInitialized) return
 
+        // mpv requires LC_NUMERIC=C — non-C locales break its config parsing.
+        // Use JNA to call setlocale(LC_NUMERIC, "C") before loading libmpv.
+        forceCLocale()
+
         val libraryPaths = listOfNotNull(
             // Bundle path (Phase 6.1)
             findBundleLibrary(),
@@ -94,16 +99,48 @@ object MPVLib {
         }
     }
 
+    /**
+     * Force LC_NUMERIC to "C" before mpv initialization.
+     *
+     * mpv requires the C locale for LC_NUMERIC because some locales use
+     * commas instead of dots as decimal separators, which breaks mpv's
+     * config file and option parsing. mpv will refuse to initialize
+     * with the error: "Non-C locale detected. This is not supported."
+     *
+     * Uses JNA to call the C library's setlocale() function directly,
+     * which is the only reliable way to change the locale from Java.
+     */
+    private fun forceCLocale() {
+        try {
+            val libc = NativeLibrary.getInstance("c")
+            val setlocale = libc.getFunction("setlocale")
+            // LC_NUMERIC = 1 on all POSIX systems (apple, linux, etc.)
+            // Just call setlocale to force the locale; ignore return value
+            setlocale.invoke(arrayOf(1, "C"))
+        } catch (e: Exception) {
+            logger.debug(e) { "Failed to force LC_NUMERIC locale — mpv may complain" }
+        }
+    }
+
     private fun findBundleLibrary(): String? {
-        // Check several possible bundle-relative paths
-        val candidates = listOf(
-            // Running from IDE — check relative paths
-            "../Frameworks/libmpv.1.dylib",
-            "../../Frameworks/libmpv.1.dylib",
-            // jpackage standard
+        // Check several possible bundle-relative paths.
+        // When running from the packaged .app (jpackage/nativeDistributions),
+        // the working directory is Anikku.app/Contents/MacOS/.
+        // appResourcesRootDir places files in Contents/Resources/.
+        val bundleCandidates = listOf(
+            // Packaged app: Contents/Resources/libmpv.2.dylib (via appResourcesRootDir)
+            "../Resources/libmpv.2.dylib",
+            "../Resources/libmpv.1.dylib",
+            // jpackage standard: Contents/lib/libmpv.2.dylib
+            "../lib/libmpv.2.dylib",
             "../lib/libmpv.1.dylib",
+            // Running from IDE — check relative paths
+            "../Frameworks/libmpv.2.dylib",
+            "../../Frameworks/libmpv.2.dylib",
+            "../../Frameworks/libmpv.1.dylib",
+
         )
-        return candidates.firstOrNull { File(it).isFile }
+        return bundleCandidates.firstOrNull { File(it).isFile }
     }
 
     // -------------------------------------------------------------------------

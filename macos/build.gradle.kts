@@ -276,6 +276,9 @@ compose.desktop {
                 minimumSystemVersion = "12.0"
                 entitlementsFile.set(project.file("src/main/resources/entitlements.plist"))
             }
+
+            // Bundle libmpv.2.dylib into Contents/Resources/ so users don't need brew install mpv
+            appResourcesRootDir.set(file("src/main/resources/dist"))
         }
     }
 }

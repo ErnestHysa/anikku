@@ -49,6 +49,19 @@ fun platformModule(app: AnikkuApplication) = module {
     // Phase 3: Extension system
     single<MacOSExtensionManager> { app.extensionManager }
 
+    // Injekt bridge: Register types that extensions inject via Injekt.getInjekt().getInstance()
+    // These are the common KMP types (expect/actual classes) that the extension JARs
+    // reference in their inlined injectLazy() bytecode.
+    single<eu.kanade.tachiyomi.network.NetworkHelper> {
+        eu.kanade.tachiyomi.network.NetworkHelper(
+            preferences = eu.kanade.tachiyomi.network.NetworkPreferences(get<PreferenceStore>()),
+            isDebugBuild = false,
+        )
+    }
+    single<exh.pref.DelegateSourcePreferences> {
+        exh.pref.DelegateSourcePreferences(get<PreferenceStore>())
+    }
+
     // Phase 7.1: Tracker Sync
     single<TrackerOAuthManager> { TrackerOAuthManager(app.networkHelper.client) }
 

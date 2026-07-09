@@ -70,25 +70,39 @@ object MacOSDockManager {
         if (!isAvailable) return
         try {
             val nsApp = ObjC.objc_getClass("NSApplication")
+            if (Pointer.nativeValue(nsApp) == 0L) {
+                logger.debug { "NSApplication class not found — skipping badge" }
+                return
+            }
             val sharedAppSel = ObjC.sel_registerName("sharedApplication")
             val sharedApp = ObjC.objc_msgSend(nsApp, sharedAppSel)
-                ?: return.also { logger.debug { "sharedApplication returned null — skipping badge" } }
+            // JNA returns Pointer.NULL (native address 0) when the native function
+            // returns nil — this is NOT Kotlin null, so the ?: elvis won't catch it.
+            // Check native pointer value to handle both null and Pointer.NULL.
+            if (sharedApp == null || Pointer.nativeValue(sharedApp) == 0L) {
+                logger.debug { "sharedApplication returned null — skipping badge" }
+                return
+            }
             val dockTileSel = ObjC.sel_registerName("dockTile")
             val dockTile = ObjC.objc_msgSend(sharedApp, dockTileSel)
-                ?: return.also { logger.debug { "dockTile returned null — skipping badge" } }
+            if (dockTile == null || Pointer.nativeValue(dockTile) == 0L) {
+                logger.debug { "dockTile returned null — skipping badge" }
+                return
+            }
             val setBadgeSel = ObjC.sel_registerName("setBadgeLabel:")
 
             if (count > 0) {
-                val label = createNSString(count.toString())
-                if (label != null) {
-                    ObjC.objc_msgSend_void(dockTile, setBadgeSel, label)
+                val label = createNSString(count.toString()) ?: run {
+                    logger.debug { "NSString creation returned null — skipping badge" }
+                    return
                 }
+                ObjC.objc_msgSend_void(dockTile, setBadgeSel, label)
             } else {
                 ObjC.objc_msgSend_void(dockTile, setBadgeSel, Pointer.NULL)
             }
             logger.debug { "Dock badge set to: $count" }
-        } catch (e: Exception) {
-            logger.warn(e) { "Failed to set Dock badge count" }
+        } catch (_: Exception) {
+            // Dock badge is purely cosmetic — silently ignore failures
         }
     }
 
@@ -103,8 +117,10 @@ object MacOSDockManager {
         if (!isAvailable) return
         try {
             val nsApp = ObjC.objc_getClass("NSApplication")
+            if (Pointer.nativeValue(nsApp) == 0L) return
             val sharedAppSel = ObjC.sel_registerName("sharedApplication")
             val sharedApp = ObjC.objc_msgSend(nsApp, sharedAppSel)
+            if (sharedApp == null || Pointer.nativeValue(sharedApp) == 0L) return
             val requestSel = ObjC.sel_registerName("requestUserAttention:")
             val type = if (critical) 1L else 0L
             ObjC.objc_msgSend_void(sharedApp, requestSel, type)
@@ -149,24 +165,31 @@ object MacOSDockManager {
         if (!isAvailable) return
         try {
             val nsApp = ObjC.objc_getClass("NSApplication")
+            if (Pointer.nativeValue(nsApp) == 0L) return
             val sharedAppSel = ObjC.sel_registerName("sharedApplication")
             val sharedApp = ObjC.objc_msgSend(nsApp, sharedAppSel)
+            if (sharedApp == null || Pointer.nativeValue(sharedApp) == 0L) return
 
             // Create NSMenu
             val nsMenuCls = ObjC.objc_getClass("NSMenu")
+            if (Pointer.nativeValue(nsMenuCls) == 0L) return
             val allocSel = ObjC.sel_registerName("alloc")
             val allocedMenu = ObjC.objc_msgSend(nsMenuCls, allocSel)
+            if (allocedMenu == null || Pointer.nativeValue(allocedMenu) == 0L) return
             val initTitleSel = ObjC.sel_registerName("initWithTitle:")
-            val menuTitle = createNSString("DockMenu")
+            val menuTitle = createNSString("DockMenu") ?: return
             val dockMenu = ObjC.objc_msgSend(allocedMenu, initTitleSel, menuTitle)
+            if (dockMenu == null || Pointer.nativeValue(dockMenu) == 0L) return
 
             // Add "Play / Pause" menu item
             addMenuItem(dockMenu, "Play / Pause")
 
             // Add separator
             val separatorItemCls = ObjC.objc_getClass("NSMenuItem")
+            if (Pointer.nativeValue(separatorItemCls) == 0L) return
             val sepSel = ObjC.sel_registerName("separatorItem")
             val separator = ObjC.objc_msgSend(separatorItemCls, sepSel)
+            if (separator == null || Pointer.nativeValue(separator) == 0L) return
             val addItemSel = ObjC.sel_registerName("addItem:")
             ObjC.objc_msgSend_void(dockMenu, addItemSel, separator)
 
@@ -189,12 +212,18 @@ object MacOSDockManager {
 
     /**
      * Create an NSString from a Kotlin String via alloc/initWithUTF8String:.
+     * Returns null if JNA returns a null pointer for the NSString (i.e.
+     * initWithUTF8String: returned nil on the ObjC side).
      */
-    private fun createNSString(str: String): Pointer {
+    private fun createNSString(str: String): Pointer? {
         val nsStrCls = ObjC.objc_getClass("NSString")
         val allocSel = ObjC.sel_registerName("alloc")
         val initSel = ObjC.sel_registerName("initWithUTF8String:")
         val alloced = ObjC.objc_msgSend(nsStrCls, allocSel)
+        if (Pointer.nativeValue(alloced) == 0L) {
+            logger.debug { "Failed to alloc NSString — objc alloc returned nil" }
+            return null
+        }
         return ObjC.objc_msgSend_str(alloced, initSel, str)
     }
 
@@ -204,9 +233,9 @@ object MacOSDockManager {
      */
     private fun addMenuItem(menu: Pointer, title: String) {
         val addItemSel = ObjC.sel_registerName("addItemWithTitle:action:keyEquivalent:")
-        val nsTitle = createNSString(title)
+        val nsTitle = createNSString(title) ?: return
         val emptyAction = ObjC.sel_registerName("")
-        val emptyKey = createNSString("")
+        val emptyKey = createNSString("") ?: return
         ObjC.objc_msgSend_void(menu, addItemSel, nsTitle, emptyAction, emptyKey)
     }
 }

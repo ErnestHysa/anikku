@@ -207,6 +207,10 @@ object MacOSExtensionLoader {
         // Load sources
         val sources = try {
             loadSources(classLoader, metadata)
+        } catch (e: NoClassDefFoundError) {
+            logger.error(e) { "Failed to load sources from $pkgName — missing class dependency (converted APK with android.* references)" }
+            classLoaders.remove(pkgName)?.close()
+            return LoadResult.Error
         } catch (e: Exception) {
             logger.error(e) { "Failed to load sources from $pkgName" }
             classLoaders.remove(pkgName)?.close()
@@ -302,47 +306,52 @@ object MacOSExtensionLoader {
             throw IllegalStateException("No source classes defined for ${metadata.pkgName}")
         }
 
-        return sourceClassNames.flatMap { className ->
-            try {
-                val fullClassName = if (className.startsWith(".")) {
-                    metadata.pkgName + className
-                } else {
-                    className
-                }
+        return sourceClassNames.flatMap { className ->                try {
+                    val fullClassName = if (className.startsWith(".")) {
+                        metadata.pkgName + className
+                    } else {
+                        className
+                    }
 
-                val clazz = Class.forName(fullClassName, true, classLoader)
-                val instance = clazz.getDeclaredConstructor().newInstance()
+                    // Use false (don't initialize) to avoid resolving android.* class references
+                    // that don't exist on JVM. The class will be initialized lazily when first used.
+                    // Keep NoClassDefFoundError catch below as an additional safety net.
+                    val clazz = Class.forName(fullClassName, false, classLoader)
+                    val instance = clazz.getDeclaredConstructor().newInstance()
 
-                when (instance) {
-                    is eu.kanade.tachiyomi.source.Source -> {
-                        logger.info { "Loaded Source directly: $fullClassName" }
-                        listOf(instance)
-                    }
-                    is eu.kanade.tachiyomi.source.SourceFactory -> {
-                        logger.info { "Loaded SourceFactory: $fullClassName — creating sources..." }
-                        instance.createSources()
-                    }
-                    is AnimeSource -> {
-                        logger.warn { "Class $fullClassName implements AnimeSource but not Source. Wrapping via SourceAdapter." }
-                        listOf(SourceAdapter(instance))
-                    }
-                    else -> {
-                        // Try reflection-based wrapping for real extension JARs
-                        val wrapped = wrapAsSource(instance)
-                        if (wrapped != null) {
-                            logger.info { "Wrapped ${instance.javaClass.name} via reflection as CatalogueSource" }
-                            listOf(wrapped)
-                        } else {
-                            throw IllegalStateException(
-                                "Unknown source class type for $fullClassName: ${instance.javaClass.name}"
-                            )
+                    when (instance) {
+                        is eu.kanade.tachiyomi.source.Source -> {
+                            logger.info { "Loaded Source directly: $fullClassName" }
+                            listOf(instance)
+                        }
+                        is eu.kanade.tachiyomi.source.SourceFactory -> {
+                            logger.info { "Loaded SourceFactory: $fullClassName — creating sources..." }
+                            instance.createSources()
+                        }
+                        is AnimeSource -> {
+                            logger.warn { "Class $fullClassName implements AnimeSource but not Source. Wrapping via SourceAdapter." }
+                            listOf(SourceAdapter(instance))
+                        }
+                        else -> {
+                            // Try reflection-based wrapping for real extension JARs
+                            val wrapped = wrapAsSource(instance)
+                            if (wrapped != null) {
+                                logger.info { "Wrapped ${instance.javaClass.name} via reflection as CatalogueSource" }
+                                listOf(wrapped)
+                            } else {
+                                throw IllegalStateException(
+                                    "Unknown source class type for $fullClassName: ${instance.javaClass.name}"
+                                )
+                            }
                         }
                     }
+                } catch (e: NoClassDefFoundError) {
+                    logger.error(e) { "Failed to instantiate source class $className — missing JVM dependency (converted APK has android.* refs)" }
+                    throw e
+                } catch (e: Exception) {
+                    logger.error(e) { "Failed to instantiate source class: $className" }
+                    throw e
                 }
-            } catch (e: Exception) {
-                logger.error(e) { "Failed to instantiate source class: $className" }
-                throw e
-            }
         }
     }
 

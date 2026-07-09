@@ -74,11 +74,14 @@ class AnikkuApplication {
         // 2. Initialize logging
         MacOSLogger.initialize(storageProvider)
 
-        // 3. Initialize preferences (JSON file-backed)
+        // 3. Deploy bundled extensions on first launch (Phase 3.3)
+        deployBundledExtensions()
+
+        // 4. Initialize preferences (JSON file-backed)
         val prefsFile = File(storageProvider.dataDirectory, "preferences.json")
         preferenceStore = MacOSPreferenceStore(prefsFile)
 
-        // 4. Initialize database driver
+        // 5. Initialize database driver
         databaseDriver = MacOSDatabaseDriver(storageProvider)
 
         // 5. Initialize networking (Phase 3.1-3.2)
@@ -134,6 +137,40 @@ class AnikkuApplication {
         MacOSLogger.getLogger<AnikkuApplication>()
             .info("Anikku macOS application initialized")
         CrashReporter.logEvent("App initialization complete")
+    }
+
+    /**
+     * Deploy bundled extension JARs from the .app bundle to the user's extensions directory.
+     *
+     * On first launch (or any launch where the extensions directory is empty),
+     * this copies pre-converted extension JARs from the application bundle's
+     * Resources/libs/ directory so users have working extensions immediately.
+     */
+    private fun deployBundledExtensions() {
+        val bundledLibsDir = File("../Resources/libs")
+        if (!bundledLibsDir.isDirectory) return
+
+        val extensionsDir = storageProvider.extensionsDirectory
+        val jarFiles = bundledLibsDir.listFiles()
+            ?.filter { it.extension == "jar" && it.name.contains("tachiyomi") }
+            ?: emptyList()
+
+        if (jarFiles.isEmpty()) return
+
+        // Copy each bundled JAR that hasn't been installed yet
+        var deployed = 0
+        for (jarFile in jarFiles) {
+            val targetFile = File(extensionsDir, jarFile.name)
+            if (!targetFile.exists()) {
+                jarFile.copyTo(targetFile, overwrite = false)
+                deployed++
+            }
+        }
+
+        if (deployed > 0) {
+            MacOSLogger.getLogger<AnikkuApplication>()
+                .info("Deployed $deployed bundled extension(s) to ${extensionsDir.absolutePath}")
+        }
     }
 
     /**

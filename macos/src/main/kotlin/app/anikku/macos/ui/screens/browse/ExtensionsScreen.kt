@@ -49,6 +49,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.anikku.macos.platform.extension.MacOSExtensionManager
 import app.anikku.macos.ui.AnikkuScreen
+import app.anikku.macos.ui.components.LocalToastHost
+import app.anikku.macos.ui.components.ToastDuration
 import cafe.adriel.voyager.core.screen.ScreenKey
 import cafe.adriel.voyager.core.screen.uniqueScreenKey
 import cafe.adriel.voyager.navigator.LocalNavigator
@@ -84,7 +86,8 @@ data class ExtensionsScreen(
         var selectedTab by remember { mutableStateOf(0) } // 0=Installed, 1=Available, 2=Repos, 3=Untrusted
         // Default anime extension repos — these have actual anime streaming sources
         // (unlike keiyoushi/extensions which is primarily manga)
-        val defaultRepoUrl = "https://raw.githubusercontent.com/salmanbappi/extensions-repo/main/"
+        // Default repos — the macOS extension repo is tried first, then community repos
+        val defaultRepoUrl = "https://raw.githubusercontent.com/ErnestHysa/anikku-extensions-jar/main/"
         val fallbackRepoUrls = listOf(
             defaultRepoUrl,
             "https://raw.githubusercontent.com/keiyoushi/extensions/repo/",
@@ -95,6 +98,7 @@ data class ExtensionsScreen(
         var hasAutoFetched by remember { mutableStateOf(false) }
         var installingPkg by remember { mutableStateOf<String?>(null) }
         var installProgress by remember { mutableStateOf(0f) }
+        val toastHost = LocalToastHost.current
 
         // Auto-fetch available extensions from default repo on first load
         LaunchedEffect(extensionManager) {
@@ -173,7 +177,10 @@ data class ExtensionsScreen(
                         items(installedExtensions, key = { it.pkgName }) { ext ->
                             InstalledExtensionCard(
                                 extension = ext,
-                                onRemove = { extensionManager?.removeExtension(ext) },
+                                onRemove = {
+                                    extensionManager?.removeExtension(ext)
+                                    toastHost.show("Removed ${ext.name}", ToastDuration.SHORT)
+                                },
                             )
                         }
                     }
@@ -242,8 +249,17 @@ data class ExtensionsScreen(
                                         installingPkg = ext.pkgName
                                         try {
                                             extensionManager?.installExtension(ext) { step ->
-                                                if (step is InstallStep.Downloading) {
-                                                    installProgress = step.progress
+                                                when (step) {
+                                                    is InstallStep.Downloading -> {
+                                                        installProgress = step.progress
+                                                    }
+                                                    is InstallStep.Complete -> {
+                                                        toastHost.show("Installed ${ext.name}", ToastDuration.SHORT)
+                                                    }
+                                                    is InstallStep.Error -> {
+                                                        toastHost.show(step.message, ToastDuration.LONG)
+                                                    }
+                                                    else -> {} // Installing handled internally
                                                 }
                                             }
                                         } finally {
@@ -312,7 +328,10 @@ data class ExtensionsScreen(
                         items(untrustedExtensions, key = { it.pkgName }) { ext ->
                             UntrustedExtensionCard(
                                 extension = ext,
-                                onTrust = { extensionManager?.trustExtension(ext) },
+                                onTrust = {
+                                    extensionManager?.trustExtension(ext)
+                                    toastHost.show("Trusted ${ext.name}", ToastDuration.SHORT)
+                                },
                             )
                         }
                     }
@@ -335,17 +354,17 @@ data class ExtensionsScreen(
                         Spacer(Modifier.height(12.dp))
                     }
 
-                    // Pre-configured repos
+                    // Pre-configured repos — macOS-optimized first, then community
                     val repoInfo = listOf(
                         Triple(
                             defaultRepoUrl,
-                            "salmanbappi/extensions-repo",
-                            "Community anime extensions repo — allanime, nineanime, gogoanime, and more"
+                            "Anikku macOS Extensions",
+                            "Pre-converted JARs for macOS — allanime, gogoanime, and more"
                         ),
                         Triple(
-                            fallbackRepoUrls[1],
+                            "https://raw.githubusercontent.com/keiyoushi/extensions/repo/",
                             "keiyoushi/extensions",
-                            "Main keiyoushi extension repo — primarily manga, includes some anime sources"
+                            "Community extension repo — primarily manga, includes some anime sources"
                         ),
                     )
 

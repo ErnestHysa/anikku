@@ -39,20 +39,22 @@ object MacOSMenuBarFactory {
      * Creates the full macOS menu bar with all AD-04 menus.
      *
      * @param frame The AWT Frame (needed for minimize/zoom/fullscreen actions)
-     * @param onQuit Called when Quit (⌘Q) or Close Window (⌘W) is selected
-     * @param onSettings Called when Settings... (⌘,) is selected
-     * @param onAbout Called when About Anikku is selected
-     */
-    fun create(
-        frame: Frame,
-        onQuit: () -> Unit,
-        onSettings: () -> Unit = {},
-        onOpenBackup: () -> Unit = {},
-        onAbout: () -> Unit = {},
-    ): MenuBar {
+ * @param onQuit Called when Quit (⌘Q) or Close Window (⌘W) is selected
+ * @param onSettings Called when Settings... (⌘,) is selected
+ * @param onAbout Called when About Anikku is selected
+ * @param onCheckForUpdates Called when Check for Updates... is selected
+ */
+fun create(
+    frame: Frame,
+    onQuit: () -> Unit,
+    onSettings: () -> Unit = {},
+    onOpenBackup: () -> Unit = {},
+    onAbout: () -> Unit = {},
+    onCheckForUpdates: () -> Unit = {},
+): MenuBar {
         return MenuBar().apply {
             // App menu (first menu becomes macOS application menu)
-            add(appMenu(frame, onQuit, onSettings, onAbout))
+            add(appMenu(frame, onQuit, onSettings, onAbout, onCheckForUpdates))
             add(fileMenu(onQuit, onOpenBackup))
             add(editMenu())
             add(viewMenu(frame))
@@ -76,17 +78,27 @@ object MacOSMenuBarFactory {
         onSettings: () -> Unit = {},
         onOpenBackup: () -> Unit = {},
         onAbout: () -> Unit = {},
+        onCheckForUpdates: () -> Unit = {},
     ) {
-        frame.menuBar = create(frame, onQuit, onSettings, onOpenBackup, onAbout)
+        frame.menuBar = create(frame, onQuit, onSettings, onOpenBackup, onAbout, onCheckForUpdates)
     }
 
     // ---------------------------------------------------------------------------
     // macOS Application Menu
     // ---------------------------------------------------------------------------
-    private fun appMenu(frame: Frame, onQuit: () -> Unit, onSettings: () -> Unit, onAbout: () -> Unit): Menu {
+    private fun appMenu(
+        frame: Frame,
+        onQuit: () -> Unit,
+        onSettings: () -> Unit,
+        onAbout: () -> Unit,
+        onCheckForUpdates: () -> Unit = {},
+    ): Menu {
         return Menu("Anikku").apply {
             add(MenuItem("About Anikku").also {
                 it.addActionListener { onAbout() }
+            })
+            add(MenuItem("Check for Updates...").also {
+                it.addActionListener { onCheckForUpdates() }
             })
             addSeparator()
             add(MenuItem("Settings...", MenuShortcut(KeyEvent.VK_COMMA, false)).also {

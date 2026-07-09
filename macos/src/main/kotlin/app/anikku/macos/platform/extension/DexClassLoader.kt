@@ -45,21 +45,57 @@ object DexClassLoader {
 
     /** The JDK's javac executable path. */
     private val javacPath: String by lazy {
-        // Try JAVA_HOME first, then system PATH
+        // Try JAVA_HOME first, then Homebrew symlinks, then other known paths
+        // IMPORTANT: we verify javac actually works by running --version
         val javaHome = System.getenv("JAVA_HOME")
+        val candidates = mutableListOf<String>()
+
         if (javaHome != null) {
-            val jhJavac = File(javaHome, "bin/javac")
-            if (jhJavac.isFile) return@lazy jhJavac.absolutePath
+            candidates.add(File(javaHome, "bin/javac").absolutePath)
         }
-        // Fallback: try common locations
-        for (path in listOf(
-            "/usr/bin/javac",
-            "/opt/homebrew/Cellar/openjdk@17/17.0.19/libexec/openjdk.jdk/Contents/Home/bin/javac",
-            "/opt/homebrew/opt/openjdk@17/bin/javac",
-        )) {
-            if (File(path).isFile) return@lazy path
+
+        // Homebrew JDK symlinks (preferred — always point to active version)
+        candidates.addAll(
+            listOf(
+                "/opt/homebrew/opt/openjdk@17/bin/javac",
+                "/opt/homebrew/opt/openjdk@21/bin/javac",
+                "/opt/homebrew/opt/openjdk/bin/javac",
+                "/usr/local/opt/openjdk@17/bin/javac",
+                "/usr/local/opt/openjdk/bin/javac",
+            )
+        )
+
+        // Cellar version-specific paths (fallback)
+        candidates.addAll(
+            listOf(
+                "/opt/homebrew/Cellar/openjdk@17/17.0.19/libexec/openjdk.jdk/Contents/Home/bin/javac",
+                "/opt/homebrew/Cellar/openjdk/26.0.1/libexec/openjdk.jdk/Contents/Home/bin/javac",
+            )
+        )
+
+        // macOS system javac (often a stub that fails)
+        candidates.add("/usr/bin/javac")
+
+        // Try each candidate — verify it actually works
+        for (path in candidates) {
+            if (File(path).isFile) {
+                try {
+                    val proc = ProcessBuilder(path, "--version")
+                        .redirectErrorStream(true)
+                        .start()
+                    val output = proc.inputStream.reader().readText()
+                    proc.waitFor()
+                    if (proc.exitValue() == 0 && output.isNotBlank()) {
+                        return@lazy path
+                    }
+                } catch (_: Exception) {
+                    // Candidate failed, try next
+                }
+            }
         }
-        "javac" // Hope it's on PATH
+
+        // Last resort: hope javac is on PATH
+        "javac"
     }
 
     /**

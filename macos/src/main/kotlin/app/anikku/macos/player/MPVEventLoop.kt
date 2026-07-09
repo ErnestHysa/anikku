@@ -96,7 +96,13 @@ class MPVEventLoop(
                     if (event != null) {
                         processEvent(event)
                     }
-                } catch (e: Exception) {
+                } catch (e: VirtualMachineError) {
+                    // Don't swallow fatal JVM errors (OutOfMemoryError, etc.)
+                    throw e
+                } catch (e: Throwable) {
+                    // Catch Throwable (not just Exception) because JNA can throw
+                    // Error types (UnsatisfiedLinkError, etc.) when native functions
+                    // return unexpected values.
                     if (isActive) {
                         logger.warn(e) { "Error in mpv event loop" }
                     }
