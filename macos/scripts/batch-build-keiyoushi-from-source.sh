@@ -476,13 +476,44 @@ print('Generated index with ' + str(len(entries)) + ' entries')
 fi
 
 # ---------------------------------------------------------------------------
-# Step 5: Write trust store
+# Step 5: Write trust store (merge with existing if present)
 # ---------------------------------------------------------------------------
 TRUST_DIR="${HOME}/Library/Application Support/Anikku/data/trust"
 mkdir -p "$TRUST_DIR" 2>/dev/null || true
 TRUST_FILE="${TRUST_DIR}/trusted_extensions.json"
 if [ -f "$TRUST_DATA" ]; then
-    cp "$TRUST_DATA" "$TRUST_FILE"
+    python3 -c "
+import json, os
+
+new_path = '${TRUST_DATA}'
+old_path = '${TRUST_FILE}'
+
+with open(new_path) as f:
+    new_entries = json.load(f)
+
+# Merge with existing trust store if present
+existing = []
+if os.path.exists(old_path):
+    try:
+        with open(old_path) as f:
+            existing = json.load(f)
+    except:
+        pass
+
+# Build index by (pkgName, versionCode) to avoid duplicates
+seen = set()
+merged = []
+for entry in existing + new_entries:
+    key = (entry.get('pkgName', ''), entry.get('versionCode', 0))
+    if key not in seen:
+        seen.add(key)
+        merged.append(entry)
+
+with open(old_path, 'w') as f:
+    json.dump(merged, f, separators=(',', ':'))
+
+print(str(len(merged)))
+" 2>&1
     TRUSTED_COUNT=$(python3 -c "import json; print(len(json.load(open('${TRUST_FILE}'))))" 2>/dev/null || echo "0")
     log "  Trusted ${TRUSTED_COUNT} extension(s) → ${TRUST_FILE}"
 else

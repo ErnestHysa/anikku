@@ -294,7 +294,7 @@ tasks.register<Exec>("batchBuildKeiyoushiExtensions") {
 
     doFirst {
         val scriptPath = "${project.projectDir}/scripts/batch-build-keiyoushi-from-source.sh"
-        val lang = batchExtLang.ifBlank { "en" }
+        val lang = (batchExtLang?.ifBlank { "en" }) ?: "en"
 
         logger.lifecycle("Batch-building extensions for language: $lang")
         logger.lifecycle("Script: $scriptPath")
