@@ -61,6 +61,9 @@ fun platformModule(app: AnikkuApplication) = module {
     single<Json> {
         Json { ignoreUnknownKeys = true }
     }
+    // android.app.Application — extensions compiled for Android inject this.
+    // On JVM there's no Android framework, so we provide a no-op stub.
+    single<android.app.Application> { android.app.Application() }
     single<eu.kanade.tachiyomi.network.NetworkHelper> {
         eu.kanade.tachiyomi.network.NetworkHelper(
             preferences = eu.kanade.tachiyomi.network.NetworkPreferences(get<PreferenceStore>()),
