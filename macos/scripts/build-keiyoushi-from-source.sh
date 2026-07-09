@@ -2,22 +2,23 @@
 #
 # build-keiyoushi-from-source.sh
 # =================================
-# Builds a keiyoushi extension from source as a JVM JAR for macOS.
+# Builds a yuzono/anime-extensions extension from source as a JVM JAR for macOS.
 #
 # Uses git sparse-checkout to download the extension directory PLUS all
-# shared library modules (lib-*) from the keiyoushi/extensions-source repo,
+# shared library modules (lib-*) from the yuzono/anime-extensions repo,
 # then compiles everything against the source-api JARs and Gradle-cached
 # dependency JARs.
 #
 # This avoids android.* references that plague dex2jar-converted APKs.
 #
 # Usage:
-#   ./build-keiyoushi-from-source.sh --pkg nineanime --lang en
+#   ./build-keiyoushi-from-source.sh --pkg miruro --lang en
 #
 # Options:
-#   --pkg <name>    Extension directory name (e.g., nineanime, allanime)
+#   --pkg <name>    Extension directory name (e.g., miruro, anikage, aniwave)
 #   --lang <code>   Language code (default: en)
 #   --keep-temp     Keep temporary files for debugging
+#   --repo <url>    Git repo URL (default: https://github.com/yuzono/anime-extensions.git)
 #   --help          Show this help
 #
 # Requirements:
@@ -33,20 +34,37 @@ EXTENSIONS_DIR="${HOME}/Library/Application Support/Anikku/extensions"
 TEMP_DIR="/tmp/anikku-source-build"
 GIT_CLONE_DIR="${TEMP_DIR}/extensions-source"
 
-KEIYOUSHI_SOURCE_URL="https://github.com/keiyoushi/extensions-source.git"
+# Default: yuzono/anime-extensions (contains actual anime extension sources)
+# Keiyoushi/extensions-source contains ONLY manga extensions (HttpSource, not AnimeHttpSource)
+REPO_URL="${REPO_URL:-https://github.com/yuzono/anime-extensions.git}"
 
 SOURCE_API_JAR="${PROJECT_DIR}/libs/source-api-jvm.jar"
 COMMON_JVM_JAR="${PROJECT_DIR}/libs/common-jvm.jar"
 
-# Find JDK tools
-JAVA_HOME="${JAVA_HOME:-/tmp/corretto17/amazon-corretto-17.jdk/Contents/Home}"
-JAR_CMD=""
-for c in "${JAVA_HOME}/bin/jar" "/opt/homebrew/opt/openjdk@17/bin/jar" "/opt/homebrew/opt/openjdk/bin/jar" $(which jar 2>/dev/null || true); do
-    if [ -n "$c" ] && [ -f "$c" ] && [ -x "$c" ]; then
-        JAR_CMD="$c"
-        break
-    fi
-done
+# Auto-detect JAVA_HOME
+detect_java_home() {
+    # Try common JDK locations
+    for candidate in \
+        "${JAVA_HOME}" \
+        "/opt/homebrew/opt/openjdk@17" \
+        "/opt/homebrew/opt/openjdk@21" \
+        "/opt/homebrew/opt/openjdk" \
+        "/usr/local/opt/openjdk@17" \
+        "/usr/local/opt/openjdk" \
+        "$(/usr/libexec/java_home 2>/dev/null || true)"; do
+        if [ -n "$candidate" ] && [ -f "${candidate}/bin/javac" ]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+    echo ""
+    return 1
+}
+
+JAVA_HOME="$(detect_java_home)"
+JAVA_CMD="${JAVA_HOME}/bin/java"
+JAVAC_CMD="${JAVA_HOME}/bin/javac"
+JAR_CMD="${JAVA_HOME}/bin/jar"
 
 log() { echo "[*] $*"; }
 err() { echo "[!] $*" >&2; }
@@ -65,14 +83,15 @@ usage() {
     cat <<EOF
 Usage: $(basename "$0") --pkg <name> [OPTIONS]
 
-Build a keiyoushi extension from source as a JVM JAR.
+Build a keiyoushi anime extension from source as a JVM JAR.
 
 Required:
-  --pkg <name>     Extension directory name (e.g., nineanime, allanime)
+  --pkg <name>     Extension directory name (e.g., miruro, anikage, aniwave)
 
 Options:
   --lang <code>    Language code (default: en)
   --keep-temp      Keep temporary files for debugging
+  --repo <url>     Git repo URL (default: https://github.com/yuzono/anime-extensions.git)
   --help           Show this help
 EOF
     exit 0
@@ -88,6 +107,7 @@ while [[ $# -gt 0 ]]; do
         --pkg) PKG_NAME="$2"; shift 2 ;;
         --lang) LANG="$2"; shift 2 ;;
         --keep-temp) KEEP_TEMP=true; shift ;;
+        --repo) REPO_URL="$2"; shift 2 ;;
         --help|-h) usage ;;
         *) err "Unknown option: $1"; usage ;;
     esac
@@ -98,29 +118,30 @@ if [ -z "$PKG_NAME" ]; then
     usage
 fi
 
-if [ -z "$JAR_CMD" ]; then
-    err "jar command not found. Set JAVA_HOME or install JDK 17+."
+# Validate prerequisites
+if [ -z "$JAVA_HOME" ] || [ ! -f "$JAVA_CMD" ]; then
+    err "JDK 17+ not found. Install: brew install openjdk@17"
+    err "  Then: export JAVA_HOME=/opt/homebrew/opt/openjdk@17"
     exit 1
 fi
-
-# ---------------------------------------------------------------------------
-# Prerequisites
-# ---------------------------------------------------------------------------
-log "Checking prerequisites..."
-
+if [ ! -f "$JAR_CMD" ]; then
+    err "jar command not found at $JAR_CMD"
+    exit 1
+fi
 if [ ! -f "$SOURCE_API_JAR" ] || [ ! -f "$COMMON_JVM_JAR" ]; then
     err "source-api JARs not found at ${PROJECT_DIR}/libs/"
     err "Build them first: cd ${PROJECT_DIR} && ./gradlew rebuildSourceApiJars"
     exit 1
 fi
-
 if ! command -v kotlinc &>/dev/null; then
     err "kotlinc not found. Install: brew install kotlin"
     exit 1
 fi
 
-log "Found kotlinc: $(which kotlinc)"
+log "JAVA_HOME: ${JAVA_HOME}"
+log "kotlinc: $(which kotlinc)"
 log "jar: ${JAR_CMD}"
+log "Repo: ${REPO_URL}"
 
 # ---------------------------------------------------------------------------
 # Step 1: Download extension + shared lib source
@@ -138,12 +159,16 @@ fi
 
 log "Step 1: Downloading source via git sparse-checkout..."
 git clone --depth 1 --filter=blob:none --no-checkout \
-    "${KEIYOUSHI_SOURCE_URL}" "${GIT_CLONE_DIR}" 2>&1 | tail -2
+    "${REPO_URL}" "${GIT_CLONE_DIR}" 2>&1 | tail -2 || {
+    err "Failed to clone ${REPO_URL}"
+    err "Check that the URL is accessible"
+    exit 1
+}
 
 cd "${GIT_CLONE_DIR}"
 
 # Checkout extension directory and all shared libs
-SHARED_LIBS=$(git ls-tree --name-only HEAD 2>/dev/null | grep '^lib-' || true)
+SHARED_LIBS=$(git ls-tree --name-only HEAD 2>/dev/null | grep -E '^(lib|core|common)' || true)
 SPARSE_PATTERNS="src/${LANG}/${PKG_NAME}"
 for lib in $SHARED_LIBS; do
     SPARSE_PATTERNS="$SPARSE_PATTERNS $lib"
@@ -165,93 +190,99 @@ done
 
 if [ "$SRC_COUNT" -eq 0 ]; then
     err "No source files found for ${PKG_NAME} in language ${LANG}"
+    err "Check available extensions: ls src/${LANG}/"
     exit 1
 fi
 
 # ---------------------------------------------------------------------------
-# Step 2: Parse extension metadata (Python)
+# Step 2: Parse extension metadata
 # ---------------------------------------------------------------------------
 log ""
 log "Step 2: Parsing extension metadata..."
 
-BUILD_FILE="${SRC_DIR}/build.gradle.kts"
+BUILD_FILE=""
+for candidate in "${SRC_DIR}/build.gradle.kts" "${SRC_DIR}/build.gradle" "${GIT_CLONE_DIR}/build.gradle.kts"; do
+    if [ -f "$candidate" ]; then
+        BUILD_FILE="$candidate"
+        break
+    fi
+done
 
-# Write Python metadata extractor to file (avoids bash escaping issues)
-cat > "${TEMP_DIR}/extract_metadata.py" << 'PYEOF'
-import re, os
-
-build_file = os.environ['BUILD_FILE']
-pkg_name = os.environ.get('PKG_NAME', 'unknown')
-temp_dir = os.environ['TEMP_DIR']
-
-with open(build_file) as f:
-    content = f.read()
-
-m = re.search(r'keiyoushi\s*\{([^}]+)\}', content, re.DOTALL)
-block = m.group(1) if m else ''
-
-def get_val(key):
-    m2 = re.search(rf'{key}\s*=\s*"([^"]+)"', block)
-    if m2: return m2.group(1)
-    m2 = re.search(rf'{key}\s*=\s*(\S+)', block)
-    if m2: return m2.group(1).strip()
-    return ''
-
-def get_int(key):
-    v = get_val(key)
-    try: return str(int(v))
-    except: return '100'
-
-name = get_val('name') or pkg_name
-vc = get_int('versionCode')
-libv = get_val('libVersion') or '15.0'
-nsfw = 'NSFW' in block.upper() or 'MIXED' in block.upper()
-
-out_path = os.path.join(temp_dir, 'extension-metadata.txt')
-with open(out_path, 'w') as out:
-    out.write(f'EXT_NAME={name}\n')
-    out.write(f'VERSION_CODE={vc}\n')
-    out.write(f'LIB_VERSION={libv}\n')
-    out.write(f'NSFW={str(nsfw).lower()}\n')
-print('Metadata extracted successfully')
-PYEOF
-
-# Run the extractor
-export BUILD_FILE="${SRC_DIR}/build.gradle.kts"
-export PKG_NAME="${PKG_NAME}"
-export TEMP_DIR="${TEMP_DIR}"
-python3 "${TEMP_DIR}/extract_metadata.py" 2>&1
-
-source "${TEMP_DIR}/extension-metadata.txt"
-
-# Determine actual package name from source files
+# Determine package name from source files
 ACTUAL_PKG=$(grep -r '^package ' "${SRC_DIR}/src" 2>/dev/null | head -1 | sed 's/[[:space:]]*package //' | sed 's/[[:space:]]*$//' || echo "")
 if [ -z "$ACTUAL_PKG" ]; then
-    ACTUAL_PKG="eu.kanade.tachiyomi.extension.${LANG}.${PKG_NAME}"
+    # Try source files directly in extension directory
+    ACTUAL_PKG=$(find "${SRC_DIR}" -name "*.kt" -exec grep -l '^package ' {} \; 2>/dev/null | head -1 | xargs grep '^package ' | head -1 | sed 's/[[:space:]]*package //' | sed 's/[[:space:]]*$//' || echo "")
+fi
+if [ -z "$ACTUAL_PKG" ]; then
+    ACTUAL_PKG="eu.kanade.tachiyomi.animeextension.${LANG}.${PKG_NAME}"
 fi
 JAR_NAME="${ACTUAL_PKG}.jar"
 
-# Find the main source class
-MAIN_SOURCE=$(grep -rl 'CatalogueSource\|HttpSource\|Source::class' "${SRC_DIR}/src" 2>/dev/null | head -1 || echo "")
+# Find main source class (the one that extends AnimeHttpSource or implements CatalogueSource/AnimeSource)
+MAIN_SOURCE=$(find "${SRC_DIR}" -name "*.kt" -exec grep -l 'AnimeHttpSource\|AnimeCatalogueSource\|CatalogueSource' {} \; 2>/dev/null | head -1 || echo "")
 if [ -z "$MAIN_SOURCE" ]; then
-    MAIN_SOURCE=$(find "${SRC_DIR}/src" -name "*.kt" -exec grep -l 'extends\|: .*Source' {} \; 2>/dev/null | head -1 || echo "")
+    # Try any class that has getVideoList or getEpisodeList (core source methods)
+    MAIN_SOURCE=$(find "${SRC_DIR}" -name "*.kt" -exec grep -l 'getVideoList\|getEpisodeList\|getPopularAnime' {} \; 2>/dev/null | head -1 || echo "")
 fi
 if [ -z "$MAIN_SOURCE" ]; then
-    MAIN_SOURCE=$(find "${SRC_DIR}/src" -name "*.kt" -exec wc -l {} \; 2>/dev/null | sort -rn | head -1 | awk '{print $2}')
+    # Fallback: largest file
+    MAIN_SOURCE=$(find "${SRC_DIR}" -name "*.kt" -exec wc -l {} \; 2>/dev/null | sort -rn | head -1 | awk '{print $2}')
 fi
 
 if [ -n "$MAIN_SOURCE" ] && [ -f "$MAIN_SOURCE" ]; then
     CLASS_NAME=$(basename "$MAIN_SOURCE" .kt)
     FULL_CLASS_NAME="${ACTUAL_PKG}.${CLASS_NAME}"
 else
-    CLASS_NAME=$(python3 -c "p='${ACTUAL_PKG}'; seg=p.rsplit('.',1)[-1]; print(seg[0].upper()+seg[1:] if seg else 'Source')")
-    FULL_CLASS_NAME="${ACTUAL_PKG}.${CLASS_NAME}"
+    FULL_CLASS_NAME="${ACTUAL_PKG}.${PKG_NAME^}"
 fi
 
-log "  Name: ${EXT_NAME:-$PKG_NAME}"
 log "  Package: ${ACTUAL_PKG}"
 log "  Source class: ${FULL_CLASS_NAME}"
-log "  Version code: ${VERSION_CODE:-100}"
+
+# Try to get version from build.gradle.kts if available
+VERSION_CODE="100"
+LIB_VERSION="15.0"
+EXT_NAME="${PKG_NAME}"
+NSFW="false"
+
+if [ -n "$BUILD_FILE" ] && [ -f "$BUILD_FILE" ]; then
+    # Write Python output to a temp file to avoid bash subshell variable scoping
+    python3 -c "
+import re, sys
+with open('${BUILD_FILE}') as f:
+    content = f.read()
+m = re.search(r'keiyoushi\\s*\\{([^}]+)\\}', content, re.DOTALL)
+if m:
+    block = m.group(1)
+    name_m = re.search(r'name\\s*=\\s*\"([^\"]+)\"', block)
+    print(f'EXT_NAME={name_m.group(1) if name_m else \"${PKG_NAME}\"}')
+    vc_m = re.search(r'versionCode\\s*=\\s*(\\d+)', block)
+    print(f'VERSION_CODE={vc_m.group(1) if vc_m else \"100\"}')
+    lib_m = re.search(r'libVersion\\s*=\\s*\"([^\"]+)\"', block)
+    print(f'LIB_VERSION={lib_m.group(1) if lib_m else \"15.0\"}')
+    nsfw = 'NSFW' in block.upper() or 'MIXED' in block.upper()
+    print(f'NSFW={\"true\" if nsfw else \"false\"}')
+else:
+    print('EXT_NAME=${PKG_NAME}')
+    print('VERSION_CODE=100')
+    print('LIB_VERSION=15.0')
+    print('NSFW=false')
+" > "${TEMP_DIR}/extension-metadata.txt" 2>/dev/null || true
+
+    # Read temp file into variables (avoids subshell scoping issue)
+    while IFS='=' read -r key value; do
+        case "$key" in
+            EXT_NAME) EXT_NAME="$value" ;;
+            VERSION_CODE) VERSION_CODE="$value" ;;
+            LIB_VERSION) LIB_VERSION="$value" ;;
+            NSFW) NSFW="$value" ;;
+        esac
+    done < "${TEMP_DIR}/extension-metadata.txt"
+fi
+
+log "  Name: ${EXT_NAME}"
+log "  Version code: ${VERSION_CODE}"
 
 # ---------------------------------------------------------------------------
 # Step 3: Build classpath from Gradle cache
@@ -284,26 +315,52 @@ find_dep() {
     return 1
 }
 
-# Kotlin stdlib
-KOTLIN_LIB=$(brew --prefix kotlin 2>/dev/null || echo "/opt/homebrew/opt/kotlin")
-if [ -d "$KOTLIN_LIB/libexec/lib" ]; then
-    for j in "$KOTLIN_LIB"/libexec/lib/*.jar; do add_to_cp "$j"; done
-    log "  Kotlin stdlib: $(ls "$KOTLIN_LIB"/libexec/lib/*.jar 2>/dev/null | wc -l) JARs"
-else
-    log "  WARNING: Kotlin lib dir not found at $KOTLIN_LIB"
+# Also scan macos/libs/ for shared JARs
+if [ -d "${PROJECT_DIR}/libs" ]; then
+    for j in "${PROJECT_DIR}"/libs/*.jar; do
+        [ -f "$j" ] && add_to_cp "$j"
+    done
 fi
 
-# Common dependencies
-find_dep "org.jetbrains.kotlinx" "kotlinx-coroutines-core-jvm" && log "  coroutines ok"
-find_dep "org.jetbrains.kotlinx" "kotlinx-serialization-json-jvm" && log "  serialization ok"
-find_dep "com.squareup.okhttp3" "okhttp" && log "  okhttp ok"
-find_dep "com.squareup.okio" "okio-jvm" && log "  okio ok"
-find_dep "org.jsoup" "jsoup" && log "  jsoup ok"
-find_dep "io.reactivex" "rxjava" && log "  rxjava ok"
-find_dep "com.github.mihonapp" "injekt" && log "  injekt ok"
-find_dep "org.jetbrains" "kotlin-reflect" 2>/dev/null && log "  kotlin-reflect ok" || true
+# Kotlin stdlib from brew
+KOTLIN_LIB=$(brew --prefix kotlin 2>/dev/null || echo "/opt/homebrew/opt/kotlin")
+if [ -d "$KOTLIN_LIB/libexec/lib" ]; then
+    for j in "$KOTLIN_LIB"/libexec/lib/*.jar; do
+        add_to_cp "$j"
+    done
+    log "  Kotlin stdlib: $(ls "$KOTLIN_LIB"/libexec/lib/*.jar 2>/dev/null | wc -l) JARs"
+elif [ -d "$KOTLIN_LIB/libexec/libexec" ]; then
+    # Some kotlin installations use different paths
+    for j in "$KOTLIN_LIB"/libexec/libexec/*.jar; do
+        add_to_cp "$j"
+    done
+    log "  Kotlin stdlib: found in alternative location"
+fi
 
-log "Classpath: $(echo "$CLASSPATH" | tr ':' '\n' | wc -l) entries"
+# Also check Gradle wrapper kotlin distribution
+KOTLIN_PROJECT_DIR="${PROJECT_DIR}/.gradle"
+if [ -d "$KOTLIN_PROJECT_DIR" ]; then
+    for j in $(find "$KOTLIN_PROJECT_DIR" -name 'kotlin-stdlib-*.jar' 2>/dev/null | head -5); do
+        add_to_cp "$j"
+    done
+fi
+
+# Common extension dependencies (from Gradle cache)
+log "  Resolving dependencies..."
+find_dep "org.jetbrains.kotlinx" "kotlinx-coroutines-core-jvm" && log "    coroutines ✓"
+find_dep "org.jetbrains.kotlinx" "kotlinx-serialization-json-jvm" && log "    serialization ✓"
+find_dep "com.squareup.okhttp3" "okhttp-jvm" || find_dep "com.squareup.okhttp3" "okhttp" && log "    okhttp ✓"
+find_dep "com.squareup.okio" "okio-jvm" && log "    okio ✓"
+find_dep "org.jsoup" "jsoup" && log "    jsoup ✓"
+find_dep "io.reactivex" "rxjava" && log "    rxjava ✓"
+find_dep "com.github.mihonapp" "injekt" && log "    injekt ✓"
+find_dep "com.fasterxml.jackson.core" "jackson-core" && log "    jackson-core ✓"
+find_dep "com.fasterxml.jackson.core" "jackson-databind" && log "    jackson-databind ✓"
+find_dep "com.google.code.gson" "gson" && log "    gson ✓"
+find_dep "org.jetbrains" "kotlin-reflect" && log "    kotlin-reflect ✓" || true
+find_dep "com.squareup.okhttp3" "logging-interceptor" && log "    okhttp-logging ✓" || true
+
+log "  Classpath: $(echo "$CLASSPATH" | tr ':' '\n' | wc -l) entries"
 
 # ---------------------------------------------------------------------------
 # Step 3b: Compile shared library modules (in dependency order)
@@ -311,31 +368,32 @@ log "Classpath: $(echo "$CLASSPATH" | tr ':' '\n' | wc -l) entries"
 log ""
 SHARED_LIBS_DIR="${TEMP_DIR}/shared-libs-classes"
 
-# Try compiling shared libs individually (they may have inter-dependencies)
-for attempt in 1 2; do
-    for lib_dir in "${GIT_CLONE_DIR}"/lib-*/; do
-        [ ! -d "$lib_dir" ] && continue
-        lib_name=$(basename "$lib_dir")
-        lib_classes="${SHARED_LIBS_DIR}/${lib_name}"
-        [ -d "$lib_classes" ] && continue  # already compiled
+for lib_dir in "${GIT_CLONE_DIR}"/lib-*/ "${GIT_CLONE_DIR}/common/" "${GIT_CLONE_DIR}/core/"; do
+    [ ! -d "$lib_dir" ] && continue
+    lib_name=$(basename "$lib_dir")
+    lib_classes="${SHARED_LIBS_DIR}/${lib_name}"
+    [ -d "$lib_classes" ] && continue  # already compiled
 
-        find "$lib_dir" -name "*.kt" > "${TEMP_DIR}/${lib_name}-sources.txt" 2>/dev/null || true
-        src_count=$(wc -l < "${TEMP_DIR}/${lib_name}-sources.txt" 2>/dev/null || echo 0)
-        [ "$src_count" -eq 0 ] && continue
+    find "$lib_dir" -name "*.kt" > "${TEMP_DIR}/${lib_name}-sources.txt" 2>/dev/null || true
+    src_count=$(wc -l < "${TEMP_DIR}/${lib_name}-sources.txt" 2>/dev/null || echo 0)
+    [ "$src_count" -eq 0 ] && continue
 
-        log "Compiling shared lib: ${lib_name} (attempt ${attempt})..."
-        mkdir -p "$lib_classes"
+    log "Compiling shared lib: ${lib_name}..."
+    mkdir -p "$lib_classes"
 
-        compiler_output=$({ kotlinc -cp "${CLASSPATH}" -d "$lib_classes" -jvm-target 17 @"${TEMP_DIR}/${lib_name}-sources.txt" 2>&1; } || true)
-        class_count=$(find "$lib_classes" -name "*.class" 2>/dev/null | wc -l)
+    set +e
+    kotlinc -cp "${CLASSPATH}" -d "$lib_classes" -jvm-target 17 @"${TEMP_DIR}/${lib_name}-sources.txt" 2>"${TEMP_DIR}/${lib_name}-compile.log"
+    local_exit=$?
+    set -e
 
-        if [ "$class_count" -gt 0 ]; then
-            add_to_cp "$lib_classes"
-            log "  -> ${class_count} classes"
-        elif [ "$attempt" -eq 2 ]; then
-            log "  -> WARNING: no classes (may need deps not in classpath)"
-        fi
-    done
+    class_count=$(find "$lib_classes" -name "*.class" 2>/dev/null | wc -l)
+
+    if [ "$class_count" -gt 0 ]; then
+        add_to_cp "$lib_classes"
+        log "  -> ${class_count} classes ✓"
+    elif [ "$local_exit" -ne 0 ]; then
+        log "  -> WARNING: compilation failed (${local_exit}) - $(head -1 "${TEMP_DIR}/${lib_name}-compile.log" 2>/dev/null)"
+    fi
 done
 
 # ---------------------------------------------------------------------------
@@ -347,18 +405,20 @@ log "Step 4: Compiling extension..."
 CLASSES_DIR="${TEMP_DIR}/classes"
 mkdir -p "$CLASSES_DIR"
 
+# Find all source files (extension source + any shared libs not separately compiled)
 find "${SRC_DIR}" -name "*.kt" > "${TEMP_DIR}/kotlin-sources.txt" 2>/dev/null
+find "${SRC_DIR}" -name "*.java" >> "${TEMP_DIR}/kotlin-sources.txt" 2>/dev/null
 KT_COUNT=$(wc -l < "${TEMP_DIR}/kotlin-sources.txt" 2>/dev/null || echo 0)
-log "Sources: ${KT_COUNT} Kotlin files"
+log "Sources: ${KT_COUNT} Kotlin/Java files"
 
 # Create META-INF/extension.json
 mkdir -p "${CLASSES_DIR}/META-INF"
 cat > "${CLASSES_DIR}/META-INF/extension.json" << JSONEOF
 {
-  "name": "Aniyomi: ${EXT_NAME:-$PKG_NAME}",
+  "name": "Aniyomi: ${EXT_NAME}",
   "pkgName": "${ACTUAL_PKG}",
   "versionName": "1.0.0",
-  "versionCode": ${VERSION_CODE:-100},
+  "versionCode": ${VERSION_CODE},
   "libVersion": ${LIB_VERSION:-15.0},
   "lang": "${LANG}",
   "isNsfw": ${NSFW:-false},
@@ -379,8 +439,9 @@ CLASS_COUNT=$(find "$CLASSES_DIR" -name "*.class" 2>/dev/null | wc -l)
 log "Compile exit: ${COMPILE_EXIT}, classes: ${CLASS_COUNT}"
 
 if [ "$CLASS_COUNT" -eq 0 ]; then
-    err "Compilation failed:"
-    sed 's/^/  /' "${TEMP_DIR}/compile-err.log" 2>/dev/null | head -20
+    err "Compilation failed!"
+    err "Check ${TEMP_DIR}/compile-err.log for details."
+    sed 's/^/  /' "${TEMP_DIR}/compile-err.log" 2>/dev/null | head -30
     KEEP_TEMP=true
     exit 1
 fi
@@ -393,13 +454,18 @@ log "Step 5: Packaging JAR..."
 
 JAR_PATH="${TEMP_DIR}/${JAR_NAME}"
 cd "$CLASSES_DIR"
-find . -name '*.class' > "${TEMP_DIR}/class-files.txt"
 
-xargs "${JAR_CMD}" cf "${JAR_PATH}" META-INF/extension.json < "${TEMP_DIR}/class-files.txt" 2>/dev/null || \
-    "${JAR_CMD}" cf "${JAR_PATH}" META-INF/extension.json $(find . -name '*.class' 2>/dev/null)
+# Package META-INF/extension.json + all classes
+"${JAR_CMD}" cf "${JAR_PATH}" META-INF/extension.json $(find . -name '*.class' 2>/dev/null)
 
 JAR_SIZE=$(stat -f%z "${JAR_PATH}" 2>/dev/null || echo "0")
 log "JAR: ${JAR_PATH} (${JAR_SIZE} bytes, ${CLASS_COUNT} classes)"
+
+# Verify JAR contains extension.json
+if ! "${JAR_CMD}" tf "${JAR_PATH}" | grep -q 'extension.json'; then
+    err "JAR is missing META-INF/extension.json!"
+    exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Step 6: Install
@@ -411,17 +477,14 @@ mkdir -p "${EXTENSIONS_DIR}"
 cp "${JAR_PATH}" "${EXTENSIONS_DIR}/${JAR_NAME}"
 log "Installed: ${EXTENSIONS_DIR}/${JAR_NAME}"
 
-REPO_APK_DIR="${PROJECT_DIR}/scripts/output/apk"
-if [ -d "$REPO_APK_DIR" ]; then
-    cp "${JAR_PATH}" "${REPO_APK_DIR}/${JAR_NAME}"
-    log "Copied to repo: ${REPO_APK_DIR}/${JAR_NAME}"
-fi
-
 # ---------------------------------------------------------------------------
 log ""
 log "╔══════════════════════════════════════════════════════════════╗"
 log "║  BUILD COMPLETE!"
-log "║  ${EXT_NAME:-$PKG_NAME} (${ACTUAL_PKG})"
+log "║  ${EXT_NAME} (${ACTUAL_PKG})"
 log "║  ${CLASS_COUNT} classes, ${JAR_SIZE} bytes"
 log "║  Source class: ${FULL_CLASS_NAME}"
 log "╚══════════════════════════════════════════════════════════════╝"
+log ""
+log "  Restart Anikku or use Browse → Extensions to see it."
+log "  Trust the extension on first use."

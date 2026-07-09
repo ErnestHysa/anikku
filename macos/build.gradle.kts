@@ -199,52 +199,52 @@ echo "Downloaded $(wc -c < "${D}OUT_DIR/${D}APK_NAME") bytes — APK for referen
 }
 
 /**
- * Build a keiyoushi extension from source as a loadable JVM JAR.
+ * Build a single yuzono/anime-extensions extension from source as a JVM JAR.
  *
- * Downloads the extension source from keiyoushi/extensions-source (GitHub),
- * compiles against source-api JARs, generates META-INF/extension.json,
- * and deploys to the app's extensions directory.
+ * Clones the yuzono/anime-extensions source repo, compiles the extension
+ * against source-api JARs, generates META-INF/extension.json, and deploys
+ * to the app's extensions directory.
  *
  * This is the RECOMMENDED approach for making extensions available on macOS.
- * Unlike the APK conversion approach, this compiles from original Kotlin
- * source, producing clean JVM bytecode with proper class names.
+ * Unlike APK→dex2jar conversion, this produces clean JVM bytecode with
+ * zero Android references.
  *
  * Usage:
- *   ./macos/gradlew -p macos buildKeiyoushiExtension -PbuildKeiyoushiExtName=allanime
+ *   ./macos/gradlew -p macos buildKeiyoushiExtension -PbuildKeiyoushiExtName=miruro
  *
  * Parameters:
- *   -PbuildKeiyoushiExtName=<name>  Extension directory name (required, e.g. allanime)
+ *   -PbuildKeiyoushiExtName=<name>  Extension dir name (required, e.g. miruro)
  *   -PbuildKeiyoushiExtLang=<code>  Language code (default: en)
  *
  * Examples:
- *   # Build allanime extension
- *   ./macos/gradlew -p macos buildKeiyoushiExtension -PbuildKeiyoushiExtName=allanime
+ *   # Build miruro extension
+ *   ./macos/gradlew -p macos buildKeiyoushiExtension -PbuildKeiyoushiExtName=miruro
  *
- *   # Build nineanime extension
- *   ./macos/gradlew -p macos buildKeiyoushiExtension -PbuildKeiyoushiExtName=nineanime
+ *   # Build aniwave extension
+ *   ./macos/gradlew -p macos buildKeiyoushiExtension -PbuildKeiyoushiExtName=aniwave
  *
  * Requirements:
- *   - kotlinc must be installed: brew install kotlin
- *   - source-api JARs must be built
+ *   - kotlinc: brew install kotlin
+ *   - source-api JARs: ./gradlew rebuildSourceApiJars
  */
 val buildKeiyoushiExtName: String? by project
 val buildKeiyoushiExtLang: String by project
 
 tasks.register<Exec>("buildKeiyoushiExtension") {
-    description = "Download keiyoushi extension source and build as loadable JVM JAR"
+    description = "Build a single yuzono anime extension from source as JVM JAR"
     group = "extension"
 
     doFirst {
         val extName = buildKeiyoushiExtName
-            ?: throw GradleException("Usage: -PbuildKeiyoushiExtName=<name> (e.g., -PbuildKeiyoushiExtName=allanime)")
+            ?: throw GradleException("Usage: -PbuildKeiyoushiExtName=<name> (e.g., -PbuildKeiyoushiExtName=miruro)")
         val extLang = buildKeiyoushiExtLang.ifBlank { "en" }
         val scriptPath = "${project.projectDir}/scripts/build-keiyoushi-from-source.sh"
 
         logger.lifecycle("Building extension: $extName (lang: $extLang)")
         logger.lifecycle("Script: $scriptPath")
         logger.lifecycle("")
-        logger.lifecycle("This pipeline compiles keiyoushi extension sources from GitHub")
-        logger.lifecycle("as JVM JARs, bypassing the Android DEX/APK format entirely.")
+        logger.lifecycle("This pipeline compiles yuzono/anime-extensions sources from GitHub")
+        logger.lifecycle("as JVM JARs, bypassing the Android APK format entirely.")
         logger.lifecycle("")
         logger.lifecycle("Requirements: kotlinc (brew install kotlin)")
 
@@ -255,6 +255,63 @@ tasks.register<Exec>("buildKeiyoushiExtension") {
                 "--lang", extLang,
             )
         }
+    }
+}
+
+/**
+ * Batch-build ALL yuzono/anime-extensions from source as JVM JARs.
+ *
+ * Clones the entire yuzono/anime-extensions source repo, compiles each
+ * anime extension against source-api JARs, generates META-INF/extension.json
+ * for each, builds a repo index, and auto-trusts all built extensions.
+ *
+ * This is the RECOMMENDED approach for bulk extension installation on macOS.
+ *
+ * Usage:
+ *   ./macos/gradlew -p macos batchBuildKeiyoushiExtensions
+ *
+ * Options:
+ *   -PbatchExtLang=<code>  Language filter (default: en)
+ *   -PbatchExtLimit=<N>    Build at most N extensions (for testing)
+ *
+ * Examples:
+ *   # Build all English extensions
+ *   ./macos/gradlew -p macos batchBuildKeiyoushiExtensions
+ *
+ *   # Build first 5 for testing
+ *   ./macos/gradlew -p macos batchBuildKeiyoushiExtensions -PbatchExtLimit=5
+ *
+ * Requirements:
+ *   - kotlinc: brew install kotlin
+ *   - source-api JARs built
+ */
+val batchExtLang: String? by project
+val batchExtLimit: String? by project
+
+tasks.register<Exec>("batchBuildKeiyoushiExtensions") {
+    description = "Batch-build ALL yuzono anime extensions from source as JVM JARs"
+    group = "extension"
+
+    doFirst {
+        val scriptPath = "${project.projectDir}/scripts/batch-build-keiyoushi-from-source.sh"
+        val lang = batchExtLang.ifBlank { "en" }
+
+        logger.lifecycle("Batch-building extensions for language: $lang")
+        logger.lifecycle("Script: $scriptPath")
+        logger.lifecycle("")
+        logger.lifecycle("This pipeline compiles yuzono/anime-extensions sources from GitHub")
+        logger.lifecycle("as JVM JARs, bypassing the Android DEX/APK format entirely.")
+        logger.lifecycle("Requirements: kotlinc (brew install kotlin)")
+        logger.lifecycle("")
+
+        val args = mutableListOf("bash", scriptPath, "--lang", lang)
+        val limit = batchExtLimit
+        if (!limit.isNullOrBlank()) {
+            args.add("--limit")
+            args.add(limit)
+        }
+
+        exec { commandLine(args) }
     }
 }
 
