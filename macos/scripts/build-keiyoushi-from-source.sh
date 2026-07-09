@@ -322,6 +322,13 @@ if [ -d "${PROJECT_DIR}/libs" ]; then
     done
 fi
 
+# Add compiled macOS module classes (Android stubs: android.*, androidx.*)
+MACOS_CLASSES_DIR="${PROJECT_DIR}/build/classes/kotlin/main"
+if [ -d "$MACOS_CLASSES_DIR" ]; then
+    add_to_cp "$MACOS_CLASSES_DIR"
+    log "  Android stubs: ${MACOS_CLASSES_DIR} ✓"
+fi
+
 # Kotlin stdlib from brew
 KOTLIN_LIB=$(brew --prefix kotlin 2>/dev/null || echo "/opt/homebrew/opt/kotlin")
 if [ -d "$KOTLIN_LIB/libexec/lib" ]; then
@@ -349,11 +356,14 @@ fi
 log "  Resolving dependencies..."
 find_dep "org.jetbrains.kotlinx" "kotlinx-coroutines-core-jvm" && log "    coroutines ✓"
 find_dep "org.jetbrains.kotlinx" "kotlinx-serialization-json-jvm" && log "    serialization ✓"
+find_dep "org.jetbrains.kotlinx" "kotlinx-serialization-core-jvm" && log "    serialization-core ✓"
 find_dep "com.squareup.okhttp3" "okhttp-jvm" || find_dep "com.squareup.okhttp3" "okhttp" && log "    okhttp ✓"
 find_dep "com.squareup.okio" "okio-jvm" && log "    okio ✓"
 find_dep "org.jsoup" "jsoup" && log "    jsoup ✓"
 find_dep "io.reactivex" "rxjava" && log "    rxjava ✓"
 find_dep "com.github.mihonapp" "injekt" && log "    injekt ✓"
+find_dep "uy.kohesive.injekt" "injekt-api" && log "    injekt-api ✓"
+find_dep "uy.kohesive.injekt" "injekt-core" && log "    injekt-core ✓"
 find_dep "com.fasterxml.jackson.core" "jackson-core" && log "    jackson-core ✓"
 find_dep "com.fasterxml.jackson.core" "jackson-databind" && log "    jackson-databind ✓"
 find_dep "com.google.code.gson" "gson" && log "    gson ✓"
@@ -372,7 +382,12 @@ for lib_dir in "${GIT_CLONE_DIR}"/lib-*/ "${GIT_CLONE_DIR}/common/" "${GIT_CLONE
     [ ! -d "$lib_dir" ] && continue
     lib_name=$(basename "$lib_dir")
     lib_classes="${SHARED_LIBS_DIR}/${lib_name}"
-    [ -d "$lib_classes" ] && continue  # already compiled
+    # Skip only if directory has actual class files (retry if cached empty/broken)
+    if [ -d "$lib_classes" ]; then
+        cached_classes=$(find "$lib_classes" -name '*.class' 2>/dev/null | wc -l | tr -d ' ')
+        [ "$cached_classes" -gt 0 ] && continue
+        rm -rf "$lib_classes"
+    fi
 
     find "$lib_dir" -name "*.kt" > "${TEMP_DIR}/${lib_name}-sources.txt" 2>/dev/null || true
     src_count=$(wc -l < "${TEMP_DIR}/${lib_name}-sources.txt" 2>/dev/null || echo 0)

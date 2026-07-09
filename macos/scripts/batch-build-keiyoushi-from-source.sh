@@ -210,6 +210,19 @@ for j in "${PROJECT_DIR}"/libs/*.jar; do
     [ -f "$j" ] && add_to_cp "$j"
 done
 
+# Add compiled macOS module classes (provides Android stubs: android.*, androidx.*)
+# These are compiled by the Gradle build and found in the build output directory.
+# They provide android.util.Base64, android.os.Handler, android.webkit.WebView, etc.
+# which yuzono anime extensions reference.
+MACOS_CLASSES_DIR="${PROJECT_DIR}/build/classes/kotlin/main"
+if [ -d "$MACOS_CLASSES_DIR" ]; then
+    add_to_cp "$MACOS_CLASSES_DIR"
+    log "  Android stubs: ${MACOS_CLASSES_DIR} ✓"
+else
+    log "  WARNING: macOS build classes not found at ${MACOS_CLASSES_DIR}"
+    log "  Run './gradlew :compileKotlin' first to build the module"
+fi
+
 # Kotlin stdlib from brew
 KOTLIN_LIB=$(brew --prefix kotlin 2>/dev/null || echo "/opt/homebrew/opt/kotlin")
 if [ -d "$KOTLIN_LIB/libexec/lib" ]; then
@@ -221,11 +234,15 @@ fi
 # Common extension deps
 find_dep "org.jetbrains.kotlinx" "kotlinx-coroutines-core-jvm" || true
 find_dep "org.jetbrains.kotlinx" "kotlinx-serialization-json-jvm" || true
+find_dep "org.jetbrains.kotlinx" "kotlinx-serialization-core-jvm" || true
 find_dep "com.squareup.okhttp3" "okhttp-jvm" || find_dep "com.squareup.okhttp3" "okhttp" || true
 find_dep "com.squareup.okio" "okio-jvm" || true
 find_dep "org.jsoup" "jsoup" || true
 find_dep "io.reactivex" "rxjava" || true
 find_dep "com.github.mihonapp" "injekt" || true
+# Original injekt API (uy.kohesive.injekt) — needed by core/keiyoushi.utils
+find_dep "uy.kohesive.injekt" "injekt-api" || true
+find_dep "uy.kohesive.injekt" "injekt-core" || true
 find_dep "com.fasterxml.jackson.core" "jackson-core" || true
 find_dep "com.fasterxml.jackson.core" "jackson-databind" || true
 find_dep "com.google.code.gson" "gson" || true
@@ -252,7 +269,12 @@ for lib_dir in "${GIT_CLONE_DIR}"/lib-*/ "${GIT_CLONE_DIR}/common/" "${GIT_CLONE
     [ ! -d "$lib_dir" ] && continue
     lib_name=$(basename "$lib_dir")
     lib_classes="${SHARED_LIBS_DIR}/${lib_name}"
-    [ -d "$lib_classes" ] && continue
+    # Skip only if directory has actual class files (retry if cached empty/broken)
+    if [ -d "$lib_classes" ]; then
+        cached_classes=$(find "$lib_classes" -name '*.class' 2>/dev/null | wc -l | tr -d ' ')
+        [ "$cached_classes" -gt 0 ] && continue
+        rm -rf "$lib_classes"
+    fi
 
     find "$lib_dir" -name "*.kt" > "${TEMP_DIR}/${lib_name}-sources.txt" 2>/dev/null || true
     src_count=$(wc -l < "${TEMP_DIR}/${lib_name}-sources.txt" 2>/dev/null || echo 0)
@@ -279,6 +301,8 @@ done
 SUCCESS_COUNT=0
 FAIL_COUNT=0
 SKIPPED_COUNT=0
+SUCCESSFUL_PKGS=""
+FAILED_NAMES=""
 TRUST_DATA="${TEMP_DIR}/trust-data.json"
 echo '[]' > "$TRUST_DATA"
 
@@ -324,6 +348,15 @@ for ext_dir in "${EXT_DIRS[@]}"; do
 
     if [ "$IS_ANIME" = false ]; then
         log "  [SKIP] ${EXT_NAME}: not an anime extension (no AnimeHttpSource reference)"
+        SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+        continue
+    fi
+
+    # Check if extension depends on unavailable private libraries
+    # aniyomi-lib (private, not available on JitPack) — some extensions use
+    # DoodExtractor, StreamWishExtractor, etc. from this package.
+    if grep -r 'import aniyomi\.lib\.' "$ext_dir" 2>/dev/null | grep -q .; then
+        log "  [SKIP] ${EXT_NAME}: depends on private lib 'aniyomi.lib.*' (not available on JitPack)"
         SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
         continue
     fi

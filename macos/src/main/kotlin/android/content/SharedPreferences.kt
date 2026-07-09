@@ -27,6 +27,7 @@ interface SharedPreferences {
     fun getLong(key: String, defValue: Long): Long
     fun getFloat(key: String, defValue: Float): Float
     fun getBoolean(key: String, defValue: Boolean): Boolean
+    fun getStringSet(key: String, defValues: Set<String>?): Set<String>?
     fun contains(key: String): Boolean
     fun all(): Map<String, *>
 }
