@@ -16,6 +16,7 @@ import app.anikku.macos.platform.storage.MacOSFilePicker
 import app.anikku.macos.platform.storage.MacOSStorageProvider
 import app.anikku.macos.platform.sync.GoogleDriveRestClient
 import app.anikku.macos.platform.update.AppUpdateChecker
+import kotlinx.serialization.json.Json
 import org.koin.dsl.module
 import tachiyomi.core.common.preference.PreferenceStore
 import tachiyomi.core.common.storage.FolderProvider
@@ -52,6 +53,14 @@ fun platformModule(app: AnikkuApplication) = module {
     // Injekt bridge: Register types that extensions inject via Injekt.getInjekt().getInstance()
     // These are the common KMP types (expect/actual classes) that the extension JARs
     // reference in their inlined injectLazy() bytecode.
+    //
+    // The minimum set of singletons needed by most extensions:
+    // - Json (kotlinx.serialization) — HTTP response parsing
+    // - NetworkHelper — OkHttp client wrapper with preferences
+    // - DelegateSourcePreferences — extension-specific preferences
+    single<Json> {
+        Json { ignoreUnknownKeys = true }
+    }
     single<eu.kanade.tachiyomi.network.NetworkHelper> {
         eu.kanade.tachiyomi.network.NetworkHelper(
             preferences = eu.kanade.tachiyomi.network.NetworkPreferences(get<PreferenceStore>()),
