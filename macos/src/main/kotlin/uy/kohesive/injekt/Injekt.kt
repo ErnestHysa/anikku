@@ -3,28 +3,24 @@ package uy.kohesive.injekt
 import kotlin.reflect.KClass
 import org.koin.core.context.GlobalContext
 import org.koin.core.qualifier.named
-import uy.kohesive.injekt.api.InjektFactory
 import uy.kohesive.injekt.api.InjektModule
+import uy.kohesive.injekt.api.InjektScope
 import java.lang.reflect.Type
 
-// NOTE: InjektFactory is defined locally (not imported from JAR)
-// to avoid Kotlin compiler version conflicts with injekt-api:1.16.1
+// NOTE: InjektFactory and InjektScope are defined locally (not imported from JAR)
+// to avoid Kotlin compiler version conflicts with injekt-api:1.16.1.
+//
+// In ALL versions of injekt-api, `getInjekt()` returns `InjektScope`.
+// `InjektScope` extends `InjektFactory` (added in 1.16.1). By returning
+// `InjektScope`, we satisfy BOTH:
+//   - JVM method resolution: `getInjekt()` → `InjektScope` ✅
+//   - Extensions casting result to `InjektFactory`: succeeds via inheritance ✅
 
 /**
  * Injekt stub for macOS desktop.
  * Delegates all dependency resolution to Koin via GlobalContext.
  * This allows existing shared code using `Injekt.get<T>()` to compile and run
  * on desktop without changes to the shared source files.
- *
- * Extensions compiled against the keiyoushi Injekt library call
- * `Injekt.getInjekt().getInstance<T>()` from inlined `injectLazy()`.
- * This file provides the top-level [getInjekt] function to satisfy
- * those call sites at runtime.
- *
- * IMPORTANT: Extensions expect [getInjekt] to return [InjektFactory] (from
- * the injekt-api JAR), NOT [InjektScope]. The [InjektFactory] interface has
- * 10 methods that extensions call via inlined bytecode. The implementation
- * below delegates all lookups to Koin's GlobalContext.
  */
 object Injekt {
 
@@ -41,14 +37,12 @@ object Injekt {
 }
 
 /**
- * Internal InjektFactory implementation that delegates to Koin's GlobalContext.
+ * Internal InjektScope implementation that delegates to Koin's GlobalContext.
  *
- * Extensions compiled with keiyoushi's Injekt library call
- * `InjektKt.getInjekt().getInstance<NetworkHelper>()` from their inlined
- * `injectLazy()`. The inlined bytecode casts the result to [InjektFactory]
- * and calls [InjektFactory.getInstance] with a [Type] argument.
+ * Implements [InjektScope] (which extends [InjektFactory]), so it satisfies
+ * all extensions regardless of which type they expect from `getInjekt()`.
  */
-private val macosInjektScope = object : InjektFactory {
+private val macosInjektScope = object : InjektScope {
 
     /**
      * Convert a [Type] to a [KClass] for Koin lookup.
@@ -158,13 +152,14 @@ private val macosInjektScope = object : InjektFactory {
 }
 
 /**
- * Top-level function that provides the InjektFactory for extension DI resolution.
+ * Top-level function that provides the InjektScope for extension DI resolution.
  * Extensions call this as `InjektKt.getInjekt()` from their inlined `injectLazy()`.
  *
- * NOTE: Must return [InjektFactory] (from injekt-api JAR), NOT our local [InjektScope] interface.
- * The extension bytecode casts the result to InjektFactory at the call site.
+ * Returns [InjektScope] which extends [InjektFactory], so the returned value
+ * satisfies BOTH types. This matches ALL versions of injekt-api where
+ * `getInjekt()` returns `InjektScope` (not `InjektFactory` directly).
  */
-fun getInjekt(): InjektFactory = macosInjektScope
+fun getInjekt(): InjektScope = macosInjektScope
 
 /**
  * No-op on desktop. On Android, this patches Injekt for compatibility with older versions.
