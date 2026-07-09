@@ -9,6 +9,7 @@ import app.anikku.macos.platform.data.HistoryRepository
 import app.anikku.macos.platform.data.MacOSCustomAnimeRepository
 import app.anikku.macos.platform.database.MacOSDatabaseDriver
 import app.anikku.macos.platform.discord.DiscordRPC
+import app.anikku.macos.platform.extension.MacOSExtensionLoader
 import app.anikku.macos.platform.extension.MacOSExtensionManager
 import app.anikku.macos.platform.logging.CrashReporter
 import app.anikku.macos.platform.logging.MacOSLogger
@@ -145,6 +146,12 @@ class AnikkuApplication {
      * On first launch (or any launch where the extensions directory is empty),
      * this copies pre-converted extension JARs from the application bundle's
      * Resources/libs/ directory so users have working extensions immediately.
+     *
+     * To avoid duplicate-source conflicts (which cause "Key already used" crashes
+     * in BrowseTab), this method compares by [pkgName] from each JAR's
+     * `META-INF/extension.json` — NOT by filename. If an extension with the same
+     * [pkgName] already exists in the user's extensions directory (installed from
+     * a repo or another bundle version), the bundled copy is skipped.
      */
     private fun deployBundledExtensions() {
         val bundledLibsDir = File("../Resources/libs")
@@ -157,9 +164,28 @@ class AnikkuApplication {
 
         if (jarFiles.isEmpty()) return
 
-        // Copy each bundled JAR that hasn't been installed yet
+        // Collect pkgNames already present in the extensions directory
+        val existingPkgNames = extensionsDir.listFiles()
+            ?.filter { it.extension == "jar" }
+            ?.mapNotNull { jar ->
+                MacOSExtensionLoader.readMetadata(jar)?.pkgName
+            }
+            ?.toSet()
+            ?: emptySet()
+
+        // Copy each bundled JAR whose package name is not already installed
         var deployed = 0
+        var skipped = 0
         for (jarFile in jarFiles) {
+            val metadata = MacOSExtensionLoader.readMetadata(jarFile)
+            val pkgName = metadata?.pkgName
+
+            if (pkgName != null && pkgName in existingPkgNames) {
+                // Extension with this package name is already installed — skip
+                skipped++
+                continue
+            }
+
             val targetFile = File(extensionsDir, jarFile.name)
             if (!targetFile.exists()) {
                 jarFile.copyTo(targetFile, overwrite = false)
@@ -167,9 +193,9 @@ class AnikkuApplication {
             }
         }
 
-        if (deployed > 0) {
+        if (deployed > 0 || skipped > 0) {
             MacOSLogger.getLogger<AnikkuApplication>()
-                .info("Deployed $deployed bundled extension(s) to ${extensionsDir.absolutePath}")
+                .info("Deployed $deployed, skipped $skipped bundled extension(s) to ${extensionsDir.absolutePath}")
         }
     }
 
