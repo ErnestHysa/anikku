@@ -1,11 +1,14 @@
 package keiyoushi.utils
 
+import android.content.SharedPreferences
+import androidx.preference.MultiSelectListPreference
+import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.animesource.model.AnimeFilter
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
 import kotlin.properties.ReadWriteProperty
 import kotlin.reflect.KProperty
 import java.util.concurrent.ConcurrentHashMap
-import java.util.prefs.BackingStoreException
 import java.util.prefs.Preferences
 
 /**
@@ -14,102 +17,19 @@ import java.util.prefs.Preferences
 private const val PREFS_NODE = "keiyoushi/utils"
 
 /**
- * Retrieve source-specific preferences as a [MutableMap].
+ * Retrieve source-specific preferences as a [SharedPreferences]-compatible object.
  *
  * Uses [java.util.prefs.Preferences] under the hood so preferences
  * persist across app restarts on the JVM.
  */
-/**
- * Retrieve source-specific preferences as a [MutableMap] with lazy initialization.
- */
-fun getPreferencesLazy(sourceId: Long): Lazy<MutableMap<String, Any>> = lazy { getPreferences(sourceId) }
+fun getPreferencesLazy(sourceId: Long = -1L): Lazy<SharedPreferences> = lazy { getPreferences(sourceId) }
 
-fun getPreferences(sourceId: Long): MutableMap<String, Any> {
+fun getPreferences(sourceId: Long): SharedPreferences {
     val prefsNode = Preferences.userRoot().node("$PREFS_NODE/sources/$sourceId")
-    return JvmPreferencesWrapper(prefsNode)
+    return JvmSharedPreferences(prefsNode)
 }
 
-/**
- * A [MutableMap] backed by [java.util.prefs.Preferences].
- *
- * Thread-safe: all mutations are synchronized on the Preferences node.
- * Supports String, Boolean, Int, Long, Float, and Set<String> values.
- *
- * Numeric string values (e.g. "123") are stored as Strings to avoid
- * type ambiguity — callers must cast to the expected type explicitly.
- */
-private class JvmPreferencesWrapper(
-    private val prefs: Preferences,
-) : MutableMap<String, Any> {
-
-    private val cache: ConcurrentHashMap<String, Any> = ConcurrentHashMap()
-
-    init {
-        try {
-            for (key in prefs.keys()) {
-                val raw = prefs.get(key, null) ?: continue
-                cache[key] = raw
-            }
-        } catch (_: BackingStoreException) {
-            // Preferences backend unavailable — start with empty cache
-        }
-    }
-
-    override val size: Int get() = cache.size
-    override val entries: MutableSet<MutableMap.MutableEntry<String, Any>> = cache.entries
-    override val keys: MutableSet<String> = cache.keys
-    override val values: MutableCollection<Any> = cache.values
-
-    override fun containsKey(key: String): Boolean = cache.containsKey(key)
-    override fun containsValue(value: Any): Boolean = cache.containsValue(value)
-    override fun get(key: String): Any? = cache[key]
-    override fun isEmpty(): Boolean = cache.isEmpty()
-
-    override fun put(key: String, value: Any): Any? {
-        val old = cache.put(key, value)
-        prefs.put(key, value.toString())
-        flushSilently()
-        return old
-    }
-
-    override fun putAll(from: Map<out String, Any>) {
-        for ((k, v) in from) {
-            cache[k] = v
-            prefs.put(k, v.toString())
-        }
-        flushSilently()
-    }
-
-    override fun remove(key: String): Any? {
-        val old = cache.remove(key)
-        prefs.remove(key)
-        flushSilently()
-        return old
-    }
-
-    override fun clear() {
-        cache.clear()
-        try {
-            for (key in prefs.keys()) {
-                prefs.remove(key)
-            }
-        } catch (_: BackingStoreException) {
-            // Best-effort cleanup
-        }
-        flushSilently()
-    }
-
-    /**
-     * Flush changes to the backing store, ignoring errors silently.
-     */
-    private fun flushSilently() {
-        try {
-            prefs.flush()
-        } catch (_: BackingStoreException) {
-            // Backend unavailable — in-memory cache still works
-        }
-    }
-}
+// JvmSharedPreferences is compiled in the macOS module (macos/src/main/kotlin/keiyoushi/utils/JvmSharedPreferences.kt)
 
 /**
  * A thread-safe lazy delegate for mutable values.
@@ -277,9 +197,6 @@ class PreferenceScreenBuilder {
      * Convert to [AnimeFilterList] for the macOS settings UI.
      */
     fun toFilterList(): AnimeFilterList {
-        // AnimeFilter.* types are abstract in the source-api; concrete subclasses
-        // are defined per-source. Return empty by default — extensions should
-        // override getFilterList() directly.
         return AnimeFilterList()
     }
 }
@@ -299,11 +216,113 @@ fun preferences(block: PreferenceScreenBuilder.() -> Unit): List<PreferenceEntry
 // These are no-ops on JVM since there is no PreferenceScreen UI.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Extensions called by lib-multisrc themes (ported from core module)
+// ---------------------------------------------------------------------------
+
 /**
- * Compatibility stub. On Android this added an [EditTextPreference] to a [PreferenceScreen].
- * On JVM/macOS, preferences are configured via [getFilterList] instead.
+ * Returns the [SharedPreferences] associated with current source id
  */
-@Deprecated("Use PreferenceScreenBuilder.editText for JVM-friendly preference DSL", ReplaceWith("editText(key, title, summary, default, dialogTitle, validator)"))
+inline fun AnimeHttpSource.getPreferencesLazy(
+    crossinline migration: SharedPreferences.() -> Unit = { },
+) = lazy {
+    val prefs = getPreferences(id)
+    prefs.migration()
+    prefs
+}
+
+/**
+ * Create [PreferenceDelegate] from a [SharedPreferences] instance (not MutableMap).
+ * Used by themes via: `by preferences.delegate(key, default)`
+ */
+fun <T> SharedPreferences.delegate(key: String, default: T): SharedPreferenceReadWriteDelegate<T> =
+    SharedPreferenceReadWriteDelegate(this, key, default)
+
+/**
+ * Delegate that reads/writes a preference value through [SharedPreferences].
+ * This is the version used by lib-multisrc themes via `.delegate(key, default)`.
+ */
+class SharedPreferenceReadWriteDelegate<T>(
+    private val prefs: SharedPreferences,
+    private val key: String,
+    private val default: T,
+) : ReadWriteProperty<Any?, T> {
+    @Suppress("UNCHECKED_CAST")
+    override fun getValue(thisRef: Any?, property: KProperty<*>): T {
+        return try {
+            when (default) {
+                is String -> prefs.getString(key, default) as T
+                is Int -> prefs.getInt(key, default) as T
+                is Long -> prefs.getLong(key, default) as T
+                is Float -> prefs.getFloat(key, default) as T
+                is Boolean -> prefs.getBoolean(key, default) as T
+                is Set<*> -> prefs.getStringSet(key, default as Set<String>) as T
+                null -> prefs.all[key] as T
+                else -> throw IllegalArgumentException("Unsupported type: ${default.javaClass}")
+            }
+        } catch (_: ClassCastException) {
+            default
+        }
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    override fun setValue(thisRef: Any?, property: KProperty<*>, value: T) {
+        synchronized(this) {
+            val editor = prefs.edit()
+            when (value) {
+                null -> editor.remove(key)
+                is String -> editor.putString(key, value)
+                is Int -> editor.putInt(key, value)
+                is Long -> editor.putLong(key, value)
+                is Float -> editor.putFloat(key, value)
+                is Boolean -> editor.putBoolean(key, value)
+                is Set<*> -> editor.putStringSet(key, value as Set<String>)
+                else -> throw IllegalArgumentException("Unsupported type: ${value.javaClass}")
+            }
+            editor.apply()
+        }
+    }
+}
+
+/**
+ * Add a [MultiSelectListPreference] to the [PreferenceScreen].
+ * Used by lib-multisrc themes via `screen.addSetPreference(...)`.
+ */
+fun PreferenceScreen.addSetPreference(
+    key: String,
+    title: String,
+    summary: String = "",
+    entries: List<String>,
+    entryValues: List<String> = entries,
+    default: Set<String> = emptySet(),
+    restartRequired: Boolean = false,
+    enabled: Boolean = true,
+    onChange: (androidx.preference.Preference, Set<String>) -> Boolean = { _, _ -> true },
+    onComplete: (Set<String>) -> Unit = {},
+) {
+    val pref = MultiSelectListPreference(context).apply {
+        this.key = key
+        this.title = title
+        this.summary = summary
+        this.entries = entries.toTypedArray()
+        this.entryValues = entryValues.toTypedArray()
+        setDefaultValue(default)
+        this.setEnabled(enabled)
+
+        setOnPreferenceChangeListener { pref, newValues ->
+            @Suppress("UNCHECKED_CAST")
+            val values = newValues as Set<String>
+            val isValid = onChange(pref, values)
+            if (isValid) {
+                onComplete(values)
+            }
+            isValid
+        }
+    }
+    addPreference(pref)
+}
+
+@Deprecated("Use PreferenceScreenBuilder.editText for JVM-friendly preference DSL")
 fun addEditTextPreference(
     key: String,
     title: String,
@@ -313,10 +332,7 @@ fun addEditTextPreference(
     validator: ((String) -> Boolean)? = null,
 ) { /* no-op on JVM */ }
 
-/**
- * Compatibility stub. On Android this added a [ListPreference] to a [PreferenceScreen].
- */
-@Deprecated("Use PreferenceScreenBuilder.list for JVM-friendly preference DSL", ReplaceWith("list(key, title, summary, entries, entryValues, default)"))
+@Deprecated("Use PreferenceScreenBuilder.list for JVM-friendly preference DSL")
 fun addListPreference(
     key: String,
     title: String,
@@ -326,23 +342,7 @@ fun addListPreference(
     default: String = "",
 ) { /* no-op on JVM */ }
 
-/**
- * Compatibility stub. On Android this added a [MultiSelectListPreference] to a [PreferenceScreen].
- */
-@Deprecated("Use PreferenceScreenBuilder.multiSelect for JVM-friendly preference DSL", ReplaceWith("multiSelect(key, title, summary, entries, entryValues, default)"))
-fun addSetPreference(
-    key: String,
-    title: String,
-    summary: String = "",
-    entries: List<String>,
-    entryValues: List<String>,
-    default: Set<String> = emptySet(),
-) { /* no-op on JVM */ }
-
-/**
- * Compatibility stub. On Android this added a [SwitchPreferenceCompat] to a [PreferenceScreen].
- */
-@Deprecated("Use PreferenceScreenBuilder.switch for JVM-friendly preference DSL", ReplaceWith("switch(key, title, summary, default)"))
+@Deprecated("Use PreferenceScreenBuilder.switch for JVM-friendly preference DSL")
 fun addSwitchPreference(
     key: String,
     title: String,

@@ -11,24 +11,6 @@ import java.util.logging.Logger
 private val coroutinesLogger = Logger.getLogger("keiyoushi.utils.Coroutines")
 
 /**
- * Maps elements in parallel using [Dispatchers.IO].
- *
- * @since extensions-lib 14
- */
-suspend fun <T, R> Iterable<T>.parallelMap(transform: suspend (T) -> R): List<R> = coroutineScope {
-    map { async(Dispatchers.IO) { transform(it) } }.awaitAll()
-}
-
-/**
- * Blocking version of [parallelMap].
- *
- * @since extensions-lib 14
- */
-fun <T, R> Iterable<T>.parallelMapBlocking(transform: (T) -> R): List<R> = runBlocking {
-    parallelMap { transform(it) }
-}
-
-/**
  * Maps not-null elements in parallel using [Dispatchers.IO].
  *
  * @since extensions-lib 14
@@ -39,18 +21,37 @@ suspend fun <T, R : Any> Iterable<T>.parallelMapNotNull(transform: suspend (T) -
     }
 
 /**
- * Blocking version of [parallelMapNotNull].
+ * Blocking version of [parallelMapNotNull]. Accepts a suspend lambda so callers
+ * can use suspend functions like awaitSuccess() inside the transform.
  *
  * @since extensions-lib 14
  */
-fun <T, R : Any> Iterable<T>.parallelMapNotNullBlocking(transform: (T) -> R?): List<R> = runBlocking {
+inline fun <T, R : Any> Iterable<T>.parallelMapNotNullBlocking(
+    crossinline transform: suspend (T) -> R?,
+): List<R> = runBlocking {
     parallelMapNotNull { transform(it) }
 }
 
 /**
- * Maps and flattens in parallel using [Dispatchers.IO].
+ * Maps elements in parallel using [Dispatchers.IO].
  *
  * @since extensions-lib 14
+ */
+suspend fun <T, R> Iterable<T>.parallelMap(transform: suspend (T) -> R): List<R> = coroutineScope {
+    map { async(Dispatchers.IO) { transform(it) } }.awaitAll()
+}
+
+/**
+ * Blocking version of [parallelMap]. Accepts a suspend lambda.
+ */
+inline fun <T, R> Iterable<T>.parallelMapBlocking(
+    crossinline transform: suspend (T) -> R,
+): List<R> = runBlocking {
+    parallelMap { transform(it) }
+}
+
+/**
+ * Maps and flattens in parallel using [Dispatchers.IO].
  */
 suspend fun <T, R> Iterable<T>.parallelFlatMap(transform: suspend (T) -> Iterable<R>): List<R> =
     coroutineScope {
@@ -58,29 +59,30 @@ suspend fun <T, R> Iterable<T>.parallelFlatMap(transform: suspend (T) -> Iterabl
     }
 
 /**
- * Blocking version of [parallelFlatMap].
- *
- * @since extensions-lib 14
+ * Blocking version of [parallelFlatMap]. Accepts a suspend lambda.
  */
-fun <T, R> Iterable<T>.parallelFlatMapBlocking(transform: (T) -> Iterable<R>): List<R> = runBlocking {
+inline fun <T, R> Iterable<T>.parallelFlatMapBlocking(
+    crossinline transform: suspend (T) -> Iterable<R>,
+): List<R> = runBlocking {
     parallelFlatMap { transform(it) }
 }
 
 /**
  * Like [flatMap] but catches errors, logging them and returning an empty list for failed items.
  *
- * @since extensions-lib 14
+ * Matches the yuzono/anime-extensions source signature: single function parameter `f`.
+ * The cloned repo's original version uses this signature with `inline`+`crossinline`,
+ * which the batch build script strips for JVM compatibility.
  */
-suspend fun <T, R> Iterable<T>.parallelCatchingFlatMap(
-    errorMessage: String = "An error occurred in parallelCatchingFlatMap",
-    transform: suspend (T) -> Iterable<R>,
-): List<R> = coroutineScope {
+suspend fun <A, B> Iterable<A>.parallelCatchingFlatMap(
+    f: suspend (A) -> Iterable<B>,
+): List<B> = coroutineScope {
     map { item ->
         async(Dispatchers.IO) {
             try {
-                transform(item)
+                f(item)
             } catch (e: Exception) {
-                coroutinesLogger.warning("$errorMessage: ${e.message}")
+                coroutinesLogger.warning("An error occurred in parallelCatchingFlatMap: ${e.message}")
                 emptyList()
             }
         }
@@ -89,20 +91,16 @@ suspend fun <T, R> Iterable<T>.parallelCatchingFlatMap(
 
 /**
  * Blocking version of [parallelCatchingFlatMap].
- *
- * @since extensions-lib 14
+ * Matches the yuzono/anime-extensions source signature.
  */
-fun <T, R> Iterable<T>.parallelCatchingFlatMapBlocking(
-    errorMessage: String = "An error occurred in parallelCatchingFlatMap",
-    transform: (T) -> Iterable<R>,
-): List<R> = runBlocking {
-    parallelCatchingFlatMap(errorMessage) { transform(it) }
+fun <A, B> Iterable<A>.parallelCatchingFlatMapBlocking(
+    f: suspend (A) -> Iterable<B>,
+): List<B> = runBlocking {
+    parallelCatchingFlatMap(f)
 }
 
 /**
  * Like [mapNotNull] but catches errors, logging them and returning null for failed items.
- *
- * @since extensions-lib 14
  */
 suspend fun <T, R : Any> Iterable<T>.parallelCatchingMapNotNull(
     errorMessage: String = "An error occurred in parallelCatchingMapNotNull",
@@ -122,8 +120,6 @@ suspend fun <T, R : Any> Iterable<T>.parallelCatchingMapNotNull(
 
 /**
  * Like [flatMap] but catches errors sequentially, logging them and continuing.
- *
- * @since extensions-lib 14
  */
 suspend fun <T, R> Iterable<T>.catchingFlatMap(
     errorMessage: String = "An error occurred in catchingFlatMap",
@@ -141,21 +137,17 @@ suspend fun <T, R> Iterable<T>.catchingFlatMap(
 }
 
 /**
- * Blocking version of [catchingFlatMap].
- *
- * @since extensions-lib 14
+ * Blocking version of [catchingFlatMap]. Accepts a suspend lambda.
  */
-fun <T, R> Iterable<T>.catchingFlatMapBlocking(
+inline fun <T, R> Iterable<T>.catchingFlatMapBlocking(
     errorMessage: String = "An error occurred in catchingFlatMap",
-    transform: (T) -> Iterable<R>,
+    crossinline transform: suspend (T) -> Iterable<R>,
 ): List<R> = runBlocking {
     catchingFlatMap(errorMessage) { transform(it) }
 }
 
 /**
  * Like [flatMap] but catches errors synchronously, logging them and continuing.
- *
- * @since extensions-lib 14
  */
 fun <T, R> Iterable<T>.flatMapCatching(
     errorMessage: String = "An error occurred in flatMapCatching",

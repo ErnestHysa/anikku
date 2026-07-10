@@ -29,5 +29,5 @@ interface SharedPreferences {
     fun getBoolean(key: String, defValue: Boolean): Boolean
     fun getStringSet(key: String, defValues: Set<String>?): Set<String>?
     fun contains(key: String): Boolean
-    fun all(): Map<String, *>
+    val all: Map<String, *>
 }

@@ -22,6 +22,7 @@ open class Preference(
     var summary: String? = null
     var defaultValue: String? = null
     var isPersistent: Boolean = false
+    var enabled: Boolean = true
 
     open fun getOnPreferenceChangeListener(): OnPreferenceChangeListener? = null
 
@@ -30,6 +31,10 @@ open class Preference(
     fun interface OnPreferenceChangeListener {
         fun onPreferenceChange(preference: Preference, newValue: Any?): Boolean
     }
+
+    fun setDefaultValue(value: Any?) {
+        defaultValue = value?.toString()
+    }
 }
 
 /**
@@ -37,15 +42,21 @@ open class Preference(
  */
 open class EditTextPreference(context: android.content.Context?) : Preference(context) {
     var text: String? = null
+    var dialogTitle: String? = null
+    var dialogMessage: String? = null
+
+    fun setOnBindEditTextListener(listener: (android.widget.EditText) -> Unit) {}
 }
 
 /**
  * Stub for ListPreference — dropdown/radio preference entry.
  */
 open class ListPreference(context: android.content.Context?) : Preference(context) {
-    var entries: Array<String>? = null
-    var entryValues: Array<String>? = null
+    var entries: Array<String> = emptyArray()
+    var entryValues: Array<String> = emptyArray()
     var value: String? = null
+
+    fun findIndexOfValue(value: String): Int = 0
 }
 
 /**
@@ -57,19 +68,15 @@ open class SwitchPreference(context: android.content.Context?) : Preference(cont
 
 /**
  * Stub for MultiSelectListPreference — multi-select preference entry.
- * Used by some keiyoushi/yuzono extensions for multi-value preference screens.
  */
 open class MultiSelectListPreference(context: android.content.Context?) : Preference(context) {
-    var entries: Array<String>? = null
-    var entryValues: Array<String>? = null
+    var entries: Array<String> = emptyArray()
+    var entryValues: Array<String> = emptyArray()
     var values: MutableSet<String> = mutableSetOf()
 }
 
 /**
  * Stub for SwitchPreferenceCompat — Material-style toggle preference entry.
- * Used by some extensions that target AndroidX Preference library directly.
- * This is from androidx.preference:preference-ktx (SwitchPreferenceCompat is
- * the Material version of SwitchPreference).
  */
 open class SwitchPreferenceCompat(context: android.content.Context?) : Preference(context) {
     var isChecked: Boolean = false

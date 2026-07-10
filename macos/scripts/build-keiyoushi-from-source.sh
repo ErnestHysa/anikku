@@ -370,6 +370,21 @@ find_dep "com.fasterxml.jackson.core" "jackson-databind" && log "    jackson-dat
 find_dep "com.google.code.gson" "gson" && log "    gson ✓"
 find_dep "org.jetbrains" "kotlin-reflect" && log "    kotlin-reflect ✓" || true
 find_dep "com.squareup.okhttp3" "logging-interceptor" && log "    okhttp-logging ✓" || true
+find_dep "com.squareup.okhttp3" "okhttp-brotli" && log "    okhttp-brotli ✓" || true
+find_dep "app.cash.quickjs" "quickjs-jvm" && log "    quickjs-jvm ✓" || true
+
+# Kotlinx-serialization compiler plugin (required for @Serializable .serializer() methods)
+SERIALIZATION_PLUGIN="${KOTLIN_LIB}/libexec/lib/kotlinx-serialization-compiler-plugin.jar"
+if [ ! -f "$SERIALIZATION_PLUGIN" ]; then
+    SERIALIZATION_PLUGIN=$(find "$KOTLIN_LIB" -name 'kotlinx-serialization-compiler-plugin*.jar' 2>/dev/null | head -1)
+fi
+KOTLINC_OPTS=""
+if [ -f "$SERIALIZATION_PLUGIN" ]; then
+    KOTLINC_OPTS="-Xplugin=$SERIALIZATION_PLUGIN"
+    log "  serialization plugin: $(basename $SERIALIZATION_PLUGIN) ✓"
+else
+    log "  WARNING: kotlinx-serialization plugin not found"
+fi
 
 log "  Classpath: $(echo "$CLASSPATH" | tr ':' '\n' | wc -l) entries"
 
@@ -379,6 +394,101 @@ log "  Classpath: $(echo "$CLASSPATH" | tr ':' '\n' | wc -l) entries"
 log ""
 SHARED_LIBS_DIR="${TEMP_DIR}/shared-libs-classes"
 
+# Step 3b-i: Compile keiyoushi-utils FIRST (provides keiyoushi.utils.* needed by lib/extractors)
+KEIYOUSHI_UTILS_DIR="${PROJECT_DIR}/keiyoushi-utils/src/main/kotlin"
+if [ -d "$KEIYOUSHI_UTILS_DIR" ]; then
+    UTILS_NAME="keiyoushi-utils"
+    UTILS_CLASSES="${SHARED_LIBS_DIR}/${UTILS_NAME}"
+    if [ -d "$UTILS_CLASSES" ]; then
+        cached_classes=$(find "$UTILS_CLASSES" -name '*.class' 2>/dev/null | wc -l | tr -d ' ')
+        [ "$cached_classes" -gt 0 ] && compiled_ok=true || { rm -rf "$UTILS_CLASSES"; compiled_ok=false; }
+    else
+        compiled_ok=false
+    fi
+
+    if [ "$compiled_ok" != true ]; then
+        find "$KEIYOUSHI_UTILS_DIR" -name "*.kt" > "${TEMP_DIR}/${UTILS_NAME}-sources.txt" 2>/dev/null || true
+        utils_src_count=$(wc -l < "${TEMP_DIR}/${UTILS_NAME}-sources.txt" 2>/dev/null || echo 0)
+        if [ "$utils_src_count" -gt 0 ]; then
+            log "Compiling: ${UTILS_NAME} (${utils_src_count} files, pure JVM port)..."
+            mkdir -p "$UTILS_CLASSES"
+            set +e
+            kotlinc -cp "${CLASSPATH}" -d "$UTILS_CLASSES" -jvm-target 17 ${KOTLINC_OPTS} @"${TEMP_DIR}/${UTILS_NAME}-sources.txt" 2>"${TEMP_DIR}/${UTILS_NAME}-compile.log"
+            utils_exit=$?
+            set -e
+            utils_class_count=$(find "$UTILS_CLASSES" -name "*.class" 2>/dev/null | wc -l)
+            if [ "$utils_class_count" -gt 0 ]; then
+                add_to_cp "$UTILS_CLASSES"
+                log "  -> ${utils_class_count} classes ✓"
+            else
+                log "  -> FAILED: $(head -3 "${TEMP_DIR}/${UTILS_NAME}-compile.log" 2>/dev/null)"
+            fi
+        fi
+    else
+        add_to_cp "$UTILS_CLASSES"
+        cached_count=$(find "$UTILS_CLASSES" -name '*.class' 2>/dev/null | wc -l | tr -d ' ')
+        log "${UTILS_NAME} already compiled (${cached_count} cached classes) ✓"
+    fi
+fi
+
+# Step 3b-ii: Compile lib/*/ extractor modules (aniyomi.lib.* package)
+# Must compile AFTER keiyoushi-utils since several extractors import keiyoushi.utils.*
+EXTRACTORS_DIR="${GIT_CLONE_DIR}/lib"
+EXTRACTORS_OUT="${SHARED_LIBS_DIR}/lib-extractors"
+if [ -d "$EXTRACTORS_DIR" ]; then
+    if [ -d "$EXTRACTORS_OUT" ]; then
+        cached_classes=$(find "$EXTRACTORS_OUT" -name '*.class' 2>/dev/null | wc -l | tr -d ' ')
+        [ "$cached_classes" -gt 0 ] && extractors_compiled=true || { rm -rf "$EXTRACTORS_OUT"; extractors_compiled=false; }
+    else
+        extractors_compiled=false
+    fi
+
+    if [ "${extractors_compiled:-false}" != true ]; then
+        # WHITELIST: only compile extractors needed by target extensions.
+        EXTRACTOR_WHITELIST=(
+            "doodextractor"
+            "filemoonextractor"
+            "gogostreamextractor"
+            "mp4uploadextractor"
+            "okruextractor"
+            "playlistutils"
+            "streamlareextractor"
+            "streamwishextractor"
+            "vidhideextractor"
+            "vidmolyextractor"
+        )
+        > "${TEMP_DIR}/lib-extractors-sources.txt"
+        for ext_dir in "${EXTRACTOR_WHITELIST[@]}"; do
+            find "$EXTRACTORS_DIR/$ext_dir" -name '*.kt' -path '*/src/*' 2>/dev/null >> "${TEMP_DIR}/lib-extractors-sources.txt" || true
+        done
+        # Also include unpacker (jsunpacker) and synchrony (Deobfuscator) — needed by mp4upload and streamwish
+        for dir in unpacker synchrony; do
+            find "$EXTRACTORS_DIR/$dir" -name '*.kt' -path '*/src/*' 2>/dev/null >> "${TEMP_DIR}/lib-extractors-sources.txt" || true
+        done
+        extractor_count=$(wc -l < "${TEMP_DIR}/lib-extractors-sources.txt" 2>/dev/null || echo 0)
+        if [ "$extractor_count" -gt 0 ]; then
+            log "Compiling: lib/extractors (${extractor_count} files, aniyomi.lib.*)..."
+            mkdir -p "$EXTRACTORS_OUT"
+            set +e
+            kotlinc -cp "${CLASSPATH}" -d "$EXTRACTORS_OUT" -jvm-target 17 ${KOTLINC_OPTS} @"${TEMP_DIR}/lib-extractors-sources.txt" 2>"${TEMP_DIR}/lib-extractors-compile.log"
+            extractor_exit=$?
+            set -e
+            extractor_class_count=$(find "$EXTRACTORS_OUT" -name '*.class' 2>/dev/null | wc -l)
+            if [ "$extractor_class_count" -gt 0 ]; then
+                add_to_cp "$EXTRACTORS_OUT"
+                log "  -> ${extractor_class_count} classes ✓"
+            else
+                log "  -> FAILED: $(head -3 "${TEMP_DIR}/lib-extractors-compile.log" 2>/dev/null)"
+            fi
+        fi
+    else
+        add_to_cp "$EXTRACTORS_OUT"
+        cached_count=$(find "$EXTRACTORS_OUT" -name '*.class' 2>/dev/null | wc -l | tr -d ' ')
+        log "lib/extractors already compiled (${cached_count} cached classes) ✓"
+    fi
+fi
+
+# Step 3b-iii: Compile shared library modules (lib-*, common, core) in dependency order
 for lib_dir in "${GIT_CLONE_DIR}"/lib-*/ "${GIT_CLONE_DIR}/common/" "${GIT_CLONE_DIR}/core/"; do
     [ ! -d "$lib_dir" ] && continue
     lib_name=$(basename "$lib_dir")
@@ -398,7 +508,7 @@ for lib_dir in "${GIT_CLONE_DIR}"/lib-*/ "${GIT_CLONE_DIR}/common/" "${GIT_CLONE
     mkdir -p "$lib_classes"
 
     set +e
-    kotlinc -cp "${CLASSPATH}" -d "$lib_classes" -jvm-target 17 @"${TEMP_DIR}/${lib_name}-sources.txt" 2>"${TEMP_DIR}/${lib_name}-compile.log"
+    kotlinc -cp "${CLASSPATH}" -d "$lib_classes" -jvm-target 17 ${KOTLINC_OPTS} @"${TEMP_DIR}/${lib_name}-sources.txt" 2>"${TEMP_DIR}/${lib_name}-compile.log"
     local_exit=$?
     set -e
 
@@ -411,44 +521,6 @@ for lib_dir in "${GIT_CLONE_DIR}"/lib-*/ "${GIT_CLONE_DIR}/common/" "${GIT_CLONE
         log "  -> WARNING: compilation failed (${local_exit}) - $(head -1 "${TEMP_DIR}/${lib_name}-compile.log" 2>/dev/null)"
     fi
 done
-
-# Compile the forked keiyoushi-utils module (pure JVM port)
-KEIYOUSHI_UTILS_DIR="${PROJECT_DIR}/keiyoushi-utils/src/main/kotlin"
-if [ -d "$KEIYOUSHI_UTILS_DIR" ]; then
-    UTILS_NAME="keiyoushi-utils"
-    UTILS_CLASSES="${SHARED_LIBS_DIR}/${UTILS_NAME}"
-    if [ -d "$UTILS_CLASSES" ]; then
-        cached_classes=$(find "$UTILS_CLASSES" -name '*.class' 2>/dev/null | wc -l | tr -d ' ')
-        [ "$cached_classes" -gt 0 ] && compiled_ok=true || { rm -rf "$UTILS_CLASSES"; compiled_ok=false; }
-    else
-        compiled_ok=false
-    fi
-
-    if [ "$compiled_ok" != true ]; then
-        find "$KEIYOUSHI_UTILS_DIR" -name "*.kt" > "${TEMP_DIR}/${UTILS_NAME}-sources.txt" 2>/dev/null || true
-        utils_src_count=$(wc -l < "${TEMP_DIR}/${UTILS_NAME}-sources.txt" 2>/dev/null || echo 0)
-        if [ "$utils_src_count" -gt 0 ]; then
-            log "Compiling: ${UTILS_NAME} (${utils_src_count} files, pure JVM port)..."
-            mkdir -p "$UTILS_CLASSES"
-            set +e
-            kotlinc -cp "${CLASSPATH}" -d "$UTILS_CLASSES" -jvm-target 17 @"${TEMP_DIR}/${UTILS_NAME}-sources.txt" 2>"${TEMP_DIR}/${UTILS_NAME}-compile.log"
-            utils_exit=$?
-            set -e
-            utils_class_count=$(find "$UTILS_CLASSES" -name "*.class" 2>/dev/null | wc -l)
-            if [ "$utils_class_count" -gt 0 ]; then
-                add_to_cp "$UTILS_CLASSES"
-                log "  -> ${utils_class_count} classes ✓"
-            else
-                log "  -> FAILED: $(head -3 "${TEMP_DIR}/${UTILS_NAME}-compile.log" 2>/dev/null)"
-            fi
-        fi
-    else
-        # Cached from previous run — add to classpath
-        add_to_cp "$UTILS_CLASSES"
-        cached_count=$(find "$UTILS_CLASSES" -name '*.class' 2>/dev/null | wc -l | tr -d ' ')
-        log "keiyoushi-utils already compiled (${cached_count} cached classes) ✓"
-    fi
-fi
 
 # ---------------------------------------------------------------------------
 # Step 4: Compile the extension
@@ -485,7 +557,7 @@ cat > "${CLASSES_DIR}/META-INF/extension.json" << JSONEOF
 JSONEOF
 
 set +e
-kotlinc -cp "${CLASSPATH}" -d "${CLASSES_DIR}" -jvm-target 17 @"${TEMP_DIR}/kotlin-sources.txt" 2>"${TEMP_DIR}/compile-err.log"
+kotlinc -cp "${CLASSPATH}" -d "${CLASSES_DIR}" -jvm-target 17 ${KOTLINC_OPTS} @"${TEMP_DIR}/kotlin-sources.txt" 2>"${TEMP_DIR}/compile-err.log"
 COMPILE_EXIT=$?
 set -e
 

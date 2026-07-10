@@ -107,6 +107,9 @@ dependencies {
     // kotlinx.serialization-protobuf — needed by keiyoushi-utils Protobuf.kt
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-protobuf-jvm:1.9.0")
 
+    // QuickJS — JavaScript engine used by keiyoushi.lib.synchrony.Deobfuscator
+    implementation("app.cash.quickjs:quickjs-jvm:0.9.2")
+
     // Testing
     testImplementation(libs.junit.jupiter)
     testImplementation(libs.compose.ui.test)

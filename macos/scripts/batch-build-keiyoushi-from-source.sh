@@ -149,6 +149,107 @@ log "  Repo: $(git remote get-url origin 2>/dev/null || echo 'unknown')"
 log "  Commit: $(git rev-parse HEAD 2>/dev/null || echo 'unknown')"
 
 # ---------------------------------------------------------------------------
+# Step 1b: Apply source patches (workarounds for JVM compilation)
+# ---------------------------------------------------------------------------
+#
+# Patch 1: parallelMapNotNull overload ambiguity
+#   Kotlin compiler generates a synthetic non-inline overload for inline suspend
+#   fns with generic parameters, causing ambiguity between:
+#     - suspend fun <A, B> Iterable<A>.parallelMapNotNull(...): List<B>
+#     - suspend fun <T, R : Any> Iterable<T>.parallelMapNotNull(...): List<R>
+#   Fix: remove 'inline' from the suspend version so no synthetic overload is generated.
+CORE_COROUTINES="${GIT_CLONE_DIR}/core/src/main/kotlin/keiyoushi/utils/Coroutines.kt"
+if [ -f "$CORE_COROUTINES" ] && grep -q 'suspend inline fun.*parallelMapNotNull' "$CORE_COROUTINES" 2>/dev/null; then
+    # Kotlin compiler generates a synthetic non-inline overload for inline suspend
+    # functions with generic type params, causing overload resolution ambiguity.
+    # Patching: remove 'inline' from parallelMapNotNull so no synthetic overload.
+    # Also remove 'crossinline' from its lambda param (invalid for non-inline fns).
+    # NOTE: 'crossinline' appears as `(crossinline` (no space after paren) so we
+    # need to match `(crossinline` not ` crossinline `.
+    # IMPORTANT: use a specific pattern to ONLY match the parallelMapNotNull function
+    # definition, NOT parallelMapNotNullBlocking and NOT the call parallelMapNotNull(f).
+    # The pattern `parallelMapNotNull(crossinline` matches only the definition line.
+    sed -i '' '/parallelMapNotNull(crossinline/s/ inline / /' "$CORE_COROUTINES"
+    sed -i '' '/parallelMapNotNull(crossinline/s/(crossinline /(/' "$CORE_COROUTINES"
+    # Patch parallelMapNotNull: remove inline+crossinline, add B : Any bound
+    # The Kotlin/JVM compiler generates a synthetic overload with 'R : Any' bound,
+    # causing ambiguity. Adding 'B : Any' matches the synthetic overload's constraint.
+    sed -i '' '/parallelMapNotNull(crossinline/s/ inline / /' "$CORE_COROUTINES"
+    sed -i '' '/parallelMapNotNull(crossinline/s/(crossinline /(/' "$CORE_COROUTINES"
+    sed -i '' '/parallelMapNotNull(f:/s/<A, B>/<A, B : Any>/' "$CORE_COROUTINES"
+    log "  Patched: parallelMapNotNull — removed inline+crossinline, added B : Any"
+
+    # Patch parallelMapNotNullBlocking: also remove inline+crossinline since it
+    # CALLS parallelMapNotNull (now non-inline). A crossinline parameter cannot
+    # be passed to a non-inline function — the compiler requires the parameter
+    # to be used within an inline context.
+    # NOTE: 'inline' appears at START of line (no leading space), so we need
+    # TWO patterns: one for ' inline ' (mid-line) and one for '^inline ' (line-start)
+    sed -i '' '/parallelMapNotNullBlocking(crossinline/s/ inline / /' "$CORE_COROUTINES"
+    sed -i '' '/parallelMapNotNullBlocking(crossinline/s/^inline //' "$CORE_COROUTINES"
+    sed -i '' '/parallelMapNotNullBlocking(crossinline/s/(crossinline /(/' "$CORE_COROUTINES"
+    log "  Patched: parallelMapNotNullBlocking — removed inline+crossinline"
+
+    # Patch parallelCatchingFlatMap: also remove inline+crossinline.
+    # Same root cause: Kotlin/JVM synthetic overload for inline suspend functions
+    # with generic parameters causes type inference failures when non-suspend
+    # function references (like ::extractVideo) are passed as arguments.
+    # Removing inline+crossinline eliminates the synthetic overload entirely.
+    sed -i '' '/parallelCatchingFlatMap(crossinline/s/ inline / /' "$CORE_COROUTINES"
+    sed -i '' '/parallelCatchingFlatMap(crossinline/s/(crossinline /(/' "$CORE_COROUTINES"
+    log "  Patched: parallelCatchingFlatMap — removed inline+crossinline"
+
+    # Patch parallelCatchingFlatMapBlocking: remove inline+crossinline too.
+    # It CALLS parallelCatchingFlatMap (now non-inline) and passes its
+    # crossinline parameter — illegal for non-inline functions.
+    sed -i '' '/parallelCatchingFlatMapBlocking(crossinline/s/ inline / /' "$CORE_COROUTINES"
+    sed -i '' '/parallelCatchingFlatMapBlocking(crossinline/s/^inline //' "$CORE_COROUTINES"
+    sed -i '' '/parallelCatchingFlatMapBlocking(crossinline/s/(crossinline /(/' "$CORE_COROUTINES"
+    log "  Patched: parallelCatchingFlatMapBlocking — removed inline+crossinline"
+
+    # Patch 4: entryValues null safety in DataLifeEngine.kt
+    # The entryValues property in macOS Preference stub was changed from nullable
+    # (Array<String>?) to non-null (Array<String>), but the multisrc source files
+    # still access it without safe-call. The fix is a no-op at runtime since the
+    # stub always returns a non-null array, but the compiler needs the explicit !!.
+    DATA_LIFE_ENGINE="${GIT_CLONE_DIR}/lib-multisrc/datalifeengine/src/eu/kanade/tachiyomi/multisrc/datalifeengine/DataLifeEngine.kt"
+    # entryValues null safety: the Kotlin compiler infers the result of
+    # `entryValues!![index]!! as String` as `String?` when the array property
+    # is declared on a class (ListPreference) and accessed through its getter
+    # from within a closure/lambda. This appears to be a Kotlin compiler edge
+    # case with Array element types and lambda captures.
+    # Fix: add `!!` on the `entry` variable where it's used in putString.
+    # NOTE: The error is actually about `key` being `String?`, not `entry`!
+    # ListPreference.key is `var key: String? = null` in the Preference stubs,
+    # while SharedPreferences.Editor.putString expects `String` (non-null).
+    # Fix: add `!!` on BOTH key and entry at the putString call site.
+    if [ -f "$DATA_LIFE_ENGINE" ] && grep -q 'putString(key' "$DATA_LIFE_ENGINE" 2>/dev/null; then
+        sed -i '' 's/putString(key, entry)/putString(key!!, entry!!)/g' "$DATA_LIFE_ENGINE"
+        log "  Patched: DataLifeEngine.kt — key!! and entry!! in putString"
+    fi
+
+    # Patch 5: entryValues null safety in DooPlay.kt
+    DOO_PLAY="${GIT_CLONE_DIR}/lib-multisrc/dooplay/src/eu/kanade/tachiyomi/multisrc/dooplay/DooPlay.kt"
+    if [ -f "$DOO_PLAY" ] && grep -q 'putString(key' "$DOO_PLAY" 2>/dev/null; then
+        sed -i '' 's/putString(key, entry)/putString(key!!, entry!!)/g' "$DOO_PLAY"
+        log "  Patched: DooPlay.kt — key!! and entry!! in putString"
+    fi
+
+    # Patch 6: DopeFlix MutableSet property delegate type mismatch
+    # getStringSet() returns Set<String> but the property delegate expects MutableSet<String>.
+    # Fix: add .toMutableSet() to convert the return value.
+    DOPE_FLIX="${GIT_CLONE_DIR}/lib-multisrc/dopeflix/src/eu/kanade/tachiyomi/multisrc/dopeflix/DopeFlix.kt"
+    # NOTE: line ends with '!! }' not just '!!' — the sed pattern captures '!! }'
+    if [ -f "$DOPE_FLIX" ] && grep -q 'hosterNames.toSet())!!' "$DOPE_FLIX" 2>/dev/null; then
+        sed -i '' '/hosterNames.toSet())!!/s/!! }/!!.toMutableSet() }/' "$DOPE_FLIX"
+        log "  Patched: DopeFlix.kt — MutableSet<String> via .toMutableSet()"
+    fi
+
+else
+    log "  Core Coroutines.kt already patched or not found — skipping"
+fi
+
+# ---------------------------------------------------------------------------
 # Step 2: Find all extensions for the target language
 # ---------------------------------------------------------------------------
 log ""
@@ -191,6 +292,17 @@ add_to_cp() {
         return
     fi
     CLASSPATH="${CLASSPATH}:${item}"
+}
+
+# Prepend to classpath so this entry is found FIRST before others
+prepend_to_cp() {
+    local item="$1"
+    [ -z "$item" ] && return
+    [ ! -e "$item" ] && return
+    if echo "$CLASSPATH" | tr ':' '\n' | grep -Fxq "$item"; then
+        return
+    fi
+    CLASSPATH="${item}:${CLASSPATH}"
 }
 
 find_dep() {
@@ -236,6 +348,13 @@ find_dep "org.jetbrains.kotlinx" "kotlinx-coroutines-core-jvm" || true
 find_dep "org.jetbrains.kotlinx" "kotlinx-serialization-json-jvm" || true
 find_dep "org.jetbrains.kotlinx" "kotlinx-serialization-core-jvm" || true
 find_dep "org.jetbrains.kotlinx" "kotlinx-serialization-protobuf-jvm" || true
+
+# aniyomi-extensions-lib (source-api stubs + extractor interfaces)
+ANIYOMI_LIB_JAR="${PROJECT_DIR}/libs/aniyomi-extensions-lib.jar"
+if [ -f "$ANIYOMI_LIB_JAR" ]; then
+    add_to_cp "$ANIYOMI_LIB_JAR"
+    log "  aniyomi-extensions-lib: $(basename $ANIYOMI_LIB_JAR) ✓"
+fi
 find_dep "com.squareup.okhttp3" "okhttp-jvm" || find_dep "com.squareup.okhttp3" "okhttp" || true
 find_dep "com.squareup.okio" "okio-jvm" || true
 find_dep "org.jsoup" "jsoup" || true
@@ -248,6 +367,22 @@ find_dep "com.fasterxml.jackson.core" "jackson-core" || true
 find_dep "com.fasterxml.jackson.core" "jackson-databind" || true
 find_dep "com.google.code.gson" "gson" || true
 find_dep "org.jetbrains" "kotlin-reflect" || true
+find_dep "com.squareup.okhttp3" "okhttp-brotli" || true
+find_dep "app.cash.quickjs" "quickjs-jvm" || true
+
+# Kotlinx-serialization compiler plugin (required for @Serializable .serializer() methods)
+SERIALIZATION_PLUGIN="${KOTLIN_LIB}/libexec/lib/kotlinx-serialization-compiler-plugin.jar"
+if [ ! -f "$SERIALIZATION_PLUGIN" ]; then
+    # Fallback: search more paths
+    SERIALIZATION_PLUGIN=$(find "$KOTLIN_LIB" -name 'kotlinx-serialization-compiler-plugin*.jar' 2>/dev/null | head -1)
+fi
+KOTLINC_OPTS=""
+if [ -f "$SERIALIZATION_PLUGIN" ]; then
+    KOTLINC_OPTS="-Xplugin=$SERIALIZATION_PLUGIN"
+    log "  serialization plugin: $(basename $SERIALIZATION_PLUGIN) ✓"
+else
+    log "  WARNING: kotlinx-serialization plugin not found"
+fi
 
 log "  Classpath: $(echo "$CLASSPATH" | tr ':' '\n' | wc -l) entries"
 
@@ -266,40 +401,8 @@ log "Step 2c: Compiling shared library modules..."
 
 SHARED_LIBS_DIR="${TEMP_DIR}/shared-libs-classes"
 
-for lib_dir in "${GIT_CLONE_DIR}"/lib-*/ "${GIT_CLONE_DIR}/common/" "${GIT_CLONE_DIR}/core/"; do
-    [ ! -d "$lib_dir" ] && continue
-    lib_name=$(basename "$lib_dir")
-    lib_classes="${SHARED_LIBS_DIR}/${lib_name}"
-    # Skip only if directory has actual class files (retry if cached empty/broken)
-    if [ -d "$lib_classes" ]; then
-        cached_classes=$(find "$lib_classes" -name '*.class' 2>/dev/null | wc -l | tr -d ' ')
-        [ "$cached_classes" -gt 0 ] && continue
-        rm -rf "$lib_classes"
-    fi
-
-    find "$lib_dir" -name "*.kt" > "${TEMP_DIR}/${lib_name}-sources.txt" 2>/dev/null || true
-    src_count=$(wc -l < "${TEMP_DIR}/${lib_name}-sources.txt" 2>/dev/null || echo 0)
-    [ "$src_count" -eq 0 ] && continue
-
-    log "  Compiling: ${lib_name} (${src_count} files)..."
-    mkdir -p "$lib_classes"
-
-    set +e
-    kotlinc -cp "${CLASSPATH}" -d "$lib_classes" -jvm-target 17 @"${TEMP_DIR}/${lib_name}-sources.txt" 2>"${TEMP_DIR}/${lib_name}-compile.log"
-    local_exit=$?
-    set -e
-
-    class_count=$(find "$lib_classes" -name "*.class" 2>/dev/null | wc -l)
-
-    if [ "$class_count" -gt 0 ]; then
-        add_to_cp "$lib_classes"
-        log "    -> ${class_count} classes ✓"
-    elif [ "$local_exit" -ne 0 ]; then
-        log "    -> SKIP: compilation failed"
-    fi
-done
-
-# Compile the forked keiyoushi-utils module (pure JVM port from the Android core/ module)
+# Step 2c-i: Compile keiyoushi-utils FIRST (pure JVM port, provides keiyoushi.utils.*)
+# Must compile before lib/extractors since several extractors import keiyoushi.utils.*
 KEIYOUSHI_UTILS_DIR="${PROJECT_DIR}/keiyoushi-utils/src/main/kotlin"
 if [ -d "$KEIYOUSHI_UTILS_DIR" ]; then
     UTILS_NAME="keiyoushi-utils"
@@ -319,24 +422,144 @@ if [ -d "$KEIYOUSHI_UTILS_DIR" ]; then
             log "  Compiling: ${UTILS_NAME} (${utils_src_count} files, pure JVM port)..."
             mkdir -p "$UTILS_CLASSES"
             set +e
-            kotlinc -cp "${CLASSPATH}" -d "$UTILS_CLASSES" -jvm-target 17 @"${TEMP_DIR}/${UTILS_NAME}-sources.txt" 2>"${TEMP_DIR}/${UTILS_NAME}-compile.log"
+            kotlinc -cp "${CLASSPATH}" -d "$UTILS_CLASSES" -jvm-target 17 ${KOTLINC_OPTS} @"${TEMP_DIR}/${UTILS_NAME}-sources.txt" 2>"${TEMP_DIR}/${UTILS_NAME}-compile.log"
             utils_exit=$?
             set -e
             utils_class_count=$(find "$UTILS_CLASSES" -name "*.class" 2>/dev/null | wc -l)
             if [ "$utils_class_count" -gt 0 ]; then
-                add_to_cp "$UTILS_CLASSES"
+                prepend_to_cp "$UTILS_CLASSES"
                 log "    -> ${utils_class_count} classes ✓"
             else
                 log "    -> FAILED: $(cat "${TEMP_DIR}/${UTILS_NAME}-compile.log" 2>/dev/null | head -3)"
             fi
         fi
     else
-        # Cached from previous run — add to classpath
-        add_to_cp "$UTILS_CLASSES"
+        prepend_to_cp "$UTILS_CLASSES"
         cached_count=$(find "$UTILS_CLASSES" -name '*.class' 2>/dev/null | wc -l | tr -d ' ')
-        log "  keiyoushi-utils already compiled (${cached_count} cached classes) ✓"
+        log "  ${UTILS_NAME} already compiled (${cached_count} cached classes) ✓"
     fi
 fi
+
+# Step 2c-ii: Compile lib/*/ extractor modules (aniyomi.lib.* package)
+# These are the actual extractor implementations (DoodExtractor, StreamWishExtractor, PlaylistUtils, etc.)
+# that extensions and lib-multisrc depend on. Must compile AFTER keiyoushi-utils.
+EXTRACTORS_DIR="${GIT_CLONE_DIR}/lib"
+EXTRACTORS_OUT="${SHARED_LIBS_DIR}/lib-extractors"
+if [ -d "$EXTRACTORS_DIR" ]; then
+    if [ -d "$EXTRACTORS_OUT" ]; then
+        cached_classes=$(find "$EXTRACTORS_OUT" -name '*.class' 2>/dev/null | wc -l | tr -d ' ')
+        [ "$cached_classes" -gt 0 ] && extractors_compiled=true || { rm -rf "$EXTRACTORS_OUT"; extractors_compiled=false; }
+    else
+        extractors_compiled=false
+    fi
+
+    if [ "${extractors_compiled:-false}" != true ]; then
+        # WHITELIST approach: only compile extractors needed by our target extensions.
+        # This avoids whack-a-mole with dozens of unrelated extractors that have
+        # missing Android stubs (WebView, JSpecify, etc.).
+        #
+        # Extensions needed by the 4 blocked extensions (allanime, anikage, animekhor, animenosub):
+        #   doodextractor, filemoonextractor, gogostreamextractor, mp4uploadextractor,
+        #   okruextractor, playlistutils, streamwishextractor, vidhideextractor, vidmolyextractor
+        #
+        # Add more here as additional extensions are enabled.
+        # WHITELIST: extractors needed by target standalone extensions.
+        # Each entry maps to a directory under lib/ in the cloned repo.
+        #
+        # Core extractors (needed by allanime, animetake, anikage, etc.):
+        #   doodextractor, filemoonextractor, gogostreamextractor, mp4uploadextractor,
+        #   okruextractor, playlistutils
+        #
+        # Added for kissanime:
+        #   dailymotionextractor (kissanime)
+        #   youruploadextractor (kissanime)
+        EXTRACTOR_WHITELIST=(
+            "dailymotionextractor"
+            "doodextractor"
+            "filemoonextractor"
+            "gogostreamextractor"
+            "mp4uploadextractor"
+            "okruextractor"
+            "playlistutils"
+            "streamlareextractor"
+            "streamwishextractor"
+            "vidhideextractor"
+            "vidmolyextractor"
+            "youruploadextractor"
+        )
+        > "${TEMP_DIR}/lib-extractors-sources.txt"
+        for ext_dir in "${EXTRACTOR_WHITELIST[@]}"; do
+            find "$EXTRACTORS_DIR/$ext_dir" -name '*.kt' -path '*/src/*' 2>/dev/null >> "${TEMP_DIR}/lib-extractors-sources.txt" || true
+        done
+        # Also include unpacker (jsunpacker) and synchrony (Deobfuscator) — needed by mp4upload and streamwish
+        for dir in unpacker synchrony; do
+            find "$EXTRACTORS_DIR/$dir" -name '*.kt' -path '*/src/*' 2>/dev/null >> "${TEMP_DIR}/lib-extractors-sources.txt" || true
+        done
+        extractor_count=$(wc -l < "${TEMP_DIR}/lib-extractors-sources.txt" 2>/dev/null || echo 0)
+        if [ "$extractor_count" -gt 0 ]; then
+            log "  Compiling: lib/extractors (${extractor_count} files, aniyomi.lib.*)..."
+            mkdir -p "$EXTRACTORS_OUT"
+            set +e
+            kotlinc -cp "${CLASSPATH}" -d "$EXTRACTORS_OUT" -jvm-target 17 ${KOTLINC_OPTS} @"${TEMP_DIR}/lib-extractors-sources.txt" 2>"${TEMP_DIR}/lib-extractors-compile.log"
+            extractor_exit=$?
+            set -e
+            extractor_class_count=$(find "$EXTRACTORS_OUT" -name '*.class' 2>/dev/null | wc -l)
+            if [ "$extractor_class_count" -gt 0 ]; then
+                # Prepend extractor classes so freshly compiled extractors (with
+                # up-to-date APIs like VidHideExtractor's 2-param constructor)
+                # take precedence over old versions in aniyomi-extensions-lib.jar
+                # or other dependency JARs.
+                prepend_to_cp "$EXTRACTORS_OUT"
+                log "    -> ${extractor_class_count} classes ✓"
+            else
+                log "    -> FAILED: $(head -3 "${TEMP_DIR}/lib-extractors-compile.log" 2>/dev/null)"
+            fi
+        fi
+    else
+        add_to_cp "$EXTRACTORS_OUT"
+        cached_count=$(find "$EXTRACTORS_OUT" -name '*.class' 2>/dev/null | wc -l | tr -d ' ')
+        log "  lib/extractors already compiled (${cached_count} cached classes) ✓"
+    fi
+fi
+
+# Step 2c-iii: Compile core/ FIRST (depends on keiyoushi-utils + lib/extractors)
+# core provides parallelCatchingFlatMap, parallelMapNotNull, Preferences.kt, etc.
+# which lib-multisrc depends on. lib-multisrc must compile AFTER core is on the classpath.
+for lib_dir in "${GIT_CLONE_DIR}/core/" "${GIT_CLONE_DIR}/common/" "${GIT_CLONE_DIR}"/lib-*/; do
+    [ ! -d "$lib_dir" ] && continue
+    lib_name=$(basename "$lib_dir")
+    lib_classes="${SHARED_LIBS_DIR}/${lib_name}"
+    # Skip only if directory has actual class files (retry if cached empty/broken)
+    if [ -d "$lib_classes" ]; then
+        cached_classes=$(find "$lib_classes" -name '*.class' 2>/dev/null | wc -l | tr -d ' ')
+        [ "$cached_classes" -gt 0 ] && continue
+        rm -rf "$lib_classes"
+    fi
+
+    # Exclude test files AND Android-specific Activity files (UrlActivity) — 
+    # UrlActivities subclass android.app.Activity and import android.content.ActivityNotFoundException,
+    # which have no purpose on macOS/JVM. They handle Android-specific inter-app intents.
+    find "$lib_dir" -name "*.kt" ! -path '*/test/*' ! -name '*UrlActivity*' > "${TEMP_DIR}/${lib_name}-sources.txt" 2>/dev/null || true
+    src_count=$(wc -l < "${TEMP_DIR}/${lib_name}-sources.txt" 2>/dev/null || echo 0)
+    [ "$src_count" -eq 0 ] && continue
+
+    log "  Compiling: ${lib_name} (${src_count} files, excluding tests)..."
+    mkdir -p "$lib_classes"
+
+    set +e
+    kotlinc -cp "${CLASSPATH}" -d "$lib_classes" -jvm-target 17 ${KOTLINC_OPTS} @"${TEMP_DIR}/${lib_name}-sources.txt" 2>"${TEMP_DIR}/${lib_name}-compile.log"
+    local_exit=$?
+    set -e
+
+    class_count=$(find "$lib_classes" -name "*.class" 2>/dev/null | wc -l)
+
+    if [ "$class_count" -gt 0 ]; then
+        add_to_cp "$lib_classes"
+        log "    -> ${class_count} classes ✓"
+    elif [ "$local_exit" -ne 0 ]; then
+        log "    -> SKIP: compilation failed"
+    fi
+done
 
 SUCCESS_COUNT=0
 FAIL_COUNT=0
@@ -360,9 +583,12 @@ for ext_dir in "${EXT_DIRS[@]}"; do
     fi
 
     # Determine package name
-    PKG=$(grep -r '^package ' "$ext_dir/src" 2>/dev/null | head -1 | sed 's/[[:space:]]*package //' | sed 's/[[:space:]]*$//' || echo "")
+    # NOTE: grep -r includes filename: prefix, so use -h to suppress it.
+    # Otherwise the JAR name becomes "path/to/File.kt:com.example.pkg.jar"
+    # which contains colons that break the JDK jar command on macOS (APFS).
+    PKG=$(grep -rh '^package ' "$ext_dir/src" 2>/dev/null | head -1 | sed 's/[[:space:]]*package //' | sed 's/[[:space:]]*$//' || echo "")
     if [ -z "$PKG" ]; then
-        PKG=$(grep -r '^package ' "$ext_dir"/*.kt 2>/dev/null | head -1 | sed 's/[[:space:]]*package //' | sed 's/[[:space:]]*$//' || echo "")
+        PKG=$(grep -rh '^package ' "$ext_dir"/*.kt 2>/dev/null | head -1 | sed 's/[[:space:]]*package //' | sed 's/[[:space:]]*$//' || echo "")
     fi
     if [ -z "$PKG" ]; then
         PKG="eu.kanade.tachiyomi.animeextension.${LANG}.${EXT_NAME}"
@@ -392,13 +618,11 @@ for ext_dir in "${EXT_DIRS[@]}"; do
         continue
     fi
 
-    # Check if extension depends on unavailable private libraries
-    # aniyomi-lib (private, not available on JitPack) — some extensions use
-    # DoodExtractor, StreamWishExtractor, etc. from this package.
+    # Check if extension depends on aniyomi.lib.* extractors
+    # These are compiled from the lib-*/ directories in the yuzono repo.
+    # If lib-multisrc failed to compile, log a warning but don't skip automatically.
     if grep -r 'import aniyomi\.lib\.' "$ext_dir" 2>/dev/null | grep -q .; then
-        log "  [SKIP] ${EXT_NAME}: depends on private lib 'aniyomi.lib.*' (not available on JitPack)"
-        SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-        continue
+        log "  [NOTE] ${EXT_NAME}: imports aniyomi.lib.* — requires lib-* extractors compiled"
     fi
 
     # Get version code from build.gradle.kts
@@ -443,17 +667,16 @@ JSONEOF
     echo "$SRC_FILES" > "${TEMP_DIR}/${EXT_NAME}-sources.txt"
 
     set +e
-    kotlinc -cp "${CLASSPATH}" -d "${EXT_CLASSES_DIR}" -jvm-target 17 @"${TEMP_DIR}/${EXT_NAME}-sources.txt" 2>"${TEMP_DIR}/${EXT_NAME}-compile.log"
+    kotlinc -cp "${CLASSPATH}" -d "${EXT_CLASSES_DIR}" -jvm-target 17 ${KOTLINC_OPTS} @"${TEMP_DIR}/${EXT_NAME}-sources.txt" 2>"${TEMP_DIR}/${EXT_NAME}-compile.log"
     COMPILE_EXIT=$?
     set -e
 
     CLASS_COUNT=$(find "$EXT_CLASSES_DIR" -name "*.class" 2>/dev/null | wc -l)
 
     if [ "$CLASS_COUNT" -gt 0 ]; then
-        # Package JAR
-        cd "$EXT_CLASSES_DIR"
+        # Package JAR (in subshell to avoid changing CWD for next extension)
         JAR_PATH="${OUTPUT_DIR}/${JAR_NAME}"
-        "${JAR_CMD}" cf "${JAR_PATH}" META-INF/extension.json $(find . -name '*.class' 2>/dev/null)
+        (cd "$EXT_CLASSES_DIR" && "${JAR_CMD}" cf "${JAR_PATH}" META-INF/extension.json $(find . -name '*.class' 2>/dev/null))
 
         JAR_SIZE=$(stat -f%z "$JAR_PATH" 2>/dev/null || echo "0")
         log "    ✅ ${JAR_NAME} (${CLASS_COUNT} classes, ${JAR_SIZE} bytes)"

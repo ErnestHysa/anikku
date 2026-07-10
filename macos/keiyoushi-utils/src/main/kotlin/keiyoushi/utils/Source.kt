@@ -1,5 +1,7 @@
 package keiyoushi.utils
 
+import android.content.SharedPreferences
+import androidx.preference.PreferenceScreen
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
 import eu.kanade.tachiyomi.animesource.model.Hoster
@@ -34,15 +36,18 @@ abstract class Source(
     /**
      * Preferences storage for this source.
      * On macOS, backed by java.util.prefs.Preferences.
+     * Implements the android.content.SharedPreferences interface for
+     * compatibility with extension code that accesses preferences via
+     * extension properties on SharedPreferences.
      */
-    open val preferences: MutableMap<String, Any> by lazy {
+    open val preferences: SharedPreferences by lazy {
         val sourceId = id
         getPreferences(sourceId)
     }
 
     // On JVM, setupPreferenceScreen requires a PreferenceScreen parameter.
     // No-op on macOS — preferences are configured via getFilterList().
-    override fun setupPreferenceScreen(screen: eu.kanade.tachiyomi.animesource.PreferenceScreen) {
+    override fun setupPreferenceScreen(screen: PreferenceScreen) {
         /* no-op */
     }
 

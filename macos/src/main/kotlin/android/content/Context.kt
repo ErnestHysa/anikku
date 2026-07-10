@@ -33,8 +33,9 @@ open class Context {
         override fun getLong(key: String, defValue: Long) = defValue
         override fun getFloat(key: String, defValue: Float) = defValue
         override fun getBoolean(key: String, defValue: Boolean) = defValue
+        override fun getStringSet(key: String, defValues: Set<String>?) = defValues
         override fun contains(key: String) = false
-        override fun all() = emptyMap<String, Any>()
+        override val all: Map<String, *> get() = emptyMap<String, Any>()
     }
 
     fun getSharedPreferences(name: String, mode: Int): SharedPreferences = noopPrefs

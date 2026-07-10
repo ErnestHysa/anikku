@@ -9,4 +9,5 @@ import android.view.View
  */
 open class Button(context: android.content.Context?) : View() {
     var text: CharSequence? = null
+    var isEnabled: Boolean = true
 }
