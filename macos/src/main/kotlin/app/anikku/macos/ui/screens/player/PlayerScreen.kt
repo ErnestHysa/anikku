@@ -381,6 +381,7 @@ data class PlayerScreen(
             isVflip = isVflip,
             isMPVAvailable = playerViewModel.isMPVAvailable,
             isOfflinePlayback = isOfflinePlayback,
+            hasVideoUrl = videoUrlToLoad != null,
             videoQualityResolution = videoQualityResolution,
             videoQualityLabel = videoQualityLabel,
             isLoading = isLoading,
@@ -492,6 +493,7 @@ private fun PlayerContent(
     isVflip: Boolean = false,
     isMPVAvailable: Boolean = false,
     isOfflinePlayback: Boolean = false,
+    hasVideoUrl: Boolean = false,
     isLive: Boolean = false,
     videoQualityResolution: Int? = null,
     videoQualityLabel: String? = null,
@@ -591,6 +593,9 @@ private fun PlayerContent(
     }
 
     // Show error state when source was needed but not available and we have no episodes
+    // Also show when no video URL was resolved despite having a source available
+    // Show error state when video URL resolution failed (mpv is available but no video loaded)
+    val videoResolutionFailed = !hasVideoUrl && currentEpisode != null && !isLoading && playbackState == PlaybackState.IDLE
     if (!isMPVAvailable && episodes.isEmpty() && currentEpisode == null) {
         Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
@@ -612,6 +617,61 @@ private fun PlayerContent(
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.White.copy(alpha = 0.3f),
                     modifier = Modifier.padding(horizontal = 32.dp),
+                )
+                Spacer(Modifier.height(24.dp))
+                IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Go back", tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
+                }
+            }
+        }
+        return
+    }
+
+    // Show video resolution failure state with actionable info
+    if (videoResolutionFailed) {
+        Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
+                Icon(
+                    Icons.Outlined.PlayCircle,
+                    contentDescription = null,
+                    modifier = Modifier.size(64.dp),
+                    tint = Color.White.copy(alpha = 0.15f),
+                )
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    animeTitle.ifBlank { "Unknown Anime" },
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Color.White.copy(alpha = 0.5f),
+                )
+                Spacer(Modifier.height(4.dp))
+                if (currentEpisode != null) {
+                    Text(
+                        "Episode ${String.format("%.0f", currentEpisode.episodeNumber)} — ${currentEpisode.name}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.White.copy(alpha = 0.3f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    "Could not resolve video URL",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = Color.White.copy(alpha = 0.6f),
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "This extension's video API may differ from what the app expects. Try a different source.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.3f),
+                    modifier = Modifier.padding(horizontal = 32.dp),
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Check ~/Library/Application Support/Anikku/logs/actions.log for VIDEO_RESOLVE details.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.2f),
                 )
                 Spacer(Modifier.height(24.dp))
                 IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
