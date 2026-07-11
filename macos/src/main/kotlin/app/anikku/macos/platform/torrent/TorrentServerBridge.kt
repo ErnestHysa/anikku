@@ -291,7 +291,7 @@ class TorrentServerBridge(
         // Parse TorrServer JSON response to extract torrent hash
         return try {
             val json = org.json.JSONObject(responseBody)
-            json.optString("hash", null) ?: json.optString("id", null)
+            json.optString("hash") ?: json.optString("id")
         } catch (_: Exception) {
             null
         }

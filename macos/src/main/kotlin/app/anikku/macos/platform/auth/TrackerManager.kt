@@ -177,7 +177,7 @@ class TrackerManager(
                     val response = httpClient.newCall(request).execute()
                     if (response.isSuccessful) {
                         val body = response.body?.string() ?: return null
-                        JSONObject(body).optString("name", null)
+                        JSONObject(body).optString("name")
                     } else null
                 }
                 "anilist" -> {
@@ -193,7 +193,7 @@ class TrackerManager(
                         JSONObject(body)
                             .optJSONObject("data")
                             ?.optJSONObject("Viewer")
-                            ?.optString("name", null)
+                            ?.optString("name")
                     } else null
                 }
                 else -> null

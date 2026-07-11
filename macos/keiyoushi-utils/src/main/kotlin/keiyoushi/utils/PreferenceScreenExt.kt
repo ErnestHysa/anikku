@@ -23,6 +23,22 @@ fun PreferenceScreen.addListPreference(
     onComplete: (String) -> Unit = {},
 ) {}
 
+fun PreferenceScreen.addEditTextPreference(
+    key: String,
+    default: String,
+    title: String,
+    summary: String,
+    getSummary: (String) -> String = { summary },
+    dialogMessage: String? = null,
+    inputType: Int? = null,
+    validate: ((String) -> Boolean)? = null,
+    validationMessage: ((String) -> String)? = null,
+    restartRequired: Boolean = false,
+    enabled: Boolean = true,
+    onChange: (Preference, String) -> Boolean = { _, _ -> true },
+    onComplete: (String) -> Unit = {},
+) {}
+
 fun PreferenceScreen.addSwitchPreference(
     key: String,
     default: Boolean,
@@ -33,3 +49,17 @@ fun PreferenceScreen.addSwitchPreference(
     onChange: (Preference, Boolean) -> Boolean = { _, _ -> true },
     onComplete: (Boolean) -> Unit = {},
 ) {}
+
+/**
+ * Alias for addSwitchPreference — used by miruro and other extensions.
+ */
+fun PreferenceScreen.getSwitchPreference(
+    key: String,
+    default: Boolean = false,
+    title: String = "",
+    summary: String = "",
+    restartRequired: Boolean = false,
+    enabled: Boolean = true,
+    onChange: (Preference, Boolean) -> Boolean = { _, _ -> true },
+    onComplete: (Boolean) -> Unit = {},
+) = addSwitchPreference(key, default, title, summary, restartRequired, enabled, onChange, onComplete)

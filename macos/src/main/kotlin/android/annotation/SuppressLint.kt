@@ -6,5 +6,5 @@ package android.annotation
  * Compile-only annotation — no runtime behavior needed.
  */
 @Retention(AnnotationRetention.SOURCE)
-@Target(AnnotationTarget.FUNCTION, AnnotationTarget.CONSTRUCTOR, AnnotationTarget.FIELD)
+@Target(AnnotationTarget.FUNCTION, AnnotationTarget.CONSTRUCTOR, AnnotationTarget.FIELD, AnnotationTarget.CLASS)
 annotation class SuppressLint(vararg val value: String)

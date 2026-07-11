@@ -250,6 +250,67 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Patch hanime: remove Chicory/WASM/WebView signature providers
+# ---------------------------------------------------------------------------
+#
+# The hanime extension has 4 files that depend on unavailable JVM dependencies:
+# - ChicoryGlue.kt (requires com.dylibso.chicory WASM runtime)
+# - ChicorySignatureProvider.kt (requires Chicory)
+# - HanimeWasmBinary.kt (fetches WASM binary — no Android deps but only used by Chicory)
+# - WebViewSignatureProvider.kt (requires Android WebView)
+#
+# The extension also has NativeSignatureProvider.kt which computes SHA-256 directly
+# in pure JVM without any external dependencies. We patch the source to:
+# 1. Remove the 4 problematic files
+# 2. Replace all WebView/WASM/Chicory references with NativeSignatureProvider
+
+HANIME_DIR="${GIT_CLONE_DIR}/src/en/hanime/src/eu/kanade/tachiyomi/animeextension/en/hanime"
+if [ -d "$HANIME_DIR" ]; then
+    log "  Patching hanime — removing Chicory/WASM/WebView dependencies..."
+
+    # Remove problematic files
+    rm -f "$HANIME_DIR/ChicoryGlue.kt" 2>/dev/null || true
+    rm -f "$HANIME_DIR/ChicorySignatureProvider.kt" 2>/dev/null || true
+    rm -f "$HANIME_DIR/HanimeWasmBinary.kt" 2>/dev/null || true
+    rm -f "$HANIME_DIR/WebViewSignatureProvider.kt" 2>/dev/null || true
+
+    # Patch Hanime.kt to replace all non-native signature provider references
+    # Use the standalone Python script (avoids shell escaping issues)
+    PATCH_SCRIPT="${SCRIPT_DIR}/patch-hanime-source.py"
+    if [ -f "$PATCH_SCRIPT" ]; then
+        python3 "$PATCH_SCRIPT" "$HANIME_DIR" 2>&1 | sed 's/^/  /'
+        log "  Hanime patching complete"
+    else
+        log "  WARNING: patch-hanime-source.py not found at $PATCH_SCRIPT — skipping"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# Patch kissanime: add missing abstract members for ParsedAnimeHttpSource
+# ---------------------------------------------------------------------------
+#
+# The kissanime extension extends ParsedAnimeHttpSource but doesn't implement
+# the hosterListSelector() and hosterFromElement() abstract methods because it
+# overrides getVideoList() directly instead of using the hoster flow.
+#
+# We need to add stub implementations of these two methods.
+
+KISSANIME_FILE="${GIT_CLONE_DIR}/src/en/kissanime/src/eu/kanade/tachiyomi/animeextension/en/kissanime/KissAnime.kt"
+if [ -f "$KISSANIME_FILE" ]; then
+    log "  Patching kissanime — adding abstract member stubs..."
+    
+    # Use standalone Python script (avoids shell escaping issues)
+    PATCH_SCRIPT="${SCRIPT_DIR}/patch-kissanime-source.py"
+    KISSANIME_SRC_DIR="${GIT_CLONE_DIR}/src/en/kissanime/src/eu/kanade/tachiyomi/animeextension/en/kissanime"
+    if [ -f "$PATCH_SCRIPT" ] && [ -d "$KISSANIME_SRC_DIR" ]; then
+        python3 "$PATCH_SCRIPT" "$KISSANIME_SRC_DIR" 2>&1 | sed 's/^/  /'
+        log "  Kissanime patching complete"
+    else
+        log "  WARNING: patch-kissanime-source.py not found or dir missing — skipping"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 # Step 2: Find all extensions for the target language
 # ---------------------------------------------------------------------------
 log ""
@@ -473,8 +534,12 @@ if [ -d "$EXTRACTORS_DIR" ]; then
         # Added for kissanime:
         #   dailymotionextractor (kissanime)
         #   youruploadextractor (kissanime)
+        # WHITELIST: extractors confirmed to compile without Android dependencies.
+        # Each entry maps to a directory under lib/ in the cloned repo.
+        # NOTE: gogostreamextractor, dailymotionextractor, youruploadextractor
+        # and others have WebView or crypto dependencies that prevent compilation.
+        # Only add extractors here AFTER verifying they compile independently.
         EXTRACTOR_WHITELIST=(
-            "dailymotionextractor"
             "doodextractor"
             "filemoonextractor"
             "gogostreamextractor"
@@ -485,7 +550,6 @@ if [ -d "$EXTRACTORS_DIR" ]; then
             "streamwishextractor"
             "vidhideextractor"
             "vidmolyextractor"
-            "youruploadextractor"
         )
         > "${TEMP_DIR}/lib-extractors-sources.txt"
         for ext_dir in "${EXTRACTOR_WHITELIST[@]}"; do
@@ -623,6 +687,13 @@ for ext_dir in "${EXT_DIRS[@]}"; do
     # If lib-multisrc failed to compile, log a warning but don't skip automatically.
     if grep -r 'import aniyomi\.lib\.' "$ext_dir" 2>/dev/null | grep -q .; then
         log "  [NOTE] ${EXT_NAME}: imports aniyomi.lib.* — requires lib-* extractors compiled"
+    fi
+
+    # Patch hoster stubs for extensions that extend ParsedAnimeHttpSource
+    # but don't implement hosterListSelector/hosterFromElement
+    HOSTER_PATCH_SCRIPT="${SCRIPT_DIR}/patch-hoster-stubs.py"
+    if [ -f "$HOSTER_PATCH_SCRIPT" ] && [ -d "$ext_dir" ]; then
+        python3 "$HOSTER_PATCH_SCRIPT" "$ext_dir" 2>&1 | sed 's/^/    /' || true
     fi
 
     # Get version code from build.gradle.kts
