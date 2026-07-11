@@ -13,6 +13,7 @@ import androidx.compose.ui.window.rememberWindowState
 import app.anikku.macos.ui.MacOSMenuBarFactory
 import app.anikku.macos.platform.MacOSDockManager
 import app.anikku.macos.ui.GlobalKeyboardShortcuts
+import app.anikku.macos.platform.update.SparkleUpdater
 import app.anikku.macos.ui.components.AboutDialog
 import app.anikku.macos.ui.screens.browse.BrowseTab
 import app.anikku.macos.ui.screens.onboarding.OnboardingScreen
@@ -169,9 +170,13 @@ fun main() = application {
                 }
 
                 if (showAboutDialog) {
+                    val sparkleUpdater = remember {
+                        SparkleUpdater(appUpdateChecker = app.appUpdateChecker)
+                    }
                     AboutDialog(
                         onCloseRequest = { showAboutDialog = false },
                         updateChecker = app.appUpdateChecker,
+                        sparkleUpdater = sparkleUpdater,
                         autoCheck = autoCheckUpdates,
                     )
                 }

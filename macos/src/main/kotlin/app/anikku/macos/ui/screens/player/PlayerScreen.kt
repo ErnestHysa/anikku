@@ -550,8 +550,20 @@ private fun PlayerContent(
     val toastHost = LocalToastHost.current
 
     // Mock simulation fallback (when mpv is not available and no real video loaded)
+    // Wait 3 seconds for mpv to initialize before entering mock mode, since
+    // mpv initialization (lib loading, handle creation, option config) can
+    // take 1-2 seconds and isMPVAvailable may be false during that window.
     LaunchedEffect(isPlaying, playerViewModel?.playbackState?.value) {
         if (isPlaying && !isMPVAvailable) {
+            // Give mpv a chance to initialize before entering mock mode
+            delay(3000L)
+            // Check again — mpv might have initialized during the delay
+            if (isMPVAvailable) return@LaunchedEffect
+            // Also check if a real video is loaded (playbackState would be PLAYING or LOADING)
+            val state = playerViewModel?.playbackState?.value
+            if (state == PlaybackState.LOADING || state == PlaybackState.PLAYING || state == PlaybackState.BUFFERING) {
+                return@LaunchedEffect
+            }
             while (true) {
                 delay(1000L)
                 elapsedSeconds = (elapsedSeconds + 1).coerceAtMost(totalSeconds)

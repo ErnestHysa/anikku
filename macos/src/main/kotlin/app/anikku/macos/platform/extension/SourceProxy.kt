@@ -90,54 +90,144 @@ class ReflectiveSourceProxy(
     }
 
     override suspend fun getVideoList(episode: SEpisode): List<Video> {
-        return try {
-            reflectiveCallSuspend("getVideoList", arrayOf(SEpisode::class.java), episode)
+        // Log episode details for diagnostics
+        val episodeUrl = try { episode.url } catch (_: Exception) { "<uninitialized>" }
+        val episodeName = try { episode.name } catch (_: Exception) { "<uninitialized>" }
+        logger.debug { "getVideoList called for episode: url=$episodeUrl name=$episodeName" }
+
+        // Primary path: reflective call with exact param types
+        try {
+            val videos: List<Video> = reflectiveCallSuspend("getVideoList", arrayOf(SEpisode::class.java), episode)
+            if (videos.isNotEmpty()) {
+                logger.info { "getVideoList returned ${videos.size} video(s) via primary path" }
+                return videos
+            } else {
+                logger.warn { "getVideoList primary path returned EMPTY list for $episodeUrl" }
+            }
+        } catch (e: NoSuchMethodException) {
+            logger.warn { "getVideoList(SEpisode) not found on ${delegateClass.name}: ${e.message}. Trying fuzzy method match." }
         } catch (e: LinkageError) {
-            // Fallback for extensions where getVideoList(SEpisode) throws NoSuchMethodError
-            // or NoClassDefFoundError (e.g., the compiled AllAnime extension's internal
-            // implementation references methods/classes that don't exist in the JVM classpath).
-            // Use the hoster-based flow instead: getHosterList → getVideoList(Hoster) for each.
-            logger.warn { "getVideoList(SEpisode) failed with ${e::class.simpleName} on ${delegateClass.name}: ${e.message}. Falling back to hoster-based flow." }
-            getVideoListViaHoster(episode)
+            logger.warn { "getVideoList(SEpisode) linkage error on ${delegateClass.name}: ${e::class.simpleName}: ${e.message}. Trying fuzzy method match." }
+        } catch (e: UnsupportedOperationException) {
+            logger.warn { "getVideoList(SEpisode) not supported by ${delegateClass.name}: ${e.message}. Trying hoster-based flow." }
+        } catch (e: Exception) {
+            logger.warn { "getVideoList(SEpisode) failed on ${delegateClass.name}: ${e::class.simpleName}: ${e.message}. Trying fuzzy method match." }
         }
+
+        // Fallback path 1: fuzzy method matching — find ANY getVideoList method
+        // that can accept an SEpisode-like argument (ignoring classloader identity)
+        try {
+            val videos = getVideoListFuzzy(episode)
+            if (videos.isNotEmpty()) {
+                logger.info { "getVideoList returned ${videos.size} video(s) via fuzzy fallback" }
+                return videos
+            }
+        } catch (e: Exception) {
+            logger.warn { "getVideoList fuzzy match failed: ${e::class.simpleName}: ${e.message}" }
+        }
+
+        // Fallback path 2: hoster-based flow (getHosterList → getVideoList(Hoster))
+        logger.info { "Falling back to hoster-based flow for $episodeUrl" }
+        return getVideoListViaHoster(episode)
     }
 
     /**
-     * Fallback: get videos via the hoster-based flow.
-     * Calls [AnimeSource.getHosterList] then [AnimeSource.getVideoList] for each hoster.
+     * Fallback: fuzzy method matching for getVideoList.
+     *
+     * When exact param type matching fails (e.g., SEpisode loaded by different classloaders),
+     * this finds ANY method named getVideoList on the delegate class and calls it.
      */
+    @Suppress("UNCHECKED_CAST")
+    private suspend fun getVideoListFuzzy(episode: SEpisode): List<Video> {
+        val method = delegateClass.methods.firstOrNull { m ->
+            if (m.name != "getVideoList") return@firstOrNull false
+            m.parameterTypes.size in 1..2
+        } ?: throw NoSuchMethodException("No getVideoList method found on ${delegateClass.name}")
+
+        logger.debug { "Fuzzy matched getVideoList with param type: ${method.parameterTypes[0].name}" }
+
+        return suspendCoroutineUninterceptedOrReturn<List<Video>> { continuation ->
+            val argCount = method.parameterTypes.size
+            val callArgs = arrayOfNulls<Any?>(argCount)
+            callArgs[0] = episode
+            if (argCount == 2) {
+                callArgs[1] = continuation as Continuation<*>
+            }
+            val result = method.invoke(delegate, *callArgs)
+            if (result === COROUTINE_SUSPENDED) COROUTINE_SUSPENDED
+            else result as List<Video>
+        }
+    }
+
     private suspend fun getVideoListViaHoster(episode: SEpisode): List<Video> {
+        val episodeUrl = try { episode.url } catch (_: Exception) { "<unset>" }
+        logger.debug { "getVideoListViaHoster for episode: url=$episodeUrl" }
+
         val hosters: List<Hoster> = try {
             reflectiveCallSuspend("getHosterList", arrayOf(SEpisode::class.java), episode)
+        } catch (e: NoSuchMethodException) {
+            logger.debug { "getHosterList(SEpisode) not found on ${delegateClass.name} — trying fuzzy match" }
+            getHosterListFuzzy(episode)
         } catch (e: LinkageError) {
             logger.warn { "getHosterList linkage error on ${delegateClass.name}: ${e::class.simpleName}: ${e.message}" }
-            emptyList()
-        } catch (e: NoSuchMethodException) {
-            logger.warn { "getHosterList not found on ${delegateClass.name}" }
             emptyList()
         } catch (e: Exception) {
             logger.warn { "getHosterList failed on ${delegateClass.name}: ${e::class.simpleName}: ${e.message}" }
             emptyList()
         }
 
-        if (hosters.isEmpty()) return emptyList()
+        if (hosters.isEmpty()) {
+            logger.warn { "No hosters found for episode $episodeUrl — cannot resolve videos" }
+            return emptyList()
+        }
+
+        logger.info { "Found ${hosters.size} hoster(s) for episode $episodeUrl" }
 
         val allVideos = mutableListOf<Video>()
         for (hoster in hosters) {
             try {
+                val hosterName = try { hoster.hosterName } catch (_: Exception) { "unknown" }
+                logger.debug { "Resolving videos from hoster: $hosterName" }
                 val videos: List<Video> = reflectiveCallSuspend(
                     "getVideoList",
                     arrayOf(Hoster::class.java),
                     hoster,
                 )
+                logger.info { "Hoster $hosterName returned ${videos.size} video(s)" }
                 allVideos.addAll(videos)
+            } catch (e: NoSuchMethodException) {
+                logger.warn { "getVideoList(Hoster) not found on ${delegateClass.name} — hoster-based flow not supported" }
             } catch (e: Exception) {
-                logger.warn { "getVideoList(Hoster) failed for hoster ${hoster.hosterName}: ${e.message}" }
+                logger.warn { "getVideoList(Hoster) failed for hoster: ${e::class.simpleName}: ${e.message}" }
             }
         }
 
         logger.info { "Fetched ${allVideos.size} video(s) via hoster-based fallback from ${hosters.size} hoster(s)" }
         return allVideos
+    }
+
+    /**
+     * Fuzzy HosterList lookup — finds ANY getHosterList method by name.
+     */
+    @Suppress("UNCHECKED_CAST")
+    private suspend fun getHosterListFuzzy(episode: SEpisode): List<Hoster> {
+        val method = delegateClass.methods.firstOrNull { method ->
+            if (method.name != "getHosterList") return@firstOrNull false
+            method.parameterTypes.size in 1..2
+        } ?: return emptyList()
+
+        logger.debug { "Fuzzy matched getHosterList with param type: ${method.parameterTypes[0].name}" }
+
+        return suspendCoroutineUninterceptedOrReturn<List<Hoster>> { continuation ->
+            val callArgs = arrayOfNulls<Any?>(if (method.parameterTypes.size == 2) 2 else 1)
+            callArgs[0] = episode
+            if (method.parameterTypes.size == 2) {
+                callArgs[1] = continuation as Continuation<*>
+            }
+            val result = method.invoke(delegate, *callArgs)
+            if (result === COROUTINE_SUSPENDED) COROUTINE_SUSPENDED
+            else result as List<Hoster>
+        }
     }
 
     override suspend fun getPopularAnime(page: Int): AnimesPage {

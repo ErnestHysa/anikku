@@ -37,6 +37,7 @@ import androidx.compose.ui.window.DialogWindow
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.rememberDialogState
 import app.anikku.macos.platform.update.AppUpdateChecker
+import app.anikku.macos.platform.update.SparkleUpdater
 import app.anikku.macos.platform.update.UpdateInfo
 import app.anikku.macos.platform.web.BrowserLauncher
 import kotlinx.coroutines.Dispatchers
@@ -47,12 +48,15 @@ import kotlinx.coroutines.withContext
  * About dialog for Anikku macOS.
  *
  * Displays app name, version, description, and a clickable link to the
- * GitHub repository. Includes a "Check for Updates" button that queries
- * the GitHub Releases API and shows update status.
+ * GitHub repository. Includes a "Check for Updates" button that tries
+ * [SparkleUpdater] first (for native macOS auto-update), then falls back
+ * to the GitHub Releases API via [AppUpdateChecker].
  *
  * @param onCloseRequest Called when the user wants to close the dialog.
  * @param updateChecker The AppUpdateChecker instance to use for update checks.
  *                      If null, the check button is disabled.
+ * @param sparkleUpdater Optional Sparkle auto-updater. When available, used
+ *                       as the primary update mechanism.
  * @param autoCheck If true, automatically starts the update check when the
  *                  dialog opens (used when triggered from menu bar).
  */
@@ -60,23 +64,31 @@ import kotlinx.coroutines.withContext
 fun AboutDialog(
     onCloseRequest: () -> Unit,
     updateChecker: AppUpdateChecker? = null,
+    sparkleUpdater: SparkleUpdater? = null,
     autoCheck: Boolean = false,
 ) {
     val scope = rememberCoroutineScope()
     var updateState by remember {
         mutableStateOf<UpdateState>(
-            if (autoCheck && updateChecker != null) UpdateState.Checking else UpdateState.Idle,
+            if (autoCheck && (sparkleUpdater != null || updateChecker != null))
+                UpdateState.Checking else UpdateState.Idle,
         )
     }
 
     // Auto-trigger the update check when dialog is opened from menu bar
-    if (autoCheck && updateChecker != null) {
+    if (autoCheck && (sparkleUpdater != null || updateChecker != null)) {
         LaunchedEffect(Unit) {
-            val update = withContext(Dispatchers.IO) {
-                updateChecker.checkForUpdateSync()
+            val foundUpdate = withContext(Dispatchers.IO) {
+                // Try Sparkle first (only when natively available)
+                if (sparkleUpdater != null && sparkleUpdater.isAvailable) {
+                    sparkleUpdater.checkForUpdatesWithUI()
+                    null // Sparkle handles its own UI — no UpdateInfo needed
+                } else {
+                    updateChecker?.checkForUpdateSync()
+                }
             }
-            updateState = if (update != null) {
-                UpdateState.Available(update)
+            updateState = if (foundUpdate != null) {
+                UpdateState.Available(foundUpdate)
             } else {
                 UpdateState.UpToDate
             }
@@ -164,18 +176,29 @@ fun AboutDialog(
                 // ── Update Check Section ─────────────────────────────────
                 when (val state = updateState) {
                     is UpdateState.Idle -> {
-                        if (updateChecker != null) {
+                        val hasUpdater = sparkleUpdater != null || updateChecker != null
+                        if (hasUpdater) {
                             OutlinedButton(
                                 onClick = {
                                     scope.launch {
                                         updateState = UpdateState.Checking
-                                        val update = withContext(Dispatchers.IO) {
-                                            updateChecker.checkForUpdateSync()
-                                        }
-                                        updateState = if (update != null) {
-                                            UpdateState.Available(update)
+
+                                        // Try Sparkle first (only when natively available)
+                                        if (sparkleUpdater != null && sparkleUpdater.isAvailable) {
+                                            withContext(Dispatchers.IO) {
+                                                sparkleUpdater.checkForUpdatesWithUI()
+                                            }
+                                            // Sparkle native UI takes over — no UpdateInfo returned
+                                            updateState = UpdateState.UpToDate
                                         } else {
-                                            UpdateState.UpToDate
+                                            val update = withContext(Dispatchers.IO) {
+                                                updateChecker?.checkForUpdateSync()
+                                            }
+                                            updateState = if (update != null) {
+                                                UpdateState.Available(update)
+                                            } else {
+                                                UpdateState.UpToDate
+                                            }
                                         }
                                     }
                                 },

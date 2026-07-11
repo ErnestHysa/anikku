@@ -56,7 +56,7 @@ class MacOSNotificationManager(
             SwingUtilities.invokeLater {
                 if (SystemTray.getSystemTray().trayIcons.isEmpty()) {
                     // Create a 16x16 transparent icon (required for tray access)
-                    val image = Toolkit.getDefaultToolkit().createImage(createMinimalIconBytes())
+                    val image = createTrayIcon()
                     val icon = TrayIcon(image, appName).apply {
                         isImageAutoSize = true
                         toolTip = appName
@@ -223,13 +223,14 @@ class MacOSNotificationManager(
     /**
      * Create minimal 16x16 icon bytes (a transparent PNG).
      */
-    private fun createMinimalIconBytes(): ByteArray {
-        // A minimal valid 16x16 transparent PNG
-        return java.util.Base64.getDecoder().decode(
-            "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAA" +
-                "IklEQVQ4T2NkYPj/n4EBBJgYKBgZGChgZGBgoIBhBAAA" +
-                "//8DCgEL8QAAAABJRU5ErkJggg==",
-        )
+    private fun createTrayIcon(): java.awt.Image {
+        // Create a 1x1 transparent icon directly without PNG decoding.
+        // Using BufferedImage avoids AWT's asynchronous PNGImageDecoder
+        // which can produce CRC corruption warnings in some JVM versions.
+        val image = java.awt.image.BufferedImage(1, 1, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+        // Ensure fully transparent
+        image.setRGB(0, 0, 0x00000000.toInt())
+        return image
     }
 }
 

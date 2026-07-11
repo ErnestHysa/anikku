@@ -22,6 +22,7 @@ import app.anikku.macos.platform.security.MacOSBiometricAuth
 import app.anikku.macos.platform.storage.MacOSStorageManager
 import app.anikku.macos.platform.storage.MacOSStorageProvider
 import app.anikku.macos.platform.update.AppUpdateChecker
+import app.anikku.macos.platform.update.SparkleUpdater
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -68,6 +69,7 @@ class AnikkuApplication {
     val notificationManager: MacOSNotificationManager
     val biometricAuth: MacOSBiometricAuth
     val appUpdateChecker: AppUpdateChecker
+    val sparkleUpdater: SparkleUpdater
 
     init {
         // 1. Ensure storage directories exist
@@ -139,7 +141,19 @@ class AnikkuApplication {
             repoName = "anikku",
         )
 
-        // 9e. Crash Reporting
+        // 9e. Sparkle Updater (wraps AppUpdateChecker as fallback)
+        sparkleUpdater = SparkleUpdater(
+            appUpdateChecker = appUpdateChecker,
+            notificationManager = notificationManager,
+        )
+
+        // Schedule silent background update check 30 seconds after startup
+        backgroundScheduler.runOnce("startup-update-check") {
+            kotlinx.coroutines.delay(30_000) // Wait 30s for app to fully initialize
+            sparkleUpdater.checkForUpdatesSilently()
+        }
+
+        // 9f. Crash Reporting
         CrashReporter.initialize(
             storageProvider = storageProvider,
             version = "1.0.0",

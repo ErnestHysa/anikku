@@ -87,27 +87,21 @@ dependencies {
     implementation(libs.org.json)
 
     // Jackson — required by many keiyoushi extensions for JSON parsing
-    // Must match the version used by the extensions (2.15+ for ObjectNode.remove(EnumSet))
     implementation("com.fasterxml.jackson.core:jackson-core:2.17.2")
     implementation("com.fasterxml.jackson.core:jackson-databind:2.17.2")
     implementation("com.fasterxml.jackson.core:jackson-annotations:2.17.2")
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.17.2")
     implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-xml:2.17.2")
 
-    // Apache Commons — used by extensions (StringSubstitutor, encoding, utilities)
+    // Apache Commons — used by extensions
     implementation("org.apache.commons:commons-text:1.12.0")
     implementation("commons-codec:commons-codec:1.17.1")
     implementation("org.apache.commons:commons-lang3:3.17.0")
 
-    // Aniyomi lib — custom extractors used by some yuzono extensions
-    // (DoodExtractor, StreamWishExtractor, etc.) — NOT currently available on JitPack.
-    // Extensions using aniyomi.lib.* will need this added when the artifact becomes public.
-    // implementation("com.github.aniyomiorg:aniyomi-lib:bdc8184127")
-
-    // kotlinx.serialization-protobuf — needed by keiyoushi-utils Protobuf.kt
+    // kotlinx.serialization-protobuf
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-protobuf-jvm:1.9.0")
 
-    // QuickJS — JavaScript engine used by keiyoushi.lib.synchrony.Deobfuscator
+    // QuickJS — JavaScript engine for extension deobfuscation
     implementation("app.cash.quickjs:quickjs-jvm:0.9.2")
 
     // Testing
@@ -127,13 +121,6 @@ tasks.test {
 
 // ---- Extension Build Tasks ------------------------------------------------
 
-/**
- * Build a standalone test extension JAR that can be loaded by MacOSExtensionLoader.
- *
- * Usage:
- *   ./macos/gradlew -p macos buildTestExtensionJar
- *   cp macos/build/libs/test-extension-1.0.0.jar ~/Library/Application Support/Anikku/extensions/
- */
 tasks.register<Jar>("buildTestExtensionJar") {
     dependsOn("compileKotlin")
     archiveBaseName.set("test-extension")
@@ -149,11 +136,6 @@ tasks.register<Jar>("buildTestExtensionJar") {
     }
 }
 
-/**
- * Rebuild the source-api and core/common JVM JARs.
- * Run after any changes to source-api or core/common:
- *   ./macos/gradlew -p macos rebuildSourceApiJars
- */
 tasks.register<Exec>("rebuildSourceApiJars") {
     workingDir = rootProject.projectDir.parentFile
     commandLine(
@@ -170,19 +152,6 @@ tasks.named("compileKotlin") {
     dependsOn("rebuildSourceApiJars")
 }
 
-/**
- * Download an anime extension JAR or APK for reference/testing.
- *
- * By default downloads from the Anikku macOS Extensions JAR repo.
- * Alternatively, download an APK from keiyoushi/extensions for reference.
- *
- * Usage:
- *   ./macos/gradlew -p macos downloadKeiyoushiExtension
- *   ./macos/gradlew -p macos downloadKeiyoushiExtension -PextName=gogoanime
- *
- * For building extensions from anime source (yuzono/anime-extensions),
- * use buildKeiyoushiExtension or batchBuildKeiyoushiExtensions instead.
- */
 tasks.register<Exec>("downloadKeiyoushiExtension") {
     description = "Download an extension JAR/APK for reference"
     group = "verification"
@@ -197,11 +166,8 @@ tasks.register<Exec>("downloadKeiyoushiExtension") {
 set -euo pipefail
 OUT_DIR="$extensionsDir"
 mkdir -p "${D}OUT_DIR"
-
-# Try the Anikku macOS JAR repo first (preferred), fall back to keiyoushi APK repo
 JAR_INDEX="https://raw.githubusercontent.com/ErnestHysa/anikku-extensions-jar/main/index.min.json"
 APK_INDEX="https://raw.githubusercontent.com/keiyoushi/extensions/repo/index.min.json"
-
 PYTHON_SCRIPT='import sys, json
 data = json.load(sys.stdin)
 ext_name = "$extNameFilter".lower().strip()
@@ -214,67 +180,32 @@ for ext in data:
         print(json.dumps(ext)); sys.exit(0)
 if data: print(json.dumps(data[0]))
 else: print("ERROR: Empty index"); sys.exit(1)'
-
-# Try JAR repo first
 JAR_JSON=$(curl -sL "${D}JAR_INDEX" | python3 -c "${D}PYTHON_SCRIPT" 2>/dev/null || echo "")
 if [ -n "${D}JAR_JSON" ]; then
-    APK_NAME=$(echo "${D}JAR_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)["apk"])" 2>/dev/null || echo "")
+    APK_NAME=$(echo "${D}JAR_JSON" | python3 -c 'import sys,json; print(json.load(sys.stdin)["apk"])' 2>/dev/null || echo "")
     if [ -n "${D}APK_NAME" ]; then
         curl -sL "https://raw.githubusercontent.com/ErnestHysa/anikku-extensions-jar/main/${D}APK_NAME" -o "${D}OUT_DIR/${D}APK_NAME"
         if [ -s "${D}OUT_DIR/${D}APK_NAME" ]; then
-            echo "Downloaded $(wc -c < "${D}OUT_DIR/${D}APK_NAME") bytes — JAR from Anikku macOS repo"
+            echo "Downloaded $(wc -c < "${D}OUT_DIR/${D}APK_NAME") bytes"
             exit 0
         fi
     fi
 fi
-
-# Fall back to APK repo
 APK_JSON=$(curl -sL "${D}APK_INDEX" | python3 -c "${D}PYTHON_SCRIPT" 2>/dev/null || echo "")
-if [ -n "${D}APK_JSON" ]; then
-    APK_NAME=$(echo "${D}APK_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)["apk"])" 2>/dev/null || echo "")
+if [ -n "${D}APK_JSON}" ]; then
+    APK_NAME=$(echo "${D}APK_JSON}" | python3 -c 'import sys,json; print(json.load(sys.stdin)["apk"])' 2>/dev/null || echo "")
     if [ -n "${D}APK_NAME" ]; then
         curl -sL "https://raw.githubusercontent.com/keiyoushi/extensions/repo/apk/${D}APK_NAME" -o "${D}OUT_DIR/${D}APK_NAME"
-        echo "Downloaded $(wc -c < "${D}OUT_DIR/${D}APK_NAME") bytes — APK from keiyoushi/extensions (not JVM-compatible)"
-        echo "For JVM-compatible JARs, use: ./gradlew buildKeiyoushiExtension -PbuildKeiyoushiExtName=<name>"
+        echo "Downloaded $(wc -c < "${D}OUT_DIR/${D}APK_NAME") bytes"
         exit 0
     fi
 fi
-
-echo "ERROR: Could not find extension matching '$extNameFilter' in either repo"
+echo "ERROR: Could not find extension matching '$extNameFilter'"
 exit 1
 """.trimIndent(),
     )
 }
 
-/**
- * Build a single yuzono/anime-extensions extension from source as a JVM JAR.
- *
- * Clones the yuzono/anime-extensions source repo, compiles the extension
- * against source-api JARs, generates META-INF/extension.json, and deploys
- * to the app's extensions directory.
- *
- * This is the RECOMMENDED approach for making extensions available on macOS.
- * Unlike APK→dex2jar conversion, this produces clean JVM bytecode with
- * zero Android references.
- *
- * Usage:
- *   ./macos/gradlew -p macos buildKeiyoushiExtension -PbuildKeiyoushiExtName=miruro
- *
- * Parameters:
- *   -PbuildKeiyoushiExtName=<name>  Extension dir name (required, e.g. miruro)
- *   -PbuildKeiyoushiExtLang=<code>  Language code (default: en)
- *
- * Examples:
- *   # Build miruro extension
- *   ./macos/gradlew -p macos buildKeiyoushiExtension -PbuildKeiyoushiExtName=miruro
- *
- *   # Build aniwave extension
- *   ./macos/gradlew -p macos buildKeiyoushiExtension -PbuildKeiyoushiExtName=aniwave
- *
- * Requirements:
- *   - kotlinc: brew install kotlin
- *   - source-api JARs: ./gradlew rebuildSourceApiJars
- */
 val buildKeiyoushiExtName: String? by project
 val buildKeiyoushiExtLang: String by project
 
@@ -284,16 +215,12 @@ tasks.register<Exec>("buildKeiyoushiExtension") {
 
     doFirst {
         val extName = buildKeiyoushiExtName
-            ?: throw GradleException("Usage: -PbuildKeiyoushiExtName=<name> (e.g., -PbuildKeiyoushiExtName=miruro)")
+            ?: throw GradleException("Usage: -PbuildKeiyoushiExtName=<name>")
         val extLang = buildKeiyoushiExtLang.ifBlank { "en" }
         val scriptPath = "${project.projectDir}/scripts/build-keiyoushi-from-source.sh"
 
         logger.lifecycle("Building extension: $extName (lang: $extLang)")
         logger.lifecycle("Script: $scriptPath")
-        logger.lifecycle("")
-        logger.lifecycle("This pipeline compiles yuzono/anime-extensions sources from GitHub")
-        logger.lifecycle("as JVM JARs, bypassing the Android APK format entirely.")
-        logger.lifecycle("")
         logger.lifecycle("Requirements: kotlinc (brew install kotlin)")
 
         exec {
@@ -306,33 +233,6 @@ tasks.register<Exec>("buildKeiyoushiExtension") {
     }
 }
 
-/**
- * Batch-build ALL yuzono/anime-extensions from source as JVM JARs.
- *
- * Clones the entire yuzono/anime-extensions source repo, compiles each
- * anime extension against source-api JARs, generates META-INF/extension.json
- * for each, builds a repo index, and auto-trusts all built extensions.
- *
- * This is the RECOMMENDED approach for bulk extension installation on macOS.
- *
- * Usage:
- *   ./macos/gradlew -p macos batchBuildKeiyoushiExtensions
- *
- * Options:
- *   -PbatchExtLang=<code>  Language filter (default: en)
- *   -PbatchExtLimit=<N>    Build at most N extensions (for testing)
- *
- * Examples:
- *   # Build all English extensions
- *   ./macos/gradlew -p macos batchBuildKeiyoushiExtensions
- *
- *   # Build first 5 for testing
- *   ./macos/gradlew -p macos batchBuildKeiyoushiExtensions -PbatchExtLimit=5
- *
- * Requirements:
- *   - kotlinc: brew install kotlin
- *   - source-api JARs built
- */
 val batchExtLang: String? by project
 val batchExtLimit: String? by project
 
@@ -346,11 +246,7 @@ tasks.register<Exec>("batchBuildKeiyoushiExtensions") {
 
         logger.lifecycle("Batch-building extensions for language: $lang")
         logger.lifecycle("Script: $scriptPath")
-        logger.lifecycle("")
-        logger.lifecycle("This pipeline compiles yuzono/anime-extensions sources from GitHub")
-        logger.lifecycle("as JVM JARs, bypassing the Android DEX/APK format entirely.")
         logger.lifecycle("Requirements: kotlinc (brew install kotlin)")
-        logger.lifecycle("")
 
         val args = mutableListOf("bash", scriptPath, "--lang", lang)
         val limit = batchExtLimit
@@ -362,6 +258,10 @@ tasks.register<Exec>("batchBuildKeiyoushiExtensions") {
         exec { commandLine(args) }
     }
 }
+
+// ---- Package Version Property ----------------------------------------------
+val appVersion: String by project
+val appVersionName: String by project
 
 // ---- Desktop Application Configuration ------------------------------------
 
@@ -381,7 +281,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Dmg, TargetFormat.Pkg)
             packageName = "Anikku"
-            packageVersion = "1.0.0"
+            packageVersion = appVersion
             description = "A native macOS anime watching application"
             vendor = "Anikku"
             licenseFile.set(project.file("../LICENSE"))
@@ -391,10 +291,265 @@ compose.desktop {
                 iconFile.set(project.file("src/main/resources/icons/app.icns"))
                 minimumSystemVersion = "12.0"
                 entitlementsFile.set(project.file("src/main/resources/entitlements.plist"))
+
+                // ---- Code Signing Configuration ----
+                // Usage: ./gradlew -p macos packageDmg -Psign=true
+                val shouldSign = project.findProperty("sign") as? String ?: "false"
+                if (shouldSign == "true") {
+                    val signIdentity = project.findProperty("signIdentity") as? String
+                        ?: "Developer ID Application: Komikku App (TEAMID)"
+
+                    signing {
+                        sign.set(true)
+                        identity.set(signIdentity)
+                    }
+                }
             }
 
-            // Bundle libmpv.2.dylib into Contents/Resources/ so users don't need brew install mpv
+            // Bundle native libraries into Contents/Resources/
             appResourcesRootDir.set(file("src/main/resources/dist"))
         }
+    }
+}
+
+// ---- Build & Package Tasks -------------------------------------------------
+
+/**
+ * Patch the generated Info.plist with Sparkle auto-updater keys.
+ * Runs after packageDmg to inject SUFeedURL and SUPublicEDKey.
+ *
+ * Usage:
+ *   ./gradlew -p macos patchInfoPlist -PappPath=/path/to/Anikku.app
+ *
+ * The Info.plist Sparkle entries are:
+ *   SUFeedURL: https://anikku.app/sparkle/appcast.xml
+ *   SUPublicEDKey: (from src/main/resources/Sparkle/ed25519_pub.pem)
+ *   NSHighResolutionCapable: true
+ *   LSApplicationCategoryType: public.app-category.entertainment
+ */
+val patchInfoPlistAppPath: String? by project
+
+tasks.register("patchInfoPlist") {
+    description = "Inject Sparkle keys into the generated Info.plist"
+    group = "distribution"
+
+    doLast {
+        val appDir = patchInfoPlistAppPath?.let { file(it) }
+            ?: file("build/compose/binaries/main/dmg/Anikku.app")
+
+        if (!appDir.isDirectory) {
+            logger.warn("App bundle not found at ${appDir.absolutePath}")
+            logger.warn("Provide -PappPath=/path/to/Anikku.app")
+            return@doLast
+        }
+
+        val infoPlistFile = File(appDir, "Contents/Info.plist")
+        if (!infoPlistFile.isFile) {
+            logger.warn("Info.plist not found — skipping")
+            return@doLast
+        }
+
+        val publicKey = readSparklePublicKey()
+        val feedUrl = "https://anikku.app/sparkle/appcast.xml"
+
+        if (publicKey.startsWith("PLACEHOLDER")) {
+            logger.warn("Sparkle Ed25519 public key is a placeholder!")
+            logger.warn("Generate keys: openssl genpkey -algorithm ed25519 -out ed25519-key.pem")
+            logger.warn("             openssl pkey -in ed25519-key.pem -pubout -out ed25519-pub.pem")
+            logger.warn("Then copy ed25519-pub.pem to macos/src/main/resources/Sparkle/ed25519_pub.pem")
+        }
+
+        var plist = infoPlistFile.readText()
+
+        val sparkleEntries = """
+    <key>SUFeedURL</key>
+    <string>${feedUrl}</string>
+    <key>SUPublicEDKey</key>
+    <string>${publicKey}</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.entertainment</string>
+"""
+
+        if (plist.contains("SUFeedURL")) {
+            logger.lifecycle("  Info.plist already has SUFeedURL — skipping")
+        } else {
+            plist = plist.replace("</dict>\n</plist>", "${sparkleEntries}</dict>\n</plist>")
+            infoPlistFile.writeText(plist)
+            logger.lifecycle("  Patched Info.plist with Sparkle keys")
+            logger.lifecycle("    SUFeedURL: ${feedUrl}")
+            logger.lifecycle("    SUPublicEDKey: ${publicKey.take(24)}...")
+        }
+    }
+}
+
+/**
+ * Notarize a built DMG for macOS distribution.
+ *
+ * Requires:
+ *   - A signed DMG (build with -Psign=true first)
+ *   - APPLE_ID, APPLE_TEAM_ID, APPLE_PASSWORD env vars
+ *
+ * Usage:
+ *   ./gradlew -p macos submitForNotarization -PdmgPath=/path/to/Anikku-1.0.0.dmg
+ */
+val submitForNotarizationDmg: String? by project
+
+tasks.register<Exec>("submitForNotarization") {
+    description = "Submit the DMG for Apple notarization"
+    group = "distribution"
+
+    doFirst {
+        val dmgFile = submitForNotarizationDmg
+            ?: throw GradleException("Usage: -PdmgPath=/path/to/Anikku.dmg (required)")
+        val dmg = file(dmgFile)
+        if (!dmg.isFile) {
+            throw GradleException("DMG not found: ${dmg.absolutePath}")
+        }
+
+        val appleId = System.getenv("APPLE_ID")
+            ?: throw GradleException("APPLE_ID env var not set")
+        val teamId = System.getenv("APPLE_TEAM_ID")
+            ?: throw GradleException("APPLE_TEAM_ID env var not set")
+        val password = System.getenv("APPLE_PASSWORD") ?: "@keychain:AC_PASSWORD"
+
+        logger.lifecycle("Notarizing: ${dmg.absolutePath}")
+        logger.lifecycle("  Apple ID: ${appleId}")
+        logger.lifecycle("  Team ID: ${teamId}")
+
+        commandLine(
+            "xcrun", "notarytool", "submit", dmg.absolutePath,
+            "--apple-id", appleId,
+            "--team-id", teamId,
+            "--password", password,
+            "--wait",
+        )
+    }
+
+    doLast {
+        logger.lifecycle("  If successful, staple: xcrun stapler staple ${submitForNotarizationDmg}")
+    }
+}
+
+/**
+ * Verify the packaged .app bundle has all required components.
+ *
+ * Usage:
+ *   ./gradlew -p macos verifyPackage -PappPath=/path/to/Anikku.app
+ */
+val verifyAppPath: String? by project
+
+tasks.register("verifyPackage") {
+    description = "Verify the packaged .app bundle"
+    group = "distribution"
+
+    doLast {
+        val app = verifyAppPath
+            ?: file("build/compose/binaries/main/dmg/Anikku.app").let {
+                if (it.isDirectory) it.absolutePath
+                else {
+                    val dmgDir = file("build/compose/binaries/main/dmg")
+                    val found = dmgDir.listFiles()?.find { it.extension == "app" }
+                    found?.absolutePath ?: throw GradleException(
+                        "Cannot find .app bundle. Build packageDmg first.",
+                    )
+                }
+            }
+
+        val appDir = file(app)
+        if (!appDir.isDirectory) {
+            throw GradleException("App bundle not found at: $app")
+        }
+
+        logger.lifecycle("Verifying: ${appDir.absolutePath}")
+
+        val infoPlist = File(appDir, "Contents/Info.plist")
+        if (infoPlist.isFile) {
+            val text = infoPlist.readText()
+            logger.lifecycle("  [Info.plist] Found (${text.length} bytes)")
+            if ("SUFeedURL" in text) logger.lifecycle("    SUFeedURL: present")
+            else logger.lifecycle("    SUFeedURL: missing")
+            if ("SUPublicEDKey" in text) logger.lifecycle("    SUPublicEDKey: present")
+            else logger.lifecycle("    SUPublicEDKey: missing")
+        } else {
+            logger.lifecycle("  [Info.plist] NOT FOUND")
+        }
+
+        // Check libmpv
+        val libmpv = listOf(
+            File(appDir, "Contents/Frameworks/libmpv.2.dylib"),
+            File(appDir, "Contents/Resources/libmpv.2.dylib"),
+        ).firstOrNull { it.isFile }
+        if (libmpv != null) {
+            logger.lifecycle("  [libmpv] Found (${libmpv.length()} bytes)")
+        } else {
+            logger.lifecycle("  [libmpv] Not bundled")
+        }
+
+        // Check code signing
+        try {
+            val proc = ProcessBuilder("codesign", "-dvvv", "--deep", appDir.absolutePath)
+                .redirectErrorStream(true)
+                .start()
+            val output = proc.inputStream.reader().readText()
+            if (proc.waitFor() == 0) {
+                val authority = output.lines().find { it.contains("Authority=") }
+                    ?.substringAfter("Authority=") ?: "unknown"
+                logger.lifecycle("  [Signing] Signed (Authority: $authority)")
+            } else {
+                logger.lifecycle("  [Signing] Not signed")
+            }
+        } catch (_: Exception) {
+            logger.lifecycle("  [Signing] Cannot verify")
+        }
+    }
+}
+
+/**
+ * List all available distribution-related tasks.
+ */
+tasks.register("listDistributionTasks") {
+    description = "List all distribution-related Gradle tasks"
+    group = "distribution"
+
+    doLast {
+        logger.lifecycle("")
+        logger.lifecycle("Available distribution tasks:")
+        logger.lifecycle("  packageDmg          - Build unsigned DMG")
+        logger.lifecycle("  packageDmg -Psign=true - Build signed DMG")
+        logger.lifecycle("  patchInfoPlist      - Inject Sparkle keys into Info.plist")
+        logger.lifecycle("  submitForNotarization - Submit DMG for Apple notarization")
+        logger.lifecycle("  verifyPackage       - Verify .app bundle integrity")
+        logger.lifecycle("  generateAppcast     - Generate Sparkle appcast entry")
+        logger.lifecycle("")
+        logger.lifecycle("Workflow:")
+        logger.lifecycle("  1. ./gradlew -p macos packageDmg                   # Build DMG")
+        logger.lifecycle("  2. ./gradlew -p macos patchInfoPlist               # Add Sparkle keys")
+        logger.lifecycle("  3. ./gradlew -p macos verifyPackage                # Verify bundle")
+        logger.lifecycle("  4. ./gradlew -p macos packageDmg -Psign=true       # Sign")
+        logger.lifecycle("  5. ./gradlew -p macos submitForNotarization -PdmgPath=...    # Notarize")
+        logger.lifecycle("")
+    }
+}
+
+// ---- Sparkle Public Key ----------------------------------------------------
+fun readSparklePublicKey(): String {
+    val pemFile = file("src/main/resources/Sparkle/ed25519_pub.pem")
+    return if (pemFile.isFile) {
+        pemFile.readLines()
+            .filterNot { it.startsWith("-") || it.isBlank() }
+            .joinToString("")
+            .trim()
+            .ifEmpty { "PLACEHOLDER_SPARKLE_PUBLIC_KEY" }
+    } else {
+        "PLACEHOLDER_SPARKLE_PUBLIC_KEY"
+    }
+}
+
+// Wire patchInfoPlist after packageDmg using whenTaskAdded
+tasks.whenTaskAdded {
+    if (name == "packageDmg") {
+        finalizedBy("patchInfoPlist")
     }
 }

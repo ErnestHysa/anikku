@@ -38,8 +38,8 @@ class MacOSNetworkHelper(
 
     private fun buildClient(
         connectTimeout: Long = 30,
-        readTimeout: Long = 30,
-        callTimeout: Long = 120,
+        readTimeout: Long = 60,
+        callTimeout: Long = 180,
     ): OkHttpClient {
         val builder = OkHttpClient.Builder()
             .cookieJar(cookieJar)
