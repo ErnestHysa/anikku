@@ -94,20 +94,21 @@ def patch_nullable_strings(ext_dir):
                     flags=re.MULTILINE
                 )
                 
-                # Fix #1b: putString(key, entry) where key or entry is String?
+                # Fix #1b: putString(key, <value>) where key is String?.
                 # ListPreference.key is var key: String? = null in our Preference stubs.
                 # Extensions pass this nullable key to SharedPreferences.Editor.putString.
-                # Fix: add !! on both key and entry (safe since they're always set).
+                # The value can be a simple word (`entry`), a cast (`newValue as String`),
+                # or any expression. We only add !! to the KEY argument.
                 new_content = re.sub(
-                    r'putString\((\w+),\s*(\w+)\)',
-                    lambda m: f'putString({m.group(1)}!!, {m.group(2)}!!)' if not m.group(1).endswith('!!') and not m.group(2).endswith('!!') else m.group(0),
+                    r'putString\((\w+),\s*',
+                    lambda m: f'putString({m.group(1)}!!, ' if not m.group(1).endswith('!!') else m.group(0),
                     new_content,
                 )
                 
                 # Fix #1c: putBoolean(key, value) where key is String?
                 new_content = re.sub(
-                    r'putBoolean\((\w+),\s*(\w+)\)',
-                    lambda m: f'putBoolean({m.group(1)}!!, {m.group(2)})' if not m.group(1).endswith('!!') else m.group(0),
+                    r'putBoolean\((\w+),\s*',
+                    lambda m: f'putBoolean({m.group(1)}!!, ' if not m.group(1).endswith('!!') else m.group(0),
                     new_content,
                 )
                 
@@ -361,7 +362,69 @@ def patch_missing_hosters(ext_path):
                     new_content = '\n'.join(lines)
                     with open(fpath, "w") as fh:
                         fh.write(new_content)
-                    print(f"  [patch] {f} — added hoster stubs")
+                    print(f"  [patch] {f} — added hoster stubs (before class brace)")
+                else:
+                    # No class body — class has supertype constructor call
+                    # but no methods (no braces). E.g.:
+                    #   class Anikoto : AnikotoTheme("en", ...)
+                    # We need to ADD a class body with braces.
+                    # Find the last line that might be part of the class
+                    # declaration (e.g., a closing paren of supertype ctor).
+                    # We insert '{' after the class declaration and add '}' at end.
+                    lines = content.split('\n')
+                    # Find last non-empty, non-whitespace line
+                    last_code_line = -1
+                    for i in range(len(lines) - 1, -1, -1):
+                        if lines[i].strip():
+                            last_code_line = i
+                            break
+                    if last_code_line >= 0:
+                        # Add opening brace after the class declaration
+                        lines[last_code_line] = lines[last_code_line] + ' {'
+                        # Add stubs with closing brace at end
+                        lines.append(stubs)
+                        lines.append('}')
+                        new_content = '\n'.join(lines)
+                        with open(fpath, "w") as fh:
+                            fh.write(new_content)
+                        print(f"  [patch] {f} — added hoster stubs (no class body, added braces)")
+            except Exception:
+                continue
+
+
+def patch_wco_override_fixes(ext_dir):
+    """
+    Fix #X: WcoTheme-related override fixes.
+    
+    Some wco* extensions override properties that don't exist in the
+    current version of WcoTheme (e.g., disableRelatedAnimesBySearch).
+    These properties were removed or renamed in newer versions.
+    """
+    for root, dirs, files in os.walk(ext_dir):
+        for f in files:
+            if not f.endswith(".kt"):
+                continue
+            fpath = os.path.join(root, f)
+            try:
+                with open(fpath, "r") as fh:
+                    content = fh.read()
+                new_content = content
+                changed = False
+                
+                # Fix: remove 'override val disableRelatedAnimesBySearch'
+                # This property was removed from WcoTheme — it doesn't exist
+                # in the compiled lib-multisrc version.
+                new_content = re.sub(
+                    r'override\s+val\s+disableRelatedAnimesBySearch\s*=\s*(true|false)\s*\n',
+                    r'// disableRelatedAnimesBySearch removed — not in WcoTheme base class\n',
+                    new_content,
+                )
+                
+                if new_content != content:
+                    with open(fpath, "w") as fh:
+                        fh.write(new_content)
+                    print(f"  [patch] {f} — removed disableRelatedAnimesBySearch override")
+                    changed = True
             except Exception:
                 continue
 
@@ -408,6 +471,7 @@ def main():
                 
                 patch_nullable_strings(ext_path)
                 patch_missing_hosters(ext_path)
+                patch_wco_override_fixes(ext_path)
                 patch_kisskh(ext_path)
                 patch_av1encodes(ext_path)
                 patch_animekhor(ext_path)

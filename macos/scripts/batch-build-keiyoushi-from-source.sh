@@ -561,6 +561,7 @@ if [ -d "$EXTRACTORS_DIR" ]; then
             "dailymotionextractor"
             "doodextractor"
             "filemoonextractor"
+            "gdriveplayerextractor"
             "gogostreamextractor"
             "googledriveextractor"
             "mixdropextractor"
