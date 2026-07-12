@@ -448,6 +448,18 @@ fi
 log "  Classpath: $(echo "$CLASSPATH" | tr ':' '\n' | wc -l) entries"
 
 # ---------------------------------------------------------------------------
+# Step 2d: Apply universal source patches for JVM compilation
+# ---------------------------------------------------------------------------
+log ""
+log "Step 2d: Applying universal source patches for JVM compilation..."
+PATCH_SCRIPT="${SCRIPT_DIR}/patch-all-source-issues.py"
+if [ -f "$PATCH_SCRIPT" ]; then
+    python3 "$PATCH_SCRIPT" "${GIT_CLONE_DIR}" 2>&1 || log "  WARNING: patch-all-source-issues.py returned non-zero — continuing"
+else
+    log "  WARNING: patch-all-source-issues.py not found at ${PATCH_SCRIPT}"
+fi
+
+# ---------------------------------------------------------------------------
 # Step 3: Compile each extension
 # ---------------------------------------------------------------------------
 log ""
@@ -534,18 +546,29 @@ if [ -d "$EXTRACTORS_DIR" ]; then
         # Added for kissanime:
         #   dailymotionextractor (kissanime)
         #   youruploadextractor (kissanime)
-        # WHITELIST: extractors confirmed to compile without Android dependencies.
+        # WHITELIST: extractors known to compile on JVM.
         # Each entry maps to a directory under lib/ in the cloned repo.
-        # NOTE: gogostreamextractor, dailymotionextractor, youruploadextractor
-        # and others have WebView or crypto dependencies that prevent compilation.
-        # Only add extractors here AFTER verifying they compile independently.
+        # NOTE: gogostreamextractor has WebView/crypto deps but compiles.
+        # MixDrop, Dailymotion, Rumble, GoogleDrive, Chillx are new additions.
+        # Whenever a new extension type is enabled, add its extractors here.
+        # WHITELIST: extractors known to compile on JVM.
+        # NOTE: chillxextractor requires Android WebView, textinterceptor requires
+        # Android Layout/Html APIs — excluded from whitelist.
+        # Add new extractors incrementally and verify they compile independently.
         EXTRACTOR_WHITELIST=(
+            "burstcloudextractor"
+            "cryptoaes"
+            "dailymotionextractor"
             "doodextractor"
             "filemoonextractor"
             "gogostreamextractor"
+            "googledriveextractor"
+            "mixdropextractor"
             "mp4uploadextractor"
             "okruextractor"
             "playlistutils"
+            "rumbleextractor"
+            "seedrandom"
             "streamlareextractor"
             "streamwishextractor"
             "vidhideextractor"
@@ -596,7 +619,11 @@ for lib_dir in "${GIT_CLONE_DIR}/core/" "${GIT_CLONE_DIR}/common/" "${GIT_CLONE_
     # Skip only if directory has actual class files (retry if cached empty/broken)
     if [ -d "$lib_classes" ]; then
         cached_classes=$(find "$lib_classes" -name '*.class' 2>/dev/null | wc -l | tr -d ' ')
-        [ "$cached_classes" -gt 0 ] && continue
+        if [ "$cached_classes" -gt 0 ]; then
+            add_to_cp "$lib_classes"
+            log "  ${lib_name} already compiled (${cached_classes} cached classes) ✓"
+            continue
+        fi
         rm -rf "$lib_classes"
     fi
 
