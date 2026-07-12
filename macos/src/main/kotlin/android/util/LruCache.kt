@@ -19,8 +19,7 @@ open class LruCache<K, V>(private val maxSize: Int) {
     @Synchronized
     open fun evictAll() = cache.clear()
 
-    @Synchronized
-    open val size: Int get() = cache.size
+    open val size: Int get() = synchronized(this) { cache.size }
 
     protected open fun create(key: K): V? = null
 
