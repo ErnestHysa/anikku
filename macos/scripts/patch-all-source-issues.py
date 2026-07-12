@@ -263,27 +263,6 @@ def patch_kickassanime(ext_dir):
                 continue
 
 
-def patch_kissanime(ext_dir):
-    """Fix #10: KissAnime DailymotionExtractor fallback."""
-    for root, dirs, files in os.walk(ext_dir):
-        for f in files:
-            if f == "KissAnime.kt":
-                fpath = os.path.join(root, f)
-                try:
-                    with open(fpath, "r") as fh:
-                        content = fh.read()
-                    if "import aniyomi.lib.dailymotionextractor.DailymotionExtractor" in content:
-                        new_content = content.replace(
-                            "import aniyomi.lib.dailymotionextractor.DailymotionExtractor",
-                            "// import DailymotionExtractor — unavailable on JVM"
-                        )
-                        with open(fpath, "w") as fh:
-                            fh.write(new_content)
-                        print("  [patch] KissAnime.kt — commented out DailymotionExtractor import")
-                except Exception:
-                    pass
-
-
 def main():
     if len(sys.argv) < 2:
         print("Usage: python3 patch-all-source-issues.py <extensions_source_dir>")
@@ -333,7 +312,6 @@ def main():
                 patch_miruro(ext_path)
                 patch_cineby(ext_path)
                 patch_kickassanime(ext_path)
-                patch_kissanime(ext_path)
     
     print(f"")
     print(f"  Processed {ext_count} extension directories")
