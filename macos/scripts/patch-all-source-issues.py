@@ -263,6 +263,71 @@ def patch_kickassanime(ext_dir):
                 continue
 
 
+def patch_missing_hosters(ext_path):
+    """
+    Generic fix: add hosterListSelector and hosterFromElement stubs.
+    
+    Many extensions extend ParsedAnimeHttpSource (via a multisrc theme like
+    WcoTheme, AnikotoTheme, DooPlay, etc.) but only override getVideoList()
+    directly, leaving hosterListSelector() and hosterFromElement() abstract.
+    
+    These methods are never called if getVideoList() is overridden, but the
+    compiler requires them to be implemented since they're abstract in the
+    ParsedAnimeHttpSource base class.
+    """
+    for root, dirs, files in os.walk(ext_path):
+        for f in files:
+            if not f.endswith(".kt"):
+                continue
+            fpath = os.path.join(root, f)
+            try:
+                with open(fpath, "r") as fh:
+                    content = fh.read()
+                
+                # Only patch files that have class declarations extending something
+                if not re.search(r'class\s+\w+\s*:', content):
+                    continue
+                
+                # Skip if already has hoster stubs
+                if "hosterListSelector" in content or "hosterFromElement" in content:
+                    continue
+                
+                # Check if this file extends ParsedAnimeHttpSource (directly or via
+                # any multisrc theme). Use a regex check for multisrc imports to
+                # catch ALL multisrc themes now and in the future without hardcoding.
+                has_parsed_source = (
+                    "ParsedAnimeHttpSource" in content or
+                    re.search(r'import.*multisrc\.', content)
+                )
+                if not has_parsed_source:
+                    continue
+                
+                # Insert stubs before the last class closing brace
+                stubs = """
+    // Host stubs (not used — video extraction via getVideoList override)
+    override fun hosterListSelector() = "unused"
+    override fun hosterFromElement(element: org.jsoup.nodes.Element) = eu.kanade.tachiyomi.animesource.model.Hoster("", "")
+"""
+                # Find the last } that's not inside a string or comment
+                # Simple approach: find the last '}' at column 0 (class-level closing)
+                lines = content.split('\n')
+                last_brace_idx = -1
+                for i in range(len(lines) - 1, -1, -1):
+                    stripped = lines[i].strip()
+                    if stripped == '}' or stripped.startswith('} //'):
+                        last_brace_idx = i
+                        break
+                
+                if last_brace_idx > 0:
+                    lines.insert(last_brace_idx, stubs)
+                    new_content = '\n'.join(lines)
+                    with open(fpath, "w") as fh:
+                        fh.write(new_content)
+                    print(f"  [patch] {f} — added hoster stubs")
+            except Exception:
+                continue
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: python3 patch-all-source-issues.py <extensions_source_dir>")
@@ -304,6 +369,7 @@ def main():
                 ext_count += 1
                 
                 patch_nullable_strings(ext_path)
+                patch_missing_hosters(ext_path)
                 patch_kisskh(ext_path)
                 patch_av1encodes(ext_path)
                 patch_animekhor(ext_path)

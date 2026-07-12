@@ -698,8 +698,10 @@ for ext_dir in "${EXT_DIRS[@]}"; do
     FULL_CLASS_NAME="${PKG}.${CLASS_NAME}"
 
     # Check if extension uses AnimeHttpSource (anime) or HttpSource (manga)
+    # Also check for multisrc theme imports (WcoTheme, AnikotoTheme, AnimeStream, DooPlay, etc.)
+    # which transitively extend AnimeHttpSource/ParsedAnimeHttpSource.
     IS_ANIME=false
-    if grep -q 'AnimeHttpSource\|AnimeCatalogueSource\|animesource\.model' "$MAIN_FILE" 2>/dev/null; then
+    if grep -q 'AnimeHttpSource\|AnimeCatalogueSource\|animesource\.model\|import.*multisrc\.' "$MAIN_FILE" 2>/dev/null; then
         IS_ANIME=true
     fi
 
