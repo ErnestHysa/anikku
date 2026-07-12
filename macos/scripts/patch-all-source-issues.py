@@ -63,7 +63,7 @@ def patch_nullable_strings(ext_dir):
     non-null String. The Android SharedPreferences.getString() returns 
     String? but our stub returns non-null "".
 
-    Fix: add !! to getString() calls when used as arguments or in assignments
+    Fix #1a: add !! to getString() calls when used as arguments or in assignments
     to non-null String variables.
     """
     fixes = 0
@@ -92,6 +92,23 @@ def patch_nullable_strings(ext_dir):
                     r'\1!!',
                     new_content,
                     flags=re.MULTILINE
+                )
+                
+                # Fix #1b: putString(key, entry) where key or entry is String?
+                # ListPreference.key is var key: String? = null in our Preference stubs.
+                # Extensions pass this nullable key to SharedPreferences.Editor.putString.
+                # Fix: add !! on both key and entry (safe since they're always set).
+                new_content = re.sub(
+                    r'putString\((\w+),\s*(\w+)\)',
+                    lambda m: f'putString({m.group(1)}!!, {m.group(2)}!!)' if not m.group(1).endswith('!!') and not m.group(2).endswith('!!') else m.group(0),
+                    new_content,
+                )
+                
+                # Fix #1c: putBoolean(key, value) where key is String?
+                new_content = re.sub(
+                    r'putBoolean\((\w+),\s*(\w+)\)',
+                    lambda m: f'putBoolean({m.group(1)}!!, {m.group(2)})' if not m.group(1).endswith('!!') else m.group(0),
+                    new_content,
                 )
                 
                 if new_content != content:
@@ -132,16 +149,21 @@ def patch_av1encodes(ext_dir):
 
 
 def patch_animekhor(ext_dir):
-    """Fix #4: AnimeKhor VidHideExtractor 2-arg -> 1-arg constructor."""
+    """Fix #4: AnimeKhor VidHideExtractor 1-arg -> 2-arg constructor.
+    
+    The locally compiled VidHideExtractor (from lib-extractors) uses a
+    2-parameter constructor (client, headers) instead of the old 1-arg
+    (client). Extensions written for the old API need headers added.
+    """
     for root, dirs, files in os.walk(ext_dir):
         for f in files:
             if f == "AnimeKhor.kt":
                 fpath = os.path.join(root, f)
                 changed = patch_file(fpath,
-                    "VidHideExtractor(client, headers)",
-                    "VidHideExtractor(client)")
+                    "VidHideExtractor(client).videosFromUrl",
+                    "VidHideExtractor(client, headers).videosFromUrl")
                 if changed:
-                    print("  [patch] AnimeKhor.kt — VidHideExtractor 2-arg -> 1-arg")
+                    print("  [patch] AnimeKhor.kt — VidHideExtractor 1-arg -> 2-arg (added headers)")
 
 
 def patch_animenosub(ext_dir):
@@ -212,7 +234,7 @@ def patch_miruro(ext_dir):
 
 
 def patch_cineby(ext_dir):
-    """Fix #8: Cineby Android-only APIs (@RequiresApi, LruCache)."""
+    """Fix #8: Cineby Android-only APIs (@RequiresApi, LruCache, video.copy(quality))."""
     for root, dirs, files in os.walk(ext_dir):
         for f in files:
             fpath = os.path.join(root, f)
@@ -222,6 +244,9 @@ def patch_cineby(ext_dir):
                 new_content = content
                 changed = False
                 
+                # Remove @RequiresApi annotations (we have the stub now, but
+                # some extensions use android.annotation.RequiresApi instead of
+                # androidx.annotation.RequiresApi — remove both variants)
                 new_content = re.sub(r'@RequiresApi\([^)]*\)\s*\n', '', new_content)
                 if "import android.annotation.RequiresApi" in new_content:
                     new_content = new_content.replace(
@@ -232,14 +257,27 @@ def patch_cineby(ext_dir):
                 if "import android.util.LruCache" in new_content:
                     new_content = new_content.replace(
                         "import android.util.LruCache",
-                        "// Replaced for JVM: android.util.LruCache"
+                        "// We have android.util.LruCache stub"
                     )
                     changed = True
                 
-                if changed:
+                # Fix video.copy(quality = ...) -> video.copy(videoTitle = ...)
+                # quality is a computed getter (not a constructor param), so it
+                # can't be used with copy(). videoTitle is the actual param.
+                new_content = re.sub(
+                    r'video\.copy\(quality\s*=\s*(\w+)\)',
+                    r'video.copy(videoTitle = \1)',
+                    new_content,
+                )
+                
+                if new_content != content and changed:
                     with open(fpath, "w") as fh:
                         fh.write(new_content)
-                    print(f"  [patch] {f} — removed Android-only APIs")
+                    print(f"  [patch] {f} — removed Android-only APIs, fixed copy(quality)")
+                elif new_content != content:
+                    with open(fpath, "w") as fh:
+                        fh.write(new_content)
+                    print(f"  [patch] {f} — fixed video.copy(quality -> videoTitle)")
             except Exception:
                 continue
 

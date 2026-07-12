@@ -570,8 +570,10 @@ if [ -d "$EXTRACTORS_DIR" ]; then
             "rumbleextractor"
             "seedrandom"
             "streamlareextractor"
+            "streamplayextractor"
             "streamwishextractor"
             "vidhideextractor"
+            "anilib"
             "vidmolyextractor"
         )
         > "${TEMP_DIR}/lib-extractors-sources.txt"
@@ -651,6 +653,27 @@ for lib_dir in "${GIT_CLONE_DIR}/core/" "${GIT_CLONE_DIR}/common/" "${GIT_CLONE_
         log "    -> SKIP: compilation failed"
     fi
 done
+
+# ---------------------------------------------------------------------------
+# Step 2c-iv: Reorder classpath — lib-multisrc before keiyoushi-utils
+# ---------------------------------------------------------------------------
+#
+# keiyoushi-utils was prepended to classpath first (Step 2c-i), while
+# lib-multisrc was appended later (Step 2c-iii loop). If both directories
+# contain the same class (e.g., leaked/stale AnimeStream from an old build),
+# the keiyoushi-utils version wins due to classpath order, shadowing the
+# correct version in lib-multisrc.
+#
+# Fix: after all shared libs are compiled, remove lib-multisrc from its
+# current position and prepend it so it's resolved FIRST.
+MULTISRC_DIR="${SHARED_LIBS_DIR}/lib-multisrc"
+if [ -d "$MULTISRC_DIR" ]; then
+    # Remove lib-multisrc from current position in classpath (if present)
+    CLASSPATH=$(echo "$CLASSPATH" | tr ':' '\n' | grep -vFx "$MULTISRC_DIR" | tr '\n' ':' | sed 's/:$//')
+    # Prepend to front
+    CLASSPATH="${MULTISRC_DIR}:${CLASSPATH}"
+    log "  Classpath reorder: lib-multisrc → front ✓"
+fi
 
 SUCCESS_COUNT=0
 FAIL_COUNT=0
