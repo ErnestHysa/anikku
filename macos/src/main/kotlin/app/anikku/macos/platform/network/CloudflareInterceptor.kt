@@ -9,7 +9,7 @@ private val logger = KotlinLogging.logger {}
 /**
  * Cloudflare bypass interceptor using Chrome DevTools Protocol.
  *
- * When a Cloudflare challenge is detected (HTTP 403/503 with Cloudflare server header),
+ * When a Cloudflare challenge is detected (HTTP 400/403/429/503 with Cloudflare
  * this interceptor:
  *
  * 1. Launches headless Chrome via [ChromeCDPClient]
@@ -87,20 +87,36 @@ class CloudflareInterceptor(
     // ── Helpers ───────────────────────────────────────────────────────
 
     private fun isCloudflareBlock(response: Response): Boolean {
-        if (response.code !in CLOUDFLARE_CODES) return false
+        // Fast path: 403 or 503 with Cloudflare headers → definitely Cloudflare
+        if (response.code in CLOUDFLARE_CODES) {
+            val server = response.header("Server") ?: ""
+            if (server in CLOUDFLARE_SERVERS) return true
+            if (response.header("cf-ray") != null) return true
+        }
 
-        val server = response.header("Server") ?: ""
-        if (server in CLOUDFLARE_SERVERS) return true
-        if (response.header("cf-ray") != null) return true
+        // Slow path for HTTP 400/429: peek body for Cloudflare challenge patterns.
+        // Some sites (e.g. AllAnime) return HTTP 400 for Cloudflare blocks instead
+        // of the typical 403/503.
+        if (response.code !in CLOUDFLARE_CODES && response.code !in CLOUDFLARE_EXTENDED_CODES) {
+            return false
+        }
 
         return try {
-            val bodyPeek = response.peekBody(1024).string()
+            val bodyPeek = response.peekBody(2048).string()
             bodyPeek.contains("cf-browser-verify") ||
                 bodyPeek.contains("cf_chl_opt") ||
                 bodyPeek.contains("_cf_chl_ctx") ||
                 bodyPeek.contains("Checking your browser") ||
                 bodyPeek.contains("cf-wrapper") ||
-                bodyPeek.contains("challenge-platform")
+                bodyPeek.contains("challenge-platform") ||
+                bodyPeek.contains("Just a moment") ||
+                bodyPeek.contains("Attention Required!") ||
+                bodyPeek.contains("cloudflareinsights.com") ||
+                bodyPeek.contains("__cf_chl") ||
+                (bodyPeek.contains("jschl") && bodyPeek.contains("cf-")) ||
+                // AllAnime-specific: error body with Cloudflare-related patterns
+                (response.code == 400 && bodyPeek.contains("<html", ignoreCase = true) &&
+                    (bodyPeek.contains("cloudflare") || bodyPeek.contains("cf-")))
         } catch (_: Exception) {
             false
         }
@@ -134,6 +150,7 @@ class CloudflareInterceptor(
     companion object {
         private const val X_CF_BYPASS = "X-CF-Bypass-Attempted"
         private val CLOUDFLARE_CODES = setOf(403, 503)
+        private val CLOUDFLARE_EXTENDED_CODES = setOf(400, 429)
         private val CLOUDFLARE_SERVERS = setOf("cloudflare-nginx", "cloudflare")
     }
 }

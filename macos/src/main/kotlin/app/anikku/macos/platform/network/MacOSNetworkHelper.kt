@@ -6,7 +6,6 @@ import okhttp3.Headers
 import okhttp3.OkHttpClient
 import okhttp3.Response
 import okhttp3.brotli.BrotliInterceptor
-import okhttp3.logging.HttpLoggingInterceptor
 import okio.IOException
 import java.io.File
 import java.io.RandomAccessFile
@@ -31,7 +30,7 @@ class MacOSNetworkHelper(
         cookieFile = File(storageProvider.dataDirectory, "cookies.json"),
     )
 
-    /** Cloudflare bypass interceptor (no-op stub until Phase 8) */
+    /** Cloudflare bypass interceptor using Chrome CDP for solving JS challenges */
     val cloudflareInterceptor: CloudflareInterceptor = CloudflareInterceptor(cookieJar, userAgentProvider)
 
     val client: OkHttpClient = buildClient()
@@ -56,12 +55,9 @@ class MacOSNetworkHelper(
             .addInterceptor(cloudflareInterceptor)
             .addNetworkInterceptor(BrotliInterceptor)
 
-        if (isDebugBuild) {
-            val logging = HttpLoggingInterceptor().apply {
-                level = HttpLoggingInterceptor.Level.HEADERS
-            }
-            builder.addNetworkInterceptor(logging)
-        }
+        // Diagnostic logging: always logs errors with full request/response details.
+        // In debug builds, also logs a summary for all requests.
+        builder.addInterceptor(DiagnosticLoggingInterceptor(isDebugBuild))
 
         return builder.build()
     }

@@ -19,6 +19,7 @@ import app.anikku.macos.ui.screens.browse.BrowseTab
 import app.anikku.macos.ui.screens.onboarding.OnboardingScreen
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.text.selection.SelectionContainer
 import app.anikku.macos.ui.MainWindow
 import app.anikku.macos.ui.TabSwitchHandler
 import app.anikku.macos.platform.data.LibraryRepository
@@ -155,6 +156,7 @@ fun main() = application {
                 isAmoledOLED = settingsState.isAmoledOLED,
                 isDarkOverride = settingsState.themeMode,
             ) {
+                SelectionContainer {
                 Box(modifier = androidx.compose.ui.Modifier.fillMaxSize()) {
                     if (showOnboarding) {
                         OnboardingScreen(
@@ -180,6 +182,7 @@ fun main() = application {
                         autoCheck = autoCheckUpdates,
                     )
                 }
+                } // End SelectionContainer
             }
         }
     }
