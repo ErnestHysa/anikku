@@ -100,17 +100,29 @@ data class GlobalSearchScreen(
         val error: String? = null,
     )
 
+    // ── Compose state stored at class level ─────────────────────────
+    //
+    // Voyager disposes the composition tree when this screen is pushed
+    // to the backstack (e.g. when AnimeDetailScreen is pushed on top).
+    // Standard `remember` blocks are lost on disposal.
+    //
+    // By storing mutable state as class-level properties, we survive
+    // composition disposal because Voyager retains the Screen instance
+    // in its backstack. When the user presses Back, this same instance
+    // is recomposed with all state intact.
+    private val _searchQuery = mutableStateOf("")
+    private val _hasSearched = mutableStateOf(false)
+    val sourceResults = mutableStateListOf<SourceSearchResult>()
+
+    var searchQuery: String by _searchQuery
+    var hasSearched: Boolean by _hasSearched
+    // ── End of class-level state ────────────────────────────────────
+
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     override fun Content() {
         val navigator = LocalNavigator.currentOrThrow
         val toastHost = LocalToastHost.current
-
-        var searchQuery by remember { mutableStateOf("") }
-        var hasSearched by remember { mutableStateOf(false) }
-
-        // Per-source results — use mutableStateListOf so Compose tracks changes per source
-        val sourceResults = remember { mutableStateListOf<SourceSearchResult>() }
 
         // Get all CatalogueSource extensions
         val installedExtensions by remember(extensionManager) {
@@ -124,11 +136,19 @@ data class GlobalSearchScreen(
             }.distinctBy { it.id }
         }
 
-        // Debounced search — fires 500ms after user stops typing
+        // Debounced search — fires 500ms after user stops typing.
+        // On back-navigation, LaunchedEffect re-launches because remember
+        // doesn't survive composition disposal. The class-level hasSearched
+        // guard prevents redundant re-search when cached results exist.
         LaunchedEffect(searchQuery) {
             if (searchQuery.isBlank()) {
                 sourceResults.clear()
                 hasSearched = false
+                return@LaunchedEffect
+            }
+
+            // Skip re-search if state survived back-navigation with results intact
+            if (hasSearched && sourceResults.isNotEmpty()) {
                 return@LaunchedEffect
             }
 
@@ -236,7 +256,12 @@ data class GlobalSearchScreen(
                 // Search bar — prominent, full width
                 OutlinedTextField(
                     value = searchQuery,
-                    onValueChange = { searchQuery = it },
+                    onValueChange = {
+                        // Reset searched flag on any user edit so the guard
+                        // doesn't block re-search when the query changes
+                        hasSearched = false
+                        searchQuery = it
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 12.dp),
