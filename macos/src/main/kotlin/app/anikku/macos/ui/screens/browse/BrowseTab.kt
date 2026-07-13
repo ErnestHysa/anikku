@@ -22,6 +22,8 @@ import androidx.compose.material.icons.outlined.Explore
 import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -123,7 +125,7 @@ object BrowseTab : AnikkuScreen(), Tab {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "Browse Sources",
+                        text = "Browse",
                         style = MaterialTheme.typography.headlineSmall,
                         fontWeight = FontWeight.Bold,
                     )
@@ -141,6 +143,34 @@ object BrowseTab : AnikkuScreen(), Tab {
                 Spacer(Modifier.height(8.dp))
             }
 
+            // Global search bar — searches ALL sources
+            item {
+                Button(
+                    onClick = {
+                        UIActionLogger.logClick("BrowseTab", "GlobalSearch", "open_global_search")
+                        navigator.push(GlobalSearchScreen(extensionManager = extensionManager))
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(52.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    ),
+                ) {
+                    Icon(Icons.Outlined.Search, contentDescription = null, modifier = Modifier.size(22.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "Search all sources for anime...",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f),
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+
+            // Source filter search bar (filter the source list below)
             item {
                 OutlinedTextField(
                     value = searchQuery,
