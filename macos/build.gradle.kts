@@ -207,7 +207,7 @@ exit 1
 }
 
 val buildKeiyoushiExtName: String? by project
-val buildKeiyoushiExtLang: String by project
+val buildKeiyoushiExtLang: String? by project
 
 tasks.register<Exec>("buildKeiyoushiExtension") {
     description = "Build a single yuzono anime extension from source as JVM JAR"
@@ -216,7 +216,7 @@ tasks.register<Exec>("buildKeiyoushiExtension") {
     doFirst {
         val extName = buildKeiyoushiExtName
             ?: throw GradleException("Usage: -PbuildKeiyoushiExtName=<name>")
-        val extLang = buildKeiyoushiExtLang.ifBlank { "en" }
+        val extLang = buildKeiyoushiExtLang?.ifBlank { "en" } ?: "en"
         val scriptPath = "${project.projectDir}/scripts/build-keiyoushi-from-source.sh"
 
         logger.lifecycle("Building extension: $extName (lang: $extLang)")
