@@ -172,12 +172,29 @@ data class GlobalSearchScreen(
                             val animeModels = page.animes.map { it.toAnimeModel(source.id) }
                             Triple(index, animeModels, null)
                         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
-                            Triple(index, emptyList<AnimeModel>(), "Search timed out after 20s")
+                            Triple(index, emptyList<AnimeModel>(), "⏱ Timed out after 20s — extension source didn't respond")
                         } catch (e: Throwable) {
                             // Catch Throwable (not just Exception) because extension code
                             // runs in a separate classloader and can throw Error subclasses
                             // like NoSuchMethodError or NoClassDefFoundError when stubs are incomplete.
-                            Triple(index, emptyList<AnimeModel>(), e.message?.take(80) ?: "Unknown error")
+                            val msg = e.message?.take(100) ?: "Unknown error"
+                            // Simplify common error patterns for better UX
+                            val displayMsg = when {
+                                msg.contains("PKIX", ignoreCase = true) || msg.contains("certpath") -> "🔒 SSL error — site has invalid certificate"
+                                msg.contains("HTTP 400") -> "⚠ HTTP 400 — site rejected the request (API may have changed)"
+                                msg.contains("HTTP 403") -> "🚫 HTTP 403 — blocked by site (anti-bot protection)"
+                                msg.contains("HTTP 404") -> "🔍 HTTP 404 — page/resource not found on site"
+                                msg.contains("HTTP 405") -> "❌ HTTP 405 — method not allowed"
+                                msg.contains("HTTP 520") || msg.contains("HTTP 502") || msg.contains("HTTP 503") -> "☁️ Cloudflare/server error — site is having issues"
+                                msg.contains("NoSuchMethodError") || msg.contains("NoClassDefFoundError") -> "🛠 Extension code error — missing API stub"
+                                msg.contains("timeout", ignoreCase = true) -> "⏱ Request timed out"
+                                msg.contains("no route to host") || msg.contains("UnknownHost") -> "🔌 Site unreachable — may be down or blocked"
+                                msg.contains("nodename") || msg.contains("servname") -> "🔌 DNS failure — site domain not resolvable"
+                                msg.contains("JSON") || msg.contains("Json") || msg.contains("json") -> "📋 JSON parse error — got unexpected response (likely Cloudflare/error page)"
+                                msg.contains("session", ignoreCase = true) && msg.contains("405") -> "❌ Session failed (405) — endpoint not allowed"
+                                else -> msg
+                            }
+                            Triple(index, emptyList<AnimeModel>(), displayMsg)
                         }
                     }
                 }

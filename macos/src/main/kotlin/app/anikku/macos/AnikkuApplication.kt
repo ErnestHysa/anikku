@@ -14,6 +14,7 @@ import app.anikku.macos.platform.extension.MacOSExtensionManager
 import app.anikku.macos.platform.logging.CrashReporter
 import app.anikku.macos.platform.logging.MacOSLogger
 import app.anikku.macos.platform.logging.UIActionLogger
+import app.anikku.macos.platform.network.InsecureSSLHelper
 import app.anikku.macos.platform.network.MacOSCookieJar
 import app.anikku.macos.platform.network.MacOSNetworkHelper
 import app.anikku.macos.platform.notification.MacOSNotificationManager
@@ -81,7 +82,13 @@ class AnikkuApplication {
         // 3. Deploy bundled extensions on first launch (Phase 3.3)
         deployBundledExtensions()
 
-        // 3b. Initialize UI Action Logger (verbose debugging for development)
+        // 3b. Install lenient SSL context BEFORE creating OkHttp clients.
+        // Many anime streaming sites use self-signed/invalid certificates.
+        // This must run before networkHelper is created so OkHttp picks up
+        // the lenient SSL context for all connections.
+        InsecureSSLHelper.install()
+
+        // 3c. Initialize UI Action Logger (verbose debugging for development)
         UIActionLogger.initialize(storageProvider.logsDirectory, verboseLevel = 2)
 
         // 4. Initialize preferences (JSON file-backed)
