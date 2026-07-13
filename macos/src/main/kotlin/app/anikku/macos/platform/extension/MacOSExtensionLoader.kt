@@ -294,13 +294,20 @@ object MacOSExtensionLoader {
         jarFiles: MutableList<File>,
         extensionsDir: File,
     ) {
+        logger.info { "🔍 Scanning ${jarFiles.size} JAR(s) for dependency packages..." }
         val libsDir = File(extensionsDir, "libs")
         val iterator = jarFiles.iterator()
         var movedCount = 0
+        var scannedCount = 0
 
         while (iterator.hasNext()) {
             val jarFile = iterator.next()
-            val metadata = readMetadata(jarFile) ?: continue
+            val metadata = readMetadata(jarFile)
+            if (metadata == null) {
+                logger.debug { "  No metadata for ${jarFile.name} — skipping" }
+                continue
+            }
+            scannedCount++
             val pkg = metadata.pkgName
 
             val isDependency = pkg.endsWith(".dto") ||
@@ -321,13 +328,11 @@ object MacOSExtensionLoader {
 
                 iterator.remove()
                 movedCount++
-                logger.info { "Moved dependency JAR to libs/: ${jarFile.name} ($pkg)" }
+                logger.info { "  ✅ Moved dependency JAR to libs/: ${jarFile.name} ($pkg)" }
             }
         }
 
-        if (movedCount > 0) {
-            logger.info { "Moved $movedCount dependency JAR(s) to libs/ directory" }
-        }
+        logger.info { "🔍 Dependency scan done: $scannedCount scanned, $movedCount moved to libs/" }
     }
 
     /**

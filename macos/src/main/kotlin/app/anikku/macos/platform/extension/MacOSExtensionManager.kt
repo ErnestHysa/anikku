@@ -452,11 +452,14 @@ class MacOSExtensionManager(
 
         if (jars.isEmpty()) return
 
+        logger.info { "🔑 Auto-trust scan: checking ${jars.size} JAR(s) against trust store (${trustStore.size} packages known)..." }
+
         var newCount = 0
+        var skippedCount = 0
         for (jar in jars) {
             val metadata = MacOSExtensionLoader.readMetadata(jar)
             if (metadata == null) {
-                logger.warn { "Skipping auto-trust for ${jar.name} — no valid metadata" }
+                logger.debug { "  No metadata for ${jar.name} — skipping" }
                 continue
             }
 
@@ -467,7 +470,10 @@ class MacOSExtensionManager(
             // new hashes for the same package, and the old hash won't match.
             val alreadyTrusted = trustStore[metadata.pkgName]
                 ?.any { it.signatureHash == hash } == true
-            if (alreadyTrusted) continue
+            if (alreadyTrusted) {
+                skippedCount++
+                continue
+            }
 
             val entry = MacOSExtensionLoader.TrustEntry(
                 pkgName = metadata.pkgName,
@@ -475,13 +481,15 @@ class MacOSExtensionManager(
                 signatureHash = hash,
             )
             trustStore.getOrPut(metadata.pkgName) { mutableListOf() }.add(entry)
-            logger.info { "  Auto-trusted: ${metadata.pkgName} (hash: ${hash.take(12)}...)" }
+            logger.info { "  ✅ Auto-trusted: ${metadata.pkgName} (hash: ${hash.take(12)}...)" }
             newCount++
         }
 
+        logger.info { "🔑 Auto-trust done: $newCount new trusted, $skippedCount already trusted, ${trustStore.size} total packages" }
+
         if (newCount > 0) {
             saveTrustStore()
-            logger.info { "Auto-trusted $newCount new extension(s)" }
+            logger.info { "💾 Trust store saved (${trustStore.size} packages)" }
         }
     }
 
