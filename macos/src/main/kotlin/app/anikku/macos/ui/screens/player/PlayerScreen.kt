@@ -25,6 +25,7 @@ import androidx.compose.material.icons.outlined.CameraAlt
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.IconButton
@@ -232,7 +233,10 @@ data class PlayerScreen(
         var videoQualityResolution by remember { mutableStateOf<Int?>(null) }
         var videoQualityLabel by remember { mutableStateOf<String?>(null) }
         var isLoading by remember { mutableStateOf(true) }
+        var isResolvingVideo by remember { mutableStateOf(false) }
         var isOfflinePlayback by remember { mutableStateOf(false) }
+        var resolutionStatusText by remember { mutableStateOf("Connecting...") }
+        var videoResolutionError by remember { mutableStateOf<String?>(null) }
         val scope = rememberCoroutineScope()
 
         UIActionLogger.logScreenOpen("PlayerScreen", mapOf(
@@ -247,11 +251,13 @@ data class PlayerScreen(
             var usedSource = false
             if (sourceId != null && episodeUrl != null) {
                 try {
+                    resolutionStatusText = "Fetching episode list..."
                     val source = extensionManager?.getSource(sourceId)
                     if (source != null) {
                         val sAnime = eu.kanade.tachiyomi.animesource.model.SAnime.create().apply {
                             url = episodeUrl.substringBeforeLast("/")
                         }
+                        resolutionStatusText = "Loading episodes from \"${source.name}\"..."
                         val fetchedEpisodes = source.getEpisodeList(sAnime)
                         sourceEpisodes = fetchedEpisodes
                         allEpisodes = fetchedEpisodes.map { it.toEpisodeModel(animeId) }.toMutableList()
@@ -268,6 +274,10 @@ data class PlayerScreen(
             val currentEpisodeNumber = allEpisodes.getOrNull(currentEpisodeIndex)?.episodeNumber ?: 0.0
 
             // Step 3: Resolve video URL — use the full SEpisode with all fields populated
+            isResolvingVideo = true
+            val sourceName = extensionManager?.getSource(sourceId ?: 0)?.name ?: "source"
+            resolutionStatusText = "Resolving video from \"$sourceName\"..."
+            
             val currentSEpisode = sourceEpisodes.getOrNull(currentEpisodeIndex)
             val resolvedUrl = resolveVideoUrl(
                 sEpisode = currentSEpisode,
@@ -277,8 +287,12 @@ data class PlayerScreen(
                     videoQualityResolution = res
                     videoQualityLabel = label
                 },
-                onError = { msg -> toastHost.show(msg, ToastDuration.LONG) },
+                onError = { msg ->
+                    videoResolutionError = msg
+                    toastHost.show(msg, ToastDuration.LONG)
+                },
             )
+            isResolvingVideo = false
 
             // Determine if this is offline playback
             isOfflinePlayback = downloadManager != null && currentEpisodeNumber > 0 &&
@@ -286,22 +300,38 @@ data class PlayerScreen(
 
             if (resolvedUrl != null) {
                 videoUrlToLoad = resolvedUrl
+                resolutionStatusText = "Video resolved — loading into player..."
             } else if (!usedSource && allEpisodes.isEmpty()) {
                 // No source data available — show loading completed with no video
                 isLoading = false
-            } else if (resolvedUrl == null) {
-                // File is downloaded but transfer to httpServer failed — still mark as downloaded
-                videoUrlToLoad = null
+                resolutionStatusText = ""
+            } else {
+                // Video resolution failed
+                isLoading = false
+                resolutionStatusText = ""
             }
-
-            isLoading = false
         }
 
         // When video URL is available AND mpv is ready, load it into mpv
         LaunchedEffect(videoUrlToLoad, mpvHandle) {
             val url = videoUrlToLoad
             if (url != null && mpvHandle != null) {
+                resolutionStatusText = "Loading video into mpv player..."
                 playerViewModel.loadEpisode(url)
+            }
+        }
+
+        // Transition from loading to playing: when mpv reports playing state,
+        // remove the loading screen so the user sees the video
+        LaunchedEffect(videoUrlToLoad, playbackState) {
+            if (videoUrlToLoad != null && playbackState != PlaybackState.IDLE && playbackState != PlaybackState.ERROR) {
+                // Video is loading/buffering/playing — hide the loading screen
+                isLoading = false
+                resolutionStatusText = ""
+            } else if (playbackState == PlaybackState.ERROR) {
+                isLoading = false
+                resolutionStatusText = ""
+                videoResolutionError = "Failed to play video — stream URL may be invalid"
             }
         }
 
@@ -382,6 +412,9 @@ data class PlayerScreen(
             isMPVAvailable = playerViewModel.isMPVAvailable,
             isOfflinePlayback = isOfflinePlayback,
             hasVideoUrl = videoUrlToLoad != null,
+            isResolvingVideo = isResolvingVideo,
+            resolutionStatusText = resolutionStatusText,
+            videoResolutionError = videoResolutionError,
             videoQualityResolution = videoQualityResolution,
             videoQualityLabel = videoQualityLabel,
             isLoading = isLoading,
@@ -494,6 +527,9 @@ private fun PlayerContent(
     isMPVAvailable: Boolean = false,
     isOfflinePlayback: Boolean = false,
     hasVideoUrl: Boolean = false,
+    isResolvingVideo: Boolean = false,
+    resolutionStatusText: String = "",
+    videoResolutionError: String? = null,
     isLive: Boolean = false,
     videoQualityResolution: Int? = null,
     videoQualityLabel: String? = null,
@@ -583,10 +619,28 @@ private fun PlayerContent(
     val interactionSource = remember { MutableInteractionSource() }
 
     // Show loading state
-    if (isLoading) {
+    if (isLoading || isResolvingVideo) {
         Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text("Loading episode...", style = MaterialTheme.typography.bodyLarge, color = Color.White.copy(alpha = 0.5f))
+                CircularProgressIndicator(
+                    modifier = Modifier.size(48.dp),
+                    color = Color.White.copy(alpha = 0.6f),
+                    strokeWidth = 3.dp,
+                )
+                Spacer(Modifier.height(20.dp))
+                Text(
+                    if (resolutionStatusText.isNotBlank()) resolutionStatusText else "Loading episode...",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = Color.White.copy(alpha = 0.6f),
+                )
+                if (isResolvingVideo) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "This may take a few seconds — the source is fetching video streams",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.White.copy(alpha = 0.3f),
+                    )
+                }
             }
         }
         return

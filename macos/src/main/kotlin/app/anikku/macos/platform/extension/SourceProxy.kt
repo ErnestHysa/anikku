@@ -93,19 +93,23 @@ class ReflectiveSourceProxy(
         // Log episode details for diagnostics
         val episodeUrl = try { episode.url } catch (_: Exception) { "<uninitialized>" }
         val episodeName = try { episode.name } catch (_: Exception) { "<uninitialized>" }
-        logger.debug { "getVideoList called for episode: url=$episodeUrl name=$episodeName" }
+        logger.info { "🎥 getVideoList ENTER: source=${delegateClass.simpleName} episodeName=$episodeName episodeUrl=${episodeUrl.take(100)}" }
 
         // Primary path: reflective call with exact param types
         try {
+            logger.debug { "🎥 getVideoList: trying primary reflective call..." }
             val videos: List<Video> = reflectiveCallSuspend("getVideoList", arrayOf(SEpisode::class.java), episode)
+            logger.info { "🎥 getVideoList PRIMARY: ${videos.size} video(s) returned" }
             if (videos.isNotEmpty()) {
-                logger.info { "getVideoList returned ${videos.size} video(s) via primary path" }
+                videos.take(3).forEach { v ->
+                    logger.info { "🎥   video: ${v.videoTitle} — ${v.videoUrl.take(60)}" }
+                }
                 return videos
             } else {
-                logger.warn { "getVideoList primary path returned EMPTY list for $episodeUrl" }
+                logger.warn { "🎥 getVideoList: primary path returned EMPTY list for $episodeUrl" }
             }
         } catch (e: NoSuchMethodException) {
-            logger.warn { "getVideoList(SEpisode) not found on ${delegateClass.name}: ${e.message}. Trying fuzzy method match." }
+            logger.warn { "🎥 getVideoList: NoSuchMethod — trying fuzzy match" }
         } catch (e: LinkageError) {
             logger.warn { "getVideoList(SEpisode) linkage error on ${delegateClass.name}: ${e::class.simpleName}: ${e.message}. Trying fuzzy method match." }
         } catch (e: UnsupportedOperationException) {
