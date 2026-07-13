@@ -732,9 +732,20 @@ fi
 SHARED_LIBS_JAR="${EXTENSIONS_DIR}/libs/shared-libs.jar"
 mkdir -p "${EXTENSIONS_DIR}/libs"
 package_tmpdir=$(mktemp -d)
+# Copy shared lib classes into package temp dir. Order matters:
+# lib-multisrc MUST be copied LAST so it overrides any identically-named
+# classes from keiyoushi-utils (e.g. stale/extracted AnimeStream stubs).
+# This matches the classpath reorder in Step 2c-iv where lib-multisrc is
+# prepended to the classpath.
 for shlib in "${SHARED_LIBS_DIR}"/*/; do
+    lib_name=$(basename "$shlib")
+    [ "$lib_name" = "lib-multisrc" ] && continue   # skip — copied explicitly last
     [ -d "$shlib" ] && cp -r "$shlib"/* "$package_tmpdir/" 2>/dev/null || true
 done
+# Copy lib-multisrc LAST so it overrides any conflicts from earlier copies
+if [ -d "${SHARED_LIBS_DIR}/lib-multisrc" ]; then
+    cp -r "${SHARED_LIBS_DIR}/lib-multisrc"/* "$package_tmpdir/" 2>/dev/null || true
+fi
 if [ -n "$(ls -A "$package_tmpdir" 2>/dev/null)" ]; then
     (cd "$package_tmpdir" && "${JAR_CMD}" cf "${SHARED_LIBS_JAR}" . 2>/dev/null || true)
     jar_size=$(stat -f%z "${SHARED_LIBS_JAR}" 2>/dev/null || echo "0")
