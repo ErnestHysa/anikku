@@ -21,6 +21,11 @@ open class JSONObject {
     }
 
     fun put(key: String, value: Any?): JSONObject = apply { map[key] = value }
+    fun put(key: String, value: Boolean): JSONObject = apply { map[key] = value }
+    fun put(key: String, value: Int): JSONObject = apply { map[key] = value }
+    fun put(key: String, value: Long): JSONObject = apply { map[key] = value }
+    fun put(key: String, value: Double): JSONObject = apply { map[key] = value }
+    fun put(key: String, value: Float): JSONObject = apply { map[key] = value }
     fun getString(key: String): String = map[key]?.toString() ?: ""
     fun getInt(key: String): Int = (map[key] as? Number)?.toInt() ?: 0
     fun getLong(key: String): Long = (map[key] as? Number)?.toLong() ?: 0L

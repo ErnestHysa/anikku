@@ -173,7 +173,10 @@ data class GlobalSearchScreen(
                             Triple(index, animeModels, null)
                         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
                             Triple(index, emptyList<AnimeModel>(), "Search timed out after 20s")
-                        } catch (e: Exception) {
+                        } catch (e: Throwable) {
+                            // Catch Throwable (not just Exception) because extension code
+                            // runs in a separate classloader and can throw Error subclasses
+                            // like NoSuchMethodError or NoClassDefFoundError when stubs are incomplete.
                             Triple(index, emptyList<AnimeModel>(), e.message?.take(80) ?: "Unknown error")
                         }
                     }
