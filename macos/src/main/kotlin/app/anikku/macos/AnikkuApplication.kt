@@ -137,7 +137,7 @@ class AnikkuApplication {
         // 9d. App Update Checker (GitHub API)
         appUpdateChecker = AppUpdateChecker(
             currentVersion = "1.0.0",
-            repoOwner = "komikku-app",
+            repoOwner = "ErnestHysa",
             repoName = "anikku",
         )
 

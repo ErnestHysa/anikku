@@ -318,11 +318,11 @@ fun SettingsScreen() {
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                text = "https://github.com/komikku-app/anikku",
+                text = "https://github.com/ErnestHysa/anikku",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.clickable {
-                    BrowserLauncher.openSafe("https://github.com/komikku-app/anikku")
+                    BrowserLauncher.openSafe("https://github.com/ErnestHysa/anikku")
                 },
             )
         }

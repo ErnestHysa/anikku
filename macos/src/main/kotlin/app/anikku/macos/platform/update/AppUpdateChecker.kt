@@ -24,7 +24,7 @@ private val logger = KotlinLogging.logger {}
  * ```kotlin
  * val updater = AppUpdateChecker(
  *     currentVersion = "1.0.0",
- *     repoOwner = "komikku-app",
+ *     repoOwner = "ErnestHysa",
  *     repoName = "anikku",
  * )
  *
@@ -41,7 +41,7 @@ private val logger = KotlinLogging.logger {}
  */
 class AppUpdateChecker(
     private val currentVersion: String,
-    private val repoOwner: String = "komikku-app",
+    private val repoOwner: String = "ErnestHysa",
     private val repoName: String = "anikku",
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)

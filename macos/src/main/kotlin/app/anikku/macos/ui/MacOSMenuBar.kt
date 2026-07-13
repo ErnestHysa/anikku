@@ -257,7 +257,7 @@ fun create(
 
     /** Opens the Anikku GitHub issues page in the system browser. */
     private fun openGitHubIssues() {
-        BrowserLauncher.openSafe("https://github.com/komikku-app/anikku/issues/new")
+        BrowserLauncher.openSafe("https://github.com/ErnestHysa/anikku/issues/new")
     }
 
     /** Toggles the frame between maximized and normal state. */

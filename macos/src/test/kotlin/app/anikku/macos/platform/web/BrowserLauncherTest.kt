@@ -28,10 +28,10 @@ class BrowserLauncherTest {
         BrowserLauncher.testMode = true
         BrowserLauncher.lastOpenedUri = null
 
-        val result = BrowserLauncher.openSafe("https://github.com/komikku-app/anikku")
+        val result = BrowserLauncher.openSafe("https://github.com/ErnestHysa/anikku")
 
         assertTrue(result)
-        assertEquals(URI("https://github.com/komikku-app/anikku"), BrowserLauncher.lastOpenedUri)
+        assertEquals(URI("https://github.com/ErnestHysa/anikku"), BrowserLauncher.lastOpenedUri)
     }
 
     @Test

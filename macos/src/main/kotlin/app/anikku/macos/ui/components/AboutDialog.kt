@@ -301,7 +301,7 @@ fun AboutDialog(
                 // GitHub link button
                 OutlinedButton(
                     onClick = {
-                        BrowserLauncher.openSafe("https://github.com/komikku-app/anikku")
+                        BrowserLauncher.openSafe("https://github.com/ErnestHysa/anikku")
                     },
                     shape = RoundedCornerShape(8.dp),
                     colors = ButtonDefaults.outlinedButtonColors(

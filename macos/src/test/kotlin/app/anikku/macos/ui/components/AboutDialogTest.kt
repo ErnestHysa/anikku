@@ -1,6 +1,7 @@
 package app.anikku.macos.ui.components
 
 import app.anikku.macos.platform.web.BrowserLauncher
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertDoesNotThrow
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -14,16 +15,23 @@ import org.junit.jupiter.api.Test
  */
 class AboutDialogTest {
 
+    @AfterEach
+    fun tearDown() {
+        BrowserLauncher.testMode = false
+        BrowserLauncher.lastOpenedUri = null
+    }
+
     @Test
     fun `GitHub URL is valid`() {
-        val url = "https://github.com/komikku-app/anikku"
+        val url = "https://github.com/ErnestHysa/anikku"
         assertTrue(url.startsWith("https://github.com/"), "Should be a GitHub URL")
     }
 
     @Test
     fun `BrowserLauncher does not throw on repo URL in any environment`() {
+        BrowserLauncher.testMode = true
         assertDoesNotThrow {
-            BrowserLauncher.openSafe("https://github.com/komikku-app/anikku")
+            BrowserLauncher.openSafe("https://github.com/ErnestHysa/anikku")
         }
     }
 

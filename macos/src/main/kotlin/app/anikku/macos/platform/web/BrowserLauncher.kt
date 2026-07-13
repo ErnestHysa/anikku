@@ -15,7 +15,7 @@ import java.net.URI
  *
  * ```kotlin
  * // Open an external URL
- * BrowserLauncher.open("https://github.com/komikku-app/anikku")
+ * BrowserLauncher.open("https://github.com/ErnestHysa/anikku")
  *
  * // Open a URI
  * BrowserLauncher.open(URI("https://anilist.co"))
