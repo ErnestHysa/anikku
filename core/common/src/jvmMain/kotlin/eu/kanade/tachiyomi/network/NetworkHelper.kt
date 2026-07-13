@@ -3,6 +3,8 @@ package eu.kanade.tachiyomi.network
 import eu.kanade.tachiyomi.network.interceptor.IgnoreGzipInterceptor
 import eu.kanade.tachiyomi.network.interceptor.UncaughtExceptionInterceptor
 import eu.kanade.tachiyomi.network.interceptor.UserAgentInterceptor
+import okhttp3.CookieJar
+import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.brotli.BrotliInterceptor
 import okhttp3.logging.HttpLoggingInterceptor
@@ -11,6 +13,10 @@ import java.util.concurrent.TimeUnit
 actual open class NetworkHelper(
     private val preferences: NetworkPreferences,
     val isDebugBuild: Boolean,
+    // macOS/JVM extensions: inject CookieJar and interceptors for Cloudflare bypass
+    // and diagnostic logging. Extension HTTP calls go through this client.
+    private val cookieJar: CookieJar? = null,
+    private val extraInterceptors: List<Interceptor> = emptyList(),
 ) {
 
     actual val client: OkHttpClient =
@@ -29,6 +35,15 @@ actual open class NetworkHelper(
             .addInterceptor(UserAgentInterceptor(::defaultUserAgentProvider))
             .addNetworkInterceptor(IgnoreGzipInterceptor())
             .addNetworkInterceptor(BrotliInterceptor)
+
+        // macOS/JVM: inject shared cookie jar so Cloudflare bypass cookies
+        // obtained by ChromeCDPClient flow through to extension HTTP calls
+        if (cookieJar != null) {
+            builder.cookieJar(cookieJar)
+        }
+
+        // macOS/JVM: inject Cloudflare bypass + diagnostic logging interceptors
+        extraInterceptors.forEach { builder.addInterceptor(it) }
 
         if (isDebugBuild) {
             val httpLoggingInterceptor = HttpLoggingInterceptor().apply {

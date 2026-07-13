@@ -7,6 +7,8 @@ import app.anikku.macos.platform.auth.TrackerOAuthManager
 import app.anikku.macos.platform.database.MacOSDatabaseDriver
 import app.anikku.macos.platform.discord.DiscordRPC
 import app.anikku.macos.platform.extension.MacOSExtensionManager
+import app.anikku.macos.platform.network.CloudflareInterceptor
+import app.anikku.macos.platform.network.DiagnosticLoggingInterceptor
 import app.anikku.macos.platform.network.MacOSCookieJar
 import app.anikku.macos.platform.network.MacOSNetworkHelper
 import app.anikku.macos.platform.notification.MacOSNotificationManager
@@ -65,10 +67,21 @@ fun platformModule(app: AnikkuApplication) = module {
     // On JVM there's no Android framework, so we provide no-op stubs.
     single<android.app.Application> { android.app.Application() }
     single<android.content.Context> { android.app.Application() }
+    // NetworkHelper for extension HTTP calls.
+    // Crucial: uses the app's MacOSCookieJar (shared cookie store) and injects
+    // the CloudflareInterceptor + DiagnosticLoggingInterceptor so that extension
+    // HTTP calls get Cloudflare bypass, diagnostic logging, and cookie sharing.
     single<eu.kanade.tachiyomi.network.NetworkHelper> {
         eu.kanade.tachiyomi.network.NetworkHelper(
             preferences = eu.kanade.tachiyomi.network.NetworkPreferences(get<PreferenceStore>()),
             isDebugBuild = false,
+            cookieJar = app.cookieJar,
+            extraInterceptors = listOf(
+                CloudflareInterceptor(app.cookieJar) {
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
+                },
+                DiagnosticLoggingInterceptor(isDebugBuild = false),
+            ),
         )
     }
     single<exh.pref.DelegateSourcePreferences> {
