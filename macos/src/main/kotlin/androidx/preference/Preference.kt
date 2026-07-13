@@ -13,28 +13,14 @@ package androidx.preference
  * Preference classes during class loading.
  */
 open class Preference(
-    context: android.content.Context?,
+    open val context: android.content.Context?,
     attrs: kotlinx.collections.immutable.PersistentMap<String, String>? = null,
 ) {
 
     var key: String? = null
     var title: String? = null
     var summary: String? = null
-    var defaultValue: String? = null
-    var isPersistent: Boolean = false
     var enabled: Boolean = true
-
-    open fun getOnPreferenceChangeListener(): OnPreferenceChangeListener? = null
-
-    open fun setOnPreferenceChangeListener(listener: OnPreferenceChangeListener?) {}
-
-    fun interface OnPreferenceChangeListener {
-        fun onPreferenceChange(preference: Preference, newValue: Any?): Boolean
-    }
-
-    fun setDefaultValue(value: Any?) {
-        defaultValue = value?.toString()
-    }
 }
 
 /**

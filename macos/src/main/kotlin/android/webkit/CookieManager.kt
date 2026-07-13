@@ -73,6 +73,14 @@ open class CookieManager private constructor() {
         // No persistent storage — no-op
     }
 
+    fun setAcceptCookie(accept: Boolean) {
+        // No-op on macOS
+    }
+
+    fun setAcceptThirdPartyCookies(webView: WebView?, accept: Boolean) {
+        // No-op on macOS
+    }
+
     fun acceptThirdPartyCookies(webView: WebView) {
         // No-op on macOS
     }

@@ -30,6 +30,7 @@ open class WebSettings {
     var javaScriptCanOpenWindowsAutomatically: Boolean = false
     var javaScriptEnabled: Boolean = false
     var layoutAlgorithm: LayoutAlgorithm = LayoutAlgorithm.NARROW_COLUMNS
+    var loadWithOverviewMode: Boolean = false
     var loadsImagesAutomatically: Boolean = true
     var mediaPlaybackRequiresUserGesture: Boolean = true
     var minimumFontSize: Int = 8
@@ -42,7 +43,7 @@ open class WebSettings {
     var standardFontFamily: String = "sans-serif"
     var textZoom: Int = 100
     var useWideViewPort: Boolean = false
-    var userAgentString: String =
+    var userAgentString: String? =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 
     enum class LayoutAlgorithm {

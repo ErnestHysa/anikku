@@ -342,6 +342,41 @@ fun addListPreference(
     default: String = "",
 ) { /* no-op on JVM */ }
 
+/**
+ * Create a [androidx.preference.ListPreference] attached to the [PreferenceScreen].
+ * This is the getter variant used by extension sources to programmatically create
+ * and configure a ListPreference before adding it to the screen.
+ */
+fun PreferenceScreen.getListPreference(
+    key: String,
+    title: String,
+    summary: String = "",
+    entries: List<String>,
+    entryValues: List<String>,
+    default: String = "",
+    onChange: (androidx.preference.Preference, String) -> Boolean = { _, _ -> true },
+    onComplete: (String) -> Unit = {},
+): androidx.preference.ListPreference {
+    val ctx = context
+    val pref = androidx.preference.ListPreference(ctx).apply {
+        this.key = key
+        this.title = title
+        this.summary = summary
+        this.entries = entries.toTypedArray()
+        this.entryValues = entryValues.toTypedArray()
+        setDefaultValue(default)
+        setOnPreferenceChangeListener { pref, newValue ->
+            @Suppress("UNCHECKED_CAST")
+            val value = newValue as String
+            val isValid = onChange(pref, value)
+            if (isValid) onComplete(value)
+            isValid
+        }
+    }
+    addPreference(pref)
+    return pref
+}
+
 @Deprecated("Use PreferenceScreenBuilder.switch for JVM-friendly preference DSL")
 fun addSwitchPreference(
     key: String,

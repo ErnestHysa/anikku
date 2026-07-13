@@ -15,6 +15,7 @@ interface SharedPreferences {
         fun putLong(key: String, value: Long): Editor
         fun putFloat(key: String, value: Float): Editor
         fun putBoolean(key: String, value: Boolean): Editor
+        fun putStringSet(key: String, value: Set<String>?): Editor
         fun remove(key: String): Editor
         fun clear(): Editor
         fun apply()

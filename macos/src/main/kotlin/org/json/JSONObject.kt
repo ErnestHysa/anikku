@@ -6,6 +6,10 @@ package org.json
  * Stub for [org.json.JSONObject] on macOS JVM.
  */
 open class JSONObject {
+    companion object {
+        val NULL: Any? = null
+    }
+
     private val map = linkedMapOf<String, Any?>()
 
     constructor()

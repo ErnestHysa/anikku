@@ -10,7 +10,7 @@ open class ListPreference : Preference {
 
     var value: String? = null
 
-    fun setDefaultValue(value: Any?) {}
-    fun setOnPreferenceChangeListener(listener: (Preference, Any?) -> Boolean) {}
+    override fun setDefaultValue(value: Any?) {}
+    override fun setOnPreferenceChangeListener(listener: (Preference, Any?) -> Boolean) {}
     fun findIndexOfValue(value: String): Int = 0
 }

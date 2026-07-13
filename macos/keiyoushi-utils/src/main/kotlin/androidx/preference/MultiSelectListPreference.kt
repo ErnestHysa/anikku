@@ -8,6 +8,6 @@ class MultiSelectListPreference : Preference {
     var entries: Array<String> = emptyArray()
     var entryValues: Array<String> = emptyArray()
 
-    fun setDefaultValue(value: Any?) {}
-    fun setOnPreferenceChangeListener(listener: (Preference, Any?) -> Boolean) {}
+    override fun setDefaultValue(value: Any?) {}
+    override fun setOnPreferenceChangeListener(listener: (Preference, Any?) -> Boolean) {}
 }

@@ -9,7 +9,7 @@ import android.net.http.SslError
 open class WebViewClient {
 
     open fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) = Unit
-    open fun onPageFinished(view: WebView, url: String?) = Unit
+    open fun onPageFinished(view: WebView, url: String) = Unit
     open fun onLoadResource(view: WebView, url: String?) = Unit
 
     open fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = false
@@ -34,6 +34,6 @@ open class WebViewClient {
 
     open fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) = Unit
 
-    open fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? = null
-    open fun shouldInterceptRequest(view: WebView, url: String): WebResourceResponse? = null
+    open fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? = null
+    open fun shouldInterceptRequest(view: WebView?, url: String?): WebResourceResponse? = null
 }

@@ -20,6 +20,7 @@ open class Context {
         override fun putLong(key: String, value: Long) = this
         override fun putFloat(key: String, value: Float) = this
         override fun putBoolean(key: String, value: Boolean) = this
+        override fun putStringSet(key: String, value: Set<String>?) = this
         override fun remove(key: String) = this
         override fun clear() = this
         override fun apply() {}
@@ -40,7 +41,7 @@ open class Context {
 
     fun getSharedPreferences(name: String, mode: Int): SharedPreferences = noopPrefs
 
-    fun getApplicationContext(): Context = this
+    val applicationContext: Context get() = this
 
     fun getBaseContext(): Context = this
 

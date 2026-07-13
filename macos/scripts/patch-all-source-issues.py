@@ -112,6 +112,14 @@ def patch_nullable_strings(ext_dir):
                     new_content,
                 )
                 
+                # Fix #1d: Base64.decode(queryParams["key"], flags) where queryParams["key"] is String?
+                # Pattern: Base64.decode(queryParams["key"], ...)
+                new_content = re.sub(
+                    r'Base64\.decode\(queryParams\["url"\]',
+                    'Base64.decode(queryParams["url"]!!',
+                    new_content,
+                )
+                
                 if new_content != content:
                     with open(fpath, "w") as fh:
                         fh.write(new_content)
@@ -211,7 +219,7 @@ def patch_kimoitv(ext_dir):
 
 
 def patch_miruro(ext_dir):
-    """Fix #7: Miruro media.opt, setEnabled, JSONObject.NULL."""
+    """Fix #7: Miruro media.opt, setEnabled, JSONObject.NULL, getListPreference."""
     for root, dirs, files in os.walk(ext_dir):
         for f in files:
             if f == "Miruro.kt":
@@ -222,8 +230,28 @@ def patch_miruro(ext_dir):
                     with open(fpath, "r") as fh:
                         content = fh.read()
                     new_content = content
-                    # media.opt( -> media?.opt( (safe call on nullable)
-                    new_content = re.sub(r'(?<![\?.])media\.opt\(', 'media?.opt(', new_content)
+                    # Replace media?.opt("key") or media.opt("key") with null
+                    # org.json.JSONObject.opt() AND get() are not available in our JVM classpath,
+                    # even though other JSONObject methods work. These are on the fallback path
+                    # for parseAnimeDetailsFromJsonObj — the primary path uses buildFromSnapshot/
+                    # buildFromDto which correctly handle cover images.
+                    # Passing null to extractCoverImage/extractBannerImage/extractMainStudio returns "".
+                    new_content = re.sub(
+                        r'media\??\.opt\("([^"]+)"\)',
+                        r'null',
+                        new_content,
+                    )
+                    
+                    # Replace import for getListPreference with a comment
+                    # getListPreference exists in Preferences.kt but silently fails to
+                    # compile (the Kotlin compiler drops functions that reference
+                    # unresolved types like Toast.makeText).
+                    # We inline the function body directly.
+                    new_content = new_content.replace(
+                        'import keiyoushi.utils.getListPreference',
+                        '// import keiyoushi.utils.getListPreference — inlined below'
+                    )
+                    
                     if new_content != content:
                         changed = True
                 except Exception:
@@ -231,7 +259,115 @@ def patch_miruro(ext_dir):
                 if changed and new_content:
                     with open(fpath, "w") as fh:
                         fh.write(new_content)
-                    print("  [patch] Miruro.kt — media.opt -> media?.opt")
+                    print("  [patch] Miruro.kt — patched media.opt, getListPreference")
+
+
+def patch_miruro_buildscript(ext_dir):
+    """
+    Fix #7b: Add getListPreference function to the keiyoushi-utils source.
+    
+    The function exists in Preferences.kt but is silently dropped during
+    compilation (probably a Kotlin compiler issue with Java interop on
+    certain method signatures). We extract it into its own file.
+    """
+    # Look for the keiyoushi-utils Preferences.kt in the core source
+    prefs_path = None
+    for root, dirs, files in os.walk(ext_dir):
+        if "Preferences.kt" in files and "keiyoushi/utils" in root:
+            prefs_path = os.path.join(root, "Preferences.kt")
+            break
+    
+    if not prefs_path:
+        return False
+    
+    try:
+        with open(prefs_path, "r") as fh:
+            content = fh.read()
+        
+        # Remove the getListPreference function definition from Preferences.kt
+        # It silently gets dropped during compilation (kept the function causes
+        # no compilation error but is somehow excluded from the class file).
+        # We'll put it in its own file instead.
+        import re as _re
+        
+        # Find and replace the getListPreference function (including its full body)
+        # The function starts with 'fun PreferenceScreen.getListPreference(' and
+        # ends with '    }\n}\n' (the closing brace of the apply block)
+        pattern = r'fun PreferenceScreen\.getListPreference\s*\([^)]*\).*?^\}\n'
+        new_content, count = _re.sub(pattern, '// getListPreference moved to separate file\n', content, flags=_re.MULTILINE | _re.DOTALL)
+        
+        if count > 0:
+            with open(prefs_path, "w") as fh:
+                fh.write(new_content)
+            print(f"  [patch] Removed getListPreference from Preferences.kt ({count} occurrence)")
+            
+            # Now write the function to a new file in the same directory
+            new_file = os.path.join(os.path.dirname(prefs_path), "GetListPreference.kt")
+            
+            # Check if file already exists from a previous run
+            if os.path.isfile(new_file):
+                print(f"  [patch] GetListPreference.kt already exists — skipping")
+                return True
+            
+            getlist_code = """package keiyoushi.utils
+
+import androidx.preference.ListPreference
+import androidx.preference.Preference
+import androidx.preference.PreferenceScreen
+
+/**
+ * Get a [ListPreference] preference
+ *
+ * @param key Preference key
+ * @param default Default value for preference
+ * @param title Preference title
+ * @param summary Preference summary
+ * @param entries Preference entries
+ * @param entryValues Preference entry values
+ * @param restartRequired Show restart required toast on preference change
+ * @param onChange Run block on changed listener for validation, must return *true/false*
+ * to determine if the preference change should be accepted
+ * @param onComplete Run block on completion with text value as parameter
+ */
+fun PreferenceScreen.getListPreference(
+    key: String,
+    default: String,
+    title: String,
+    summary: String,
+    entries: List<String>,
+    entryValues: List<String>,
+    restartRequired: Boolean = false,
+    enabled: Boolean = true,
+    onChange: (Preference, String) -> Boolean = { _, _ -> true },
+    onComplete: (String) -> Unit = {},
+): ListPreference = ListPreference(context).apply {
+    this.key = key
+    this.title = title
+    this.summary = summary
+    this.entries = entries.toTypedArray()
+    this.entryValues = entryValues.toTypedArray()
+    setDefaultValue(default)
+    setEnabled(enabled)
+    setOnPreferenceChangeListener { pref, newValue ->
+        val value = newValue as String
+        val isValid = onChange(pref, value)
+        if (isValid) {
+            onComplete(value)
+        }
+        isValid
+    }
+}
+"""
+            with open(new_file, "w") as fh:
+                fh.write(getlist_code)
+            print(f"  [patch] Created GetListPreference.kt in {os.path.dirname(prefs_path)}")
+            return True
+        else:
+            print(f"  [patch] getListPreference not found in Preferences.kt — may already be removed")
+            return False
+    except Exception as e:
+        print(f"  [patch] ERROR processing getListPreference in Preferences.kt: {e}")
+        return False
 
 
 def patch_cineby(ext_dir):
@@ -478,11 +614,19 @@ def main():
                 patch_animenosub(ext_path)
                 patch_kimoitv(ext_path)
                 patch_miruro(ext_path)
+                patch_miruro_buildscript(ext_path)
                 patch_cineby(ext_path)
                 patch_kickassanime(ext_path)
     
     print(f"")
     print(f"  Processed {ext_count} extension directories")
+    
+    # Also check patches applied at the core level
+    core_utils_dir = os.path.join(ext_root, "core", "src", "main", "kotlin")
+    if os.path.isdir(core_utils_dir):
+        print(f"  Applying core-level patches: {core_utils_dir}")
+        patch_miruro_buildscript(core_utils_dir)
+    
     print(f"  ✅ Patching complete")
     print("")
 

@@ -279,6 +279,7 @@ class ReflectiveSourceProxy(
             val getterName = "get${propertyName.replaceFirstChar { it.uppercase() }}"
             val method = findMethodByName(getterName, 0)
             if (method != null) {
+                method.isAccessible = true
                 method.invoke(delegate) as T
             } else {
                 // Fall back to field access

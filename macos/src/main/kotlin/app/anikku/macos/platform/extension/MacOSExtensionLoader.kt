@@ -372,7 +372,14 @@ object MacOSExtensionLoader {
                     // that don't exist on JVM. The class will be initialized lazily when first used.
                     // Keep NoClassDefFoundError catch below as an additional safety net.
                     val clazz = Class.forName(fullClassName, false, classLoader)
-                    val instance = clazz.getDeclaredConstructor().newInstance()
+                    // BUGFIX: getDeclaredConstructor() returns private constructors too,
+                    // but newInstance() throws IllegalAccessException for private ones.
+                    // We must call setAccessible(true) first. Many extension source classes
+                    // (e.g. AnilistGraphQLResponse, AnimePahe, DhakaFlix2) have private
+                    // no-arg constructors.
+                    val constructor = clazz.getDeclaredConstructor()
+                    constructor.isAccessible = true
+                    val instance = constructor.newInstance()
 
                     when (instance) {
                         is eu.kanade.tachiyomi.source.Source -> {
@@ -403,8 +410,21 @@ object MacOSExtensionLoader {
                 } catch (e: NoClassDefFoundError) {
                     logger.warn { "Skipping $className — missing JVM dependency: ${e.message}" }
                     emptyList()
+                } catch (e: IllegalAccessException) {
+                    logger.warn { "Skipping $className — cannot access constructor (private/protected): ${e.message}" }
+                    emptyList()
+                } catch (e: NoSuchMethodException) {
+                    logger.warn { "Skipping $className — no no-arg constructor found: ${e.message}" }
+                    emptyList()
+                } catch (e: ExceptionInInitializerError) {
+                    logger.warn { "Skipping $className — static initializer failed: ${e.message}" }
+                    emptyList()
+                } catch (e: java.lang.reflect.InvocationTargetException) {
+                    val cause = e.cause ?: e
+                    logger.warn(cause) { "Skipping $className — constructor threw ${cause::class.simpleName}: ${cause.message}" }
+                    emptyList()
                 } catch (e: Exception) {
-                    logger.warn { "Skipping $className — instantiation failed: ${e.message}" }
+                    logger.warn(e) { "Skipping $className — instantiation failed: ${e::class.simpleName}: ${e.message}" }
                     emptyList()
                 }
         }

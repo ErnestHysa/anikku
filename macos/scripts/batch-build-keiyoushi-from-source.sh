@@ -389,8 +389,8 @@ done
 # which yuzono anime extensions reference.
 MACOS_CLASSES_DIR="${PROJECT_DIR}/build/classes/kotlin/main"
 if [ -d "$MACOS_CLASSES_DIR" ]; then
-    add_to_cp "$MACOS_CLASSES_DIR"
-    log "  Android stubs: ${MACOS_CLASSES_DIR} ✓"
+    prepend_to_cp "$MACOS_CLASSES_DIR"
+    log "  Android stubs: ${MACOS_CLASSES_DIR} ✓ (prepended)"
 else
     log "  WARNING: macOS build classes not found at ${MACOS_CLASSES_DIR}"
     log "  Run './gradlew :compileKotlin' first to build the module"
@@ -457,6 +457,48 @@ if [ -f "$PATCH_SCRIPT" ]; then
     python3 "$PATCH_SCRIPT" "${GIT_CLONE_DIR}" 2>&1 || log "  WARNING: patch-all-source-issues.py returned non-zero — continuing"
 else
     log "  WARNING: patch-all-source-issues.py not found at ${PATCH_SCRIPT}"
+fi
+
+# Patch: add import getListPreference to Miruro.kt (replacing the commented-out line)
+MIRURO_FILE="${GIT_CLONE_DIR}/src/en/miruro/src/eu/kanade/tachiyomi/animeextension/en/miruro/Miruro.kt"
+if [ -f "$MIRURO_FILE" ]; then
+    # Replace the full commented line with a clean import (removing trailing comment text)
+    # The original line is: // import keiyoushi.utils.getListPreference — inlined below
+    sed -i '' '/^\/\/ import keiyoushi\.utils\.getListPreference /c\
+import keiyoushi.utils.getListPreference' "$MIRURO_FILE" 2>/dev/null || true
+    log "  Patched: Miruro.kt — replaced commented import with clean import"
+fi
+
+# Patch: remove problematic extractor dependencies from MiruroExtractor (m3u8server,
+# megacloudextractor, omniembedextractor, rapidcloudextractor — all have unresolved
+# external dependencies like nanohttpd or WebViewResolver stub issues)
+MIRURO_PATCH="${SCRIPT_DIR}/patch-miruro-sources.py"
+if [ -f "$MIRURO_PATCH" ]; then
+    python3 "$MIRURO_PATCH" "${GIT_CLONE_DIR}" 2>&1 | sed 's/^/  /'
+else
+    log "  WARNING: patch-miruro-sources.py not found — cannot patch miruro"
+fi
+
+# Patch: add import android.util.LruCache to CinebyExtractor.kt
+CINEBY_FILE="${GIT_CLONE_DIR}/src/en/cineby/src/eu/kanade/tachiyomi/animeextension/en/cineby/CinebyExtractor.kt"
+if [ -f "$CINEBY_FILE" ]; then
+    # Check if the import is already present
+    if ! grep -q 'import android.util.LruCache' "$CINEBY_FILE" 2>/dev/null; then
+        sed -i '' '/^import android.os.Build$/a\
+import android.util.LruCache' "$CINEBY_FILE" 2>/dev/null || true
+        log "  Patched: CinebyExtractor.kt — added import android.util.LruCache"
+    else
+        log "  CinebyExtractor.kt already has LruCache import — skipping"
+    fi
+fi
+
+# Patch: CloudflareInterceptor overrides onPageFinished with nullable params
+# (WebView?, String?) but our WebViewClient stub has non-null (WebView, String).
+# Strip the nullability markers so the override matches.
+CF_INTERCEPTOR="${GIT_CLONE_DIR}/lib/cloudflareinterceptor/src/aniyomi/lib/cloudflareinterceptor/CloudflareInterceptor.kt"
+if [ -f "$CF_INTERCEPTOR" ]; then
+    sed -i '' 's/override fun onPageFinished(view: WebView?, pageUrl: String?)/override fun onPageFinished(view: WebView, pageUrl: String)/' "$CF_INTERCEPTOR" 2>/dev/null || true
+    log "  Patched: CloudflareInterceptor.kt — non-null onPageFinished params"
 fi
 
 # ---------------------------------------------------------------------------
@@ -557,6 +599,8 @@ if [ -d "$EXTRACTORS_DIR" ]; then
         # Add new extractors incrementally and verify they compile independently.
         EXTRACTOR_WHITELIST=(
             "burstcloudextractor"
+            "chillxextractor"
+            "cloudflareinterceptor"
             "cryptoaes"
             "dailymotionextractor"
             "doodextractor"
@@ -675,6 +719,30 @@ if [ -d "$MULTISRC_DIR" ]; then
     CLASSPATH="${MULTISRC_DIR}:${CLASSPATH}"
     log "  Classpath reorder: lib-multisrc → front ✓"
 fi
+
+# ---------------------------------------------------------------------------
+# Step 2c-v: Package shared libs JAR for runtime extension classpath
+# ---------------------------------------------------------------------------
+#
+# During compilation, shared library classes (keiyoushi-utils, lib-extractors,
+# lib-multisrc, core) are on the classpath as directories. At runtime, the
+# MacOSExtensionLoader scans extensions/libs/ for JAR files to add to the
+# extension's URLClassLoader. This step packages all compiled shared libs into
+# a single JAR so extensions can resolve their dependencies at runtime.
+SHARED_LIBS_JAR="${EXTENSIONS_DIR}/libs/shared-libs.jar"
+mkdir -p "${EXTENSIONS_DIR}/libs"
+package_tmpdir=$(mktemp -d)
+for shlib in "${SHARED_LIBS_DIR}"/*/; do
+    [ -d "$shlib" ] && cp -r "$shlib"/* "$package_tmpdir/" 2>/dev/null || true
+done
+if [ -n "$(ls -A "$package_tmpdir" 2>/dev/null)" ]; then
+    (cd "$package_tmpdir" && "${JAR_CMD}" cf "${SHARED_LIBS_JAR}" . 2>/dev/null || true)
+    jar_size=$(stat -f%z "${SHARED_LIBS_JAR}" 2>/dev/null || echo "0")
+    log "  shared-libs.jar: ${jar_size} bytes → extensions/libs/ ✓"
+else
+    log "  WARNING: No shared lib classes to package"
+fi
+rm -rf "$package_tmpdir"
 
 SUCCESS_COUNT=0
 FAIL_COUNT=0
