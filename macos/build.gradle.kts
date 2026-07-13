@@ -286,6 +286,12 @@ compose.desktop {
             vendor = "Anikku"
             licenseFile.set(project.file("../LICENSE"))
 
+            // Add JVM args for native library search path (Sparkle helper dylib)
+            // and module system access for JNA reflective calls.
+            jvmArgs += listOf(
+                "-Djava.library.path=\$APPDIR/Contents/Frameworks",
+            )
+
             macOS {
                 bundleID = "app.anikku.macos"
                 iconFile.set(project.file("src/main/resources/icons/app.icns"))
@@ -313,6 +319,36 @@ compose.desktop {
 }
 
 // ---- Build & Package Tasks -------------------------------------------------
+
+/**
+ * Download Sparkle.framework and compile the Swift helper dylib.
+ * Only runs when the dylib doesn't exist (cached) or --force passed.
+ *
+ * Usage:
+ *   ./gradlew -p macos buildSparkleHelper
+ *   ./gradlew -p macos buildSparkleHelper -Pforce=true
+ */
+tasks.register<Exec>("buildSparkleHelper") {
+    description = "Download Sparkle.framework and compile the Swift helper dylib"
+    group = "distribution"
+
+    val scriptPath = "${project.projectDir}/scripts/build-sparkle-helper.sh"
+    val dylibPath = "${layout.buildDirectory.get()}/sparkle/libSparkleHelper.dylib"
+
+    onlyIf {
+        val force = project.findProperty("force") as? String == "true"
+        force || !file(dylibPath).isFile
+    }
+
+    commandLine("bash", scriptPath)
+}
+
+// Wire Sparkle helper build before packageDmg
+tasks.whenTaskAdded {
+    if (name == "packageDmg") {
+        dependsOn("buildSparkleHelper")
+    }
+}
 
 /**
  * Patch the generated Info.plist with Sparkle auto-updater keys.

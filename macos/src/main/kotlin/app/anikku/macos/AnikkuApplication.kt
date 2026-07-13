@@ -147,6 +147,12 @@ class AnikkuApplication {
             notificationManager = notificationManager,
         )
 
+        // Initialize Sparkle at startup — must call before any check methods.
+        // Sparkle reads SUFeedURL from Info.plist (injected by patchInfoPlist).
+        // If Sparkle framework is not bundled (dev builds), this is a no-op
+        // and the AppUpdateChecker fallback handles update checks.
+        sparkleUpdater.initialize()
+
         // Schedule silent background update check 30 seconds after startup
         backgroundScheduler.runOnce("startup-update-check") {
             kotlinx.coroutines.delay(30_000) // Wait 30s for app to fully initialize

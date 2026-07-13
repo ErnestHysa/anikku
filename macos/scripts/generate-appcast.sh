@@ -2,32 +2,33 @@
 #
 # generate-appcast.sh
 # ===================
-# Generates a Sparkle-compatible appcast.xml from a GitHub release.
+# Generates a Sparkle-compatible appcast.xml from GitHub Releases.
 #
-# This script:
-# 1. Takes a version number, DMG file path, and Ed25519 signing key
-# 2. Signs the DMG with the Ed25519 key to produce a Sparkle signature
-# 3. Generates or updates appcast.xml with the release entry
+# Two modes of operation:
 #
-# Usage:
-#   ./generate-appcast.sh --version 1.0.1 --dmg ./Anikku-1.0.1.dmg \
-#       --signing-key ./ed25519-key.pem --appcast ./appcast.xml
+#   AUTO (recommended):
+#     ./generate-appcast.sh --auto
+#     Fetches the latest release from GitHub and generates/signs appcast.
+#
+#   MANUAL:
+#     ./generate-appcast.sh --version 1.0.1 --dmg ./Anikku-1.0.1.dmg \
+#         --signing-key ./ed25519-key.pem --appcast ./appcast.xml
 #
 # Requirements:
 #   - openssl 3.x+ (for Ed25519 signing)
-#   - Python 3 (for base64 encoding)
+#   - curl (for auto mode)
 #
 # The signing key must match the public key distributed with the app
-# at macOS/src/main/resources/Sparkle/ed25519_pub.pem.
+# at macos/src/main/resources/Sparkle/ed25519_pub.pem.
 #
-# For first-time setup, generate a key pair:
+# For first-time setup:
 #   openssl genpkey -algorithm ed25519 -out ed25519-key.pem
 #   openssl pkey -in ed25519-key.pem -pubout -out ed25519-pub.pem
-#   cp ed25519-pub.pem macos/src/main/resources/Sparkle/ed25519_pub.pem
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 log() { echo "[*] $*"; }
 err() { echo "[!] $*" >&2; }
@@ -38,72 +39,162 @@ Usage: $(basename "$0") [OPTIONS]
 
 Generate or update a Sparkle appcast.xml for a new release.
 
-Required:
-  --version <ver>    Version string (e.g., 1.0.1)
-  --dmg <path>       Path to the DMG file to sign
-  --signing-key <p>  Path to the Ed25519 private key PEM file
+Modes:
+  --auto                    Fetch latest release from GitHub and generate appcast
+  --version <ver> --dmg <p> --signing-key <p>
+                            Manual mode: specify version, DMG, and key
 
 Options:
-  --appcast <path>   Path to appcast.xml (default: updates appcast.xml in CWD)
-  --repo-url <url>   GitHub repo URL (default: https://github.com/komikku-app/anikku)
-  --help             Show this help
+  --appcast <path>          Path to appcast.xml (default: ./appcast.xml)
+  --repo <owner/name>       GitHub repo (default: komikku-app/anikku)
+  --signing-key <p>         Path to the Ed25519 private key PEM file
+  --output-dir <dir>        Directory to write appcast and signatures
+  --help                    Show this help
 
 Examples:
+  # Auto: fetch latest GitHub release
+  ./generate-appcast.sh --auto --signing-key ./ed25519-key.pem
+
+  # Manual: sign a specific DMG
   ./generate-appcast.sh --version 1.0.1 \\
-      --dmg ./build/compose/binaries/main/dmg/Anikku-1.0.1.dmg \\
-      --signing-key ./ed25519-key.pem \\
-      --appcast ./appcast.xml
+      --dmg ./Anikku-1.0.1.dmg \\
+      --signing-key ./ed25519-key.pem
 EOF
     exit 0
 }
 
 # Parse arguments
+AUTO_MODE=false
 VERSION=""
 DMG_PATH=""
 SIGNING_KEY=""
 APPCAST_PATH=""
-REPO_URL="https://github.com/komikku-app/anikku"
+REPO="komikku-app/anikku"
+OUTPUT_DIR=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        --auto) AUTO_MODE=true; shift ;;
         --version) VERSION="$2"; shift 2 ;;
         --dmg) DMG_PATH="$2"; shift 2 ;;
         --signing-key) SIGNING_KEY="$2"; shift 2 ;;
         --appcast) APPCAST_PATH="$2"; shift 2 ;;
-        --repo-url) REPO_URL="$2"; shift 2 ;;
+        --repo) REPO="$2"; shift 2 ;;
+        --output-dir) OUTPUT_DIR="$2"; shift 2 ;;
         --help|-h) usage ;;
         *) err "Unknown option: $1"; usage ;;
     esac
 done
 
-if [ -z "$VERSION" ] || [ -z "$DMG_PATH" ] || [ -z "$SIGNING_KEY" ]; then
-    err "Error: --version, --dmg, and --signing-key are required"
-    usage
+# Default signing key location
+if [ -z "$SIGNING_KEY" ]; then
+    for candidate in \
+        "${PROJECT_DIR}/ed25519-key.pem" \
+        "${SCRIPT_DIR}/../ed25519-key.pem" \
+        "./ed25519-key.pem"; do
+        if [ -f "$candidate" ]; then
+            SIGNING_KEY="$candidate"
+            break
+        fi
+    done
 fi
 
-if [ ! -f "$DMG_PATH" ]; then
-    err "DMG file not found: $DMG_PATH"
+if [ -z "$SIGNING_KEY" ] || [ ! -f "$SIGNING_KEY" ]; then
+    err "Signing key not found. Generate one:"
+    err "  openssl genpkey -algorithm ed25519 -out ed25519-key.pem"
+    err "  openssl pkey -in ed25519-key.pem -pubout -out ed25519-pub.pem"
     exit 1
 fi
 
-if [ ! -f "$SIGNING_KEY" ]; then
-    err "Signing key not found: $SIGNING_KEY"
-    exit 1
-fi
-
-APPCAST_PATH="${APPCAST_PATH:-appcast.xml}"
+APPCAST_PATH="${APPCAST_PATH:-${OUTPUT_DIR:-.}/appcast.xml}"
+OUTPUT_DIR="${OUTPUT_DIR:-$(dirname "$APPCAST_PATH")}"
+mkdir -p "$OUTPUT_DIR"
 
 # ---------------------------------------------------------------------------
-# Step 1: Sign the DMG with Ed25519
+# Auto mode: fetch latest release from GitHub
+# ---------------------------------------------------------------------------
+if [ "$AUTO_MODE" = true ]; then
+    log "Auto mode: fetching latest release from ${REPO}..."
+
+    API_URL="https://api.github.com/repos/${REPO}/releases/latest"
+    RELEASE_JSON=$(curl -sL -H "Accept: application/vnd.github.v3+json" \
+        -H "User-Agent: Anikku-Appcast-Generator/1.0" \
+        "$API_URL" 2>/dev/null)
+
+    if [ -z "$RELEASE_JSON" ]; then
+        err "Failed to fetch release data from GitHub"
+        exit 1
+    fi
+
+    # Extract version/tag
+    TAG_NAME=$(echo "$RELEASE_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tag_name',''))" 2>/dev/null || echo "")
+    VERSION="${TAG_NAME#v}"
+
+    if [ -z "$VERSION" ]; then
+        err "Could not extract version from GitHub release"
+        exit 1
+    fi
+    log "  Latest release: ${TAG_NAME} (version ${VERSION})"
+
+    # Find DMG asset
+    DMG_URL=$(echo "$RELEASE_JSON" | python3 -c "
+import sys, json
+release = json.load(sys.stdin)
+for asset in release.get('assets', []):
+    name = asset.get('name', '')
+    if name.endswith('.dmg') or 'mac' in name.lower():
+        print(asset['browser_download_url'])
+        sys.exit(0)
+print('')
+" 2>/dev/null)
+
+    if [ -z "$DMG_URL" ]; then
+        err "No DMG asset found in the latest release"
+        err "Available assets:"
+        echo "$RELEASE_JSON" | python3 -c "
+import sys, json
+for a in json.load(sys.stdin).get('assets',[]):
+    print(f\"  - {a['name']} ({a['size']} bytes)\")
+" 2>/dev/null
+        exit 1
+    fi
+
+    log "  Downloading DMG: ${DMG_URL}..."
+    DMG_PATH="${OUTPUT_DIR}/Anikku-${VERSION}.dmg"
+    curl -sL "$DMG_URL" -o "$DMG_PATH"
+
+    if [ ! -f "$DMG_PATH" ] || [ ! -s "$DMG_PATH" ]; then
+        err "Failed to download DMG"
+        exit 1
+    fi
+    log "  Downloaded: $(stat -f%z "$DMG_PATH" 2>/dev/null || stat -c%s "$DMG_PATH") bytes"
+
+    # Get release metadata
+    HTML_URL=$(echo "$RELEASE_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('html_url',''))" 2>/dev/null)
+    PUB_DATE=$(echo "$RELEASE_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('published_at',''))" 2>/dev/null)
+    RELEASE_BODY=$(echo "$RELEASE_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('body',''))" 2>/dev/null)
+else
+    # Manual mode validation
+    if [ -z "$VERSION" ] || [ -z "$DMG_PATH" ]; then
+        err "Error: --version and --dmg are required in manual mode (or use --auto)"
+        usage
+    fi
+    if [ ! -f "$DMG_PATH" ]; then
+        err "DMG file not found: $DMG_PATH"
+        exit 1
+    fi
+    HTML_URL="https://github.com/${REPO}/releases/tag/v${VERSION}"
+    PUB_DATE=$(date -R 2>/dev/null || date -u +"%a, %d %b %Y %H:%M:%S %z")
+fi
+
+# ---------------------------------------------------------------------------
+# Sign the DMG with Ed25519
 # ---------------------------------------------------------------------------
 log "Signing DMG with Ed25519 private key..."
+DMG_SIZE=$(stat -f%z "$DMG_PATH" 2>/dev/null || stat -c%s "$DMG_PATH")
 log "  DMG:       ${DMG_PATH}"
-log "  Key:       ${SIGNING_KEY}"
-
-DMG_SIZE=$(stat -f%z "$DMG_PATH" 2>/dev/null || stat -c%s "$DMG_PATH" 2>/dev/null || echo "0")
 log "  DMG size:  ${DMG_SIZE} bytes"
 
-# Generate Ed25519 signature (Sparkle 2+ format)
 SIGNATURE=$(openssl pkeyutl \
     -sign \
     -inkey "$SIGNING_KEY" \
@@ -111,35 +202,36 @@ SIGNATURE=$(openssl pkeyutl \
     -in "$DMG_PATH" 2>/dev/null | base64)
 
 if [ -z "$SIGNATURE" ]; then
-    # Fallback: try older OpenSSL syntax
-    SIGNATURE=$(openssl dgst -sign "$SIGNING_KEY" -keyform PEM -binary "$DMG_PATH" 2>/dev/null | base64)
-fi
-
-if [ -z "$SIGNATURE" ]; then
-    err "Failed to generate Ed25519 signature. Check your OpenSSL version (3.x required)."
+    err "Failed to generate Ed25519 signature."
+    err "Make sure you're using OpenSSL 3.x+"
     exit 1
 fi
 
-log "  Signature: ${SIGNATURE:0:32}..."
+log "  Signature: ${SIGNATURE:0:48}..."
 
 # ---------------------------------------------------------------------------
-# Step 2: Generate the appcast item
+# Generate/update appcast.xml
 # ---------------------------------------------------------------------------
-log "Generating appcast item..."
+DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v${VERSION}/Anikku-${VERSION}.dmg"
+RELEASE_NOTES_URL="${HTML_URL}"
 
-# Current date in RFC 2822 format
-PUB_DATE=$(date -R 2>/dev/null || date -u +"%a, %d %b %Y %H:%M:%S %z" 2>/dev/null || echo "Mon, 01 Jan 2026 00:00:00 +0000")
-
-DOWNLOAD_URL="${REPO_URL}/releases/download/v${VERSION}/Anikku-${VERSION}.dmg"
-RELEASE_NOTES_URL="${REPO_URL}/releases/tag/v${VERSION}"
+# RFC 2822 date
+PUB_DATE_RFC=$(python3 -c "
+from datetime import datetime, timezone
+try:
+    dt = datetime.fromisoformat('${PUB_DATE}'.replace('Z', '+00:00'))
+    print(dt.strftime('%a, %d %b %Y %H:%M:%S %z'))
+except:
+    print('${PUB_DATE}')
+" 2>/dev/null || echo "$PUB_DATE")
 
 # Build the new item XML
-read -r -d '' NEW_ITEM << ITEMEOF || true
+NEW_ITEM=$(cat << ITEMEOF
     <item>
       <title>Version ${VERSION}</title>
       <sparkle:version>${VERSION}</sparkle:version>
       <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
-      <pubDate>${PUB_DATE}</pubDate>
+      <pubDate>${PUB_DATE_RFC}</pubDate>
       <enclosure
         url="${DOWNLOAD_URL}"
         sparkle:edSignature="${SIGNATURE}"
@@ -150,31 +242,34 @@ read -r -d '' NEW_ITEM << ITEMEOF || true
       </sparkle:releaseNotesLink>
     </item>
 ITEMEOF
+)
 
-# ---------------------------------------------------------------------------
-# Step 3: Write appcast.xml
-# ---------------------------------------------------------------------------
 if [ -f "$APPCAST_PATH" ] && [ -s "$APPCAST_PATH" ]; then
-    # Insert the new item after <channel> (before any existing items)
     log "Updating existing appcast: ${APPCAST_PATH}"
     python3 -c "
-import sys
+import sys, re
+
 with open('${APPCAST_PATH}', 'r') as f:
     content = f.read()
 
 new_item = '''${NEW_ITEM}'''
 
-# Insert after <channel>
+# Check if this version already exists
+if 'Version ${VERSION}' in content:
+    print(f'Version ${VERSION} already in appcast — skipping')
+    sys.exit(0)
+
+# Insert after <channel> (keep newest first = items in reverse chronological order)
+# Sparkle uses the first item as the latest, but items in the feed are typically
+# ordered newest-first.
 insert_pos = content.find('<channel>') + len('<channel>') + 1
 content = content[:insert_pos] + '\n' + new_item + content[insert_pos:]
-content = content.replace('<channel>\n\n', '<channel>\n')
 
 with open('${APPCAST_PATH}', 'w') as f:
     f.write(content)
 
-print('Updated appcast.xml with new entry')
-print(f'  Version: ${VERSION}')
-print(f'  Items: {content.count(\"<item>\")}')
+item_count = content.count('<item>')
+print(f'Appcast updated: {item_count} release(s) total')
 "
 else
     log "Creating new appcast: ${APPCAST_PATH}"
@@ -190,11 +285,27 @@ ${NEW_ITEM}
   </channel>
 </rss>
 XML
-    log "Created new appcast.xml with initial entry"
+    log "Created new appcast.xml"
 fi
 
+# Also write a JSON version for the GitHub-based fallback checker
+JSON_PATH="${APPCAST_PATH%.xml}.json"
+python3 -c "
+import json
+data = {
+    'version': '${VERSION}',
+    'downloadUrl': '${DOWNLOAD_URL}',
+    'releaseNotesUrl': '${RELEASE_NOTES_URL}',
+    'signature': '${SIGNATURE}',
+    'dmgSize': ${DMG_SIZE},
+    'pubDate': '${PUB_DATE_RFC}',
+}
+with open('${JSON_PATH}', 'w') as f:
+    json.dump(data, f, indent=2)
+" 2>/dev/null || true
+
 # ---------------------------------------------------------------------------
-# Step 4: Verify
+# Summary
 # ---------------------------------------------------------------------------
 log ""
 log "═══════════════════════════════════════════════════════════════"
@@ -202,17 +313,16 @@ log "  APPCAST GENERATION COMPLETE"
 log "═══════════════════════════════════════════════════════════════"
 log "  Appcast:       ${APPCAST_PATH}"
 log "  Version:       ${VERSION}"
-log "  DMG:           ${DMG_PATH}"
-log "  DMG Size:      ${DMG_SIZE} bytes"
+log "  DMG:           ${DMG_PATH} (${DMG_SIZE} bytes)"
 log "  Signature:     ${SIGNATURE:0:48}..."
 log "  Download URL:  ${DOWNLOAD_URL}"
 log ""
 log "  Next steps:"
-log "    1. Host appcast.xml at a public URL (e.g., GitHub Pages)"
-log "    2. Set Info.plist SUFeedURL to that URL"
-log "    3. Upload the DMG to GitHub Releases"
+log "    1. Upload appcast.xml to your server"
+log "    2. Set Info.plist SUFeedURL to the hosted URL"
+log "    3. Verify: curl -I <SUFeedURL>"
 log ""
-log "  To test locally:"
-log "    python3 -m http.server 8080 --directory \$(dirname ${APPCAST_PATH})"
-log "    Then set SUFeedURL to http://localhost:8080/\$(basename ${APPCAST_PATH})"
+log "  Test locally:"
+log "    python3 -m http.server 8080 --directory ${OUTPUT_DIR}"
+log "    Then use http://localhost:8080/appcast.xml in SUFeedURL"
 log "═══════════════════════════════════════════════════════════════"
