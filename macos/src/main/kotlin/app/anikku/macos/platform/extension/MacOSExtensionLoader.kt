@@ -84,8 +84,15 @@ object MacOSExtensionLoader {
         val files = extensionsDir.listFiles()?.filter { it.isFile } ?: emptyList()
 
         // Separate JAR/EXT files from APK files
-        val jarFiles = files.filter { it.extension == "jar" || it.extension == "ext" }
+        val jarFiles = files.filter { it.extension == "jar" || it.extension == "ext" }.toMutableList()
         val apkFiles = files.filter { it.extension == "apk" }
+
+        // Move dependency/base JARs to libs/ BEFORE loading.
+        // These JARs contain shared DTOs, extractors, or base classes that other
+        // extensions depend on — they aren't standalone extensions with Source classes.
+        // Moving them to libs/ lets the URLClassLoader pick them up as shared dependencies
+        // without showing them as "untrusted" or "failed to load" extensions.
+        moveDependencyJarsToLibs(jarFiles, extensionsDir)
 
         logger.info { "Loading ${jarFiles.size} JAR extensions, ${apkFiles.size} APK extensions from ${extensionsDir.absolutePath}" }
 
@@ -270,6 +277,56 @@ object MacOSExtensionLoader {
         } catch (e: Exception) {
             logger.error(e) { "Failed to read metadata from ${jarFile.name}" }
             null
+        }
+    }
+
+    /**
+     * Move dependency JARs to libs/ so they are available as shared dependencies
+     * rather than treated as standalone extensions that show as "untrusted".
+     *
+     * Dependency JARs have specific package name patterns:
+     * - *.dto packages: shared data transfer objects
+     * - *.extractors packages: extractor implementations used by other extensions
+     * - Specific base packages: watchanimeworld, reanime, dflixbackup, anitusk
+     *   contain shared classes but no standalone Source implementations
+     */
+    private fun moveDependencyJarsToLibs(
+        jarFiles: MutableList<File>,
+        extensionsDir: File,
+    ) {
+        val libsDir = File(extensionsDir, "libs")
+        val iterator = jarFiles.iterator()
+        var movedCount = 0
+
+        while (iterator.hasNext()) {
+            val jarFile = iterator.next()
+            val metadata = readMetadata(jarFile) ?: continue
+            val pkg = metadata.pkgName
+
+            val isDependency = pkg.endsWith(".dto") ||
+                pkg.endsWith(".extractors") ||
+                pkg.contains("watchanimeworld") ||
+                pkg.contains("reanime") ||
+                pkg.contains("dflixbackup") ||
+                pkg.contains("anitusk")
+
+            if (isDependency) {
+                libsDir.mkdirs()
+                val target = File(libsDir, jarFile.name)
+
+                if (!jarFile.renameTo(target)) {
+                    jarFile.copyTo(target, overwrite = true)
+                    jarFile.delete()
+                }
+
+                iterator.remove()
+                movedCount++
+                logger.info { "Moved dependency JAR to libs/: ${jarFile.name} ($pkg)" }
+            }
+        }
+
+        if (movedCount > 0) {
+            logger.info { "Moved $movedCount dependency JAR(s) to libs/ directory" }
         }
     }
 

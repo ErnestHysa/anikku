@@ -281,7 +281,7 @@ data class ExtensionsScreen(
                 3 -> {
                     // Untrusted extensions
                     item {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                             Icon(
                                 Icons.Outlined.Warning,
                                 contentDescription = null,
@@ -293,7 +293,23 @@ data class ExtensionsScreen(
                                 "Untrusted Extensions",
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.weight(1f),
                             )
+                            if (untrustedExtensions.isNotEmpty()) {
+                                Button(
+                                    onClick = {
+                                        UIActionLogger.logClick("Extensions", "trust_all", "untrusted", "count=${untrustedExtensions.size}")
+                                        untrustedExtensions.forEach { ext ->
+                                            extensionManager?.trustExtension(ext)
+                                        }
+                                        toastHost.show("Trusted ${untrustedExtensions.size} extension(s)", ToastDuration.SHORT)
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                    shape = RoundedCornerShape(6.dp),
+                                ) {
+                                    Text("Trust All", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
                         }
                         Spacer(Modifier.height(4.dp))
                         Text(

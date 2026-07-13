@@ -425,34 +425,34 @@ class MacOSExtensionManager(
             } catch (e: Exception) {
                 logger.error(e) { "Failed to load trust store" }
             }
-            return
         }
 
-        // First launch: no trust file exists. Auto-trust all JARs in the
-        // extensions directory so users don't have to manually trust each
-        // extension after a fresh install.
+        // Always scan for new JARs not yet in the trust store and auto-trust them.
+        // This handles fresh installs (no trust file) AND new JARs added after
+        // a batch rebuild without requiring the user to manually trust each one.
         autoTrustAllJars()
     }
 
     /**
-     * Auto-trust all JAR files in the extensions directory.
-     * Called on first launch when no trust store exists.
+     * Auto-trust JAR files in the extensions directory that are not already trusted.
      *
-     * This is the default behavior for fresh installs — users can always
-     * revoke trust for individual extensions later via the UI.
+     * Called on every startup to handle:
+     * - Fresh installs (no trust store exists yet)
+     * - New JARs added after batch rebuilds
+     * - Manually placed extension JARs
+     *
+     * Only trusts packages NOT already in the trust store — previously trusted
+     * packages with updated hashes still require manual re-trust for security.
+     * Users can always revoke trust for individual extensions via the UI.
      */
     private fun autoTrustAllJars() {
         val jars = extensionsDir.listFiles()
             ?.filter { it.extension == "jar" }
             ?: emptyList()
 
-        if (jars.isEmpty()) {
-            logger.info { "No JARs to auto-trust — extensions directory is empty" }
-            return
-        }
+        if (jars.isEmpty()) return
 
-        logger.info { "First launch — auto-trusting ${jars.size} extension(s) in ${extensionsDir.absolutePath}" }
-
+        var newCount = 0
         for (jar in jars) {
             val metadata = MacOSExtensionLoader.readMetadata(jar)
             if (metadata == null) {
@@ -461,6 +461,14 @@ class MacOSExtensionManager(
             }
 
             val hash = MacOSExtensionLoader.computeSha256(jar)
+
+            // Skip only if already trusted with this exact hash.
+            // Checking pkgName alone is insufficient — batch rebuilds produce
+            // new hashes for the same package, and the old hash won't match.
+            val alreadyTrusted = trustStore[metadata.pkgName]
+                ?.any { it.signatureHash == hash } == true
+            if (alreadyTrusted) continue
+
             val entry = MacOSExtensionLoader.TrustEntry(
                 pkgName = metadata.pkgName,
                 versionCode = metadata.versionCode,
@@ -468,11 +476,12 @@ class MacOSExtensionManager(
             )
             trustStore.getOrPut(metadata.pkgName) { mutableListOf() }.add(entry)
             logger.info { "  Auto-trusted: ${metadata.pkgName} (hash: ${hash.take(12)}...)" }
+            newCount++
         }
 
-        if (trustStore.isNotEmpty()) {
+        if (newCount > 0) {
             saveTrustStore()
-            logger.info { "Auto-trusted ${trustStore.size} extension(s)" }
+            logger.info { "Auto-trusted $newCount new extension(s)" }
         }
     }
 
