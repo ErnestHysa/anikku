@@ -37,7 +37,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -78,22 +77,46 @@ data class SourceBrowseScreen(
 
     override val key: ScreenKey = uniqueScreenKey
 
+    // ── Compose state stored at class level ─────────────────────────
+    //
+    // Voyager disposes the composition tree when this screen is pushed
+    // to the backstack (e.g. when AnimeDetailScreen is pushed on top).
+    // Standard `remember` blocks are lost on disposal.
+    //
+    // By storing mutable state as class-level properties, we survive
+    // composition disposal because Voyager retains the Screen instance
+    // in its backstack. When the user presses Back, this same instance
+    // is recomposed with all state intact.
+    private val _isLoading = mutableStateOf(true)
+    private val _isSearching = mutableStateOf(false)
+    private val _errorMessage = mutableStateOf<String?>(null)
+    private val _animeList = mutableStateOf(emptyList<AnimeModel>())
+    private val _searchQuery = mutableStateOf("")
+    private val _isShowingSearchResults = mutableStateOf(false)
+    private val _hasSearched = mutableStateOf(false)
+
+    var isLoading: Boolean by _isLoading
+    var isSearching: Boolean by _isSearching
+    var errorMessage: String? by _errorMessage
+    var animeList: List<AnimeModel> by _animeList
+    var searchQuery: String by _searchQuery
+    var isShowingSearchResults: Boolean by _isShowingSearchResults
+    var hasSearched: Boolean by _hasSearched
+    // ── End of class-level state ────────────────────────────────────
+
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
     override fun Content() {
         val navigator = LocalNavigator.currentOrThrow
-
-        var isLoading by remember { mutableStateOf(true) }
-        var isSearching by remember { mutableStateOf(false) }
-        var errorMessage by remember { mutableStateOf<String?>(null) }
-        var animeList by remember { mutableStateOf(emptyList<AnimeModel>()) }
-        var searchQuery by remember { mutableStateOf("") }
-        var isShowingSearchResults by remember { mutableStateOf(false) }
-        var hasSearched by remember { mutableStateOf(false) }
         val toastHost = LocalToastHost.current
 
-        // Fetch popular anime on first composition
+        // Fetch popular anime on first composition.
+        // Skip re-fetch on back-navigation when state survived (class-level state
+        // preserved by Voyager's backstack). Otherwise, re-fetching popular anime
+        // would overwrite any search results the user had before navigating away.
         LaunchedEffect(sourceId) {
+            if (animeList.isNotEmpty()) return@LaunchedEffect
+
             isLoading = true
             errorMessage = null
 
@@ -124,7 +147,10 @@ data class SourceBrowseScreen(
             isLoading = false
         }
 
-        // Debounced search — fires 400ms after the user stops typing
+        // Debounced search — fires 400ms after the user stops typing.
+        // On back-navigation, LaunchedEffect re-launches because remember
+        // doesn't survive composition disposal. The class-level state guard
+        // prevents redundant re-search when cached results exist.
         LaunchedEffect(searchQuery) {
             if (searchQuery.isBlank()) {
                 // Clear search results — reload popular if we had searched
@@ -143,6 +169,11 @@ data class SourceBrowseScreen(
                         isLoading = false
                     }
                 }
+                return@LaunchedEffect
+            }
+
+            // Skip re-search if state survived back-navigation with results
+            if (hasSearched && animeList.isNotEmpty()) {
                 return@LaunchedEffect
             }
 
@@ -190,7 +221,12 @@ data class SourceBrowseScreen(
                     // Search bar
                     OutlinedTextField(
                         value = searchQuery,
-                        onValueChange = { searchQuery = it },
+                        onValueChange = {
+                            // Reset searched flag on any user edit so the guard
+                            // doesn't block re-search when the query changes
+                            hasSearched = false
+                            searchQuery = it
+                        },
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(horizontal = 12.dp, vertical = 8.dp),
