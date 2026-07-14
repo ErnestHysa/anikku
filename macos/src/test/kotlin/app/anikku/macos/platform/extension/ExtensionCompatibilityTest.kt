@@ -15,7 +15,9 @@ import org.junit.jupiter.api.Assertions
 import org.junit.jupiter.api.BeforeAll
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.TestInstance
+import org.junit.jupiter.api.Timeout
 import org.koin.core.context.stopKoin
+import java.util.concurrent.TimeUnit
 import org.koin.core.context.startKoin
 import org.koin.dsl.module
 import tachiyomi.core.common.preference.PreferenceStore
@@ -43,6 +45,7 @@ import java.time.Instant
  *   ⚠  = SKIP (missing extension JAR or unsupported API)
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
+@Timeout(value = 15, unit = TimeUnit.MINUTES)
 class ExtensionCompatibilityTest {
 
     companion object {
@@ -98,7 +101,7 @@ class ExtensionCompatibilityTest {
         Assertions.assertTrue(extensionsDir.isDirectory, "Extensions directory not found at ${extensionsDir.absolutePath}")
 
         // Initialize Koin once before all tests
-        try { stopKoin() } catch (_: Exception) {}
+        try { stopKoin() } catch (_: Throwable) {}
         val testPrefsFile = File.createTempFile("anikku-test-prefs", ".json")
         testPrefsFile.deleteOnExit()
         startKoin {
@@ -246,6 +249,9 @@ class ExtensionCompatibilityTest {
         } else {
             VideoResult("⚠", 0, "", "")
         }
+
+        // Close the classloader to prevent resource leaks across 45 iterations
+        MacOSExtensionLoader.closeClassLoader(pkgName)
 
         return ExtensionResult(
             name = name,
