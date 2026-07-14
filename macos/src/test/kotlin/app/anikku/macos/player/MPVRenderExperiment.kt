@@ -71,7 +71,9 @@ class MPVRenderExperiment {
             val stride = w * 4
             val sizeParams = Memory(8).also { it.setInt(0, w); it.setInt(4, h) }
             val strideParam = Memory(8).also { it.setLong(0, stride.toLong()) }
-            val formatParam = Memory(5L).also { it.setString(0, MPVLib.RENDER_FORMAT_RGB0) }
+            // Use bgr0 to match BufferedImage.TYPE_INT_RGB's in-memory layout
+            // on little-endian macOS, enabling zero-copy bulk frame transfer.
+            val formatParam = Memory(5L).also { it.setString(0, MPVLib.RENDER_FORMAT_BGR0) }
             println("  ✅ Buffer: ${w}x${h}x4 = ${w * h * 4} bytes")
 
             // ── Step 6: Load test video ────────────────────────────────────

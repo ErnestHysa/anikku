@@ -27,15 +27,20 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import com.sun.jna.Pointer
 import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
 
 private val logger = KotlinLogging.logger {}
 
 /**
- * Default render interval in milliseconds (~30 fps).
+ * Target render interval in milliseconds (~33 fps).
+ *
+ * This is a target polling interval; the actual frame is only updated when
+ * [MPVSoftwareRenderer.render] returns a new [BufferedImage].
  */
-private const val FRAME_INTERVAL_MS = 33L
+private const val FRAME_INTERVAL_MS = 30L
 
 /**
  * Compose Desktop video surface for mpv software-rendered frames.
@@ -80,17 +85,28 @@ fun MPVVideoSurface(
     // Surface size for aspect-ratio-aware rendering
     var surfaceSize by remember { mutableStateOf(IntSize.Zero) }
 
-    // Periodic render loop: pull frames from the software renderer
+    // Periodic render loop: pull frames from the software renderer.
+    // Rendering is performed on Dispatchers.IO to avoid blocking the Compose
+    // UI thread; only the resulting ImageBitmap is posted back to the UI.
     LaunchedEffect(renderer, mpvAvailable) {
         if (renderer == null || !mpvAvailable) return@LaunchedEffect
 
         while (isActive) {
-            val bufferedImage = renderer.render()
-            if (bufferedImage != null) {
-                val composeBitmap = bufferedImage.toComposeImageBitmap()
-                currentFrame = composeBitmap
+            val startTime = System.nanoTime()
+
+            val bufferedImage = withContext(Dispatchers.IO) {
+                renderer.render()
             }
-            delay(FRAME_INTERVAL_MS)
+            if (bufferedImage != null) {
+                currentFrame = bufferedImage.toComposeImageBitmap()
+            }
+
+            // Adaptive delay: aim for the target frame interval, but never
+            // sleep a negative amount (i.e., if rendering took longer than the
+            // target interval, immediately render the next frame).
+            val elapsedMs = (System.nanoTime() - startTime) / 1_000_000L
+            val sleepMs = (FRAME_INTERVAL_MS - elapsedMs).coerceAtLeast(0L)
+            delay(sleepMs)
         }
     }
 

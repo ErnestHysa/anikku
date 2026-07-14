@@ -22,9 +22,26 @@ class PlayerScreenTest {
 
     @Test
     fun `PlayerScreen has correct animeId`() {
-        val screen = PlayerScreen(animeId = 1L, episodeId = 3L)
+        val screen = PlayerScreen(
+            animeId = 1L,
+            episodeId = 3L,
+            animeUrl = "https://example.com/anime/1",
+            animeTitle = "Test Anime",
+        )
         assertEquals(1L, screen.animeId)
         assertEquals(3L, screen.episodeId)
+    }
+
+    @Test
+    fun `PlayerScreen stores animeUrl and animeTitle`() {
+        val screen = PlayerScreen(
+            animeId = 1L,
+            episodeId = 1L,
+            animeUrl = "https://example.com/anime/1",
+            animeTitle = "Test Anime",
+        )
+        assertEquals("https://example.com/anime/1", screen.animeUrl)
+        assertEquals("Test Anime", screen.animeTitle)
     }
 
     @Test

@@ -71,8 +71,11 @@ object MacOSExtensionLoader {
      * Load all extensions from the extensions directory.
      *
      * Supports both JAR files (native JVM extensions with META-INF/extension.json)
-     * and APK files (keiyoushi Android extensions, automatically converted via
-     * [DexClassLoader] when jadx is available).
+     * and APK files (legacy keiyoushi Android extensions, automatically converted
+     * via [DexClassLoader] when jadx is available).
+     *
+     * Pre-converted JARs are the preferred format. APK conversion is deprecated
+     * and may be removed in a future release.
      */
     fun loadExtensions(
         extensionsDir: File,
@@ -94,15 +97,16 @@ object MacOSExtensionLoader {
         // without showing them as "untrusted" or "failed to load" extensions.
         moveDependencyJarsToLibs(jarFiles, extensionsDir)
 
-        logger.info { "Loading ${jarFiles.size} JAR extensions, ${apkFiles.size} APK extensions from ${extensionsDir.absolutePath}" }
+        logger.info { "Loading ${jarFiles.size} JAR extensions, ${apkFiles.size} legacy APK extensions from ${extensionsDir.absolutePath}" }
 
         val results = mutableListOf<LoadResult>()
 
         // Load native JVM extensions
         results.addAll(jarFiles.map { loadExtension(it, extensionsDir, trustStore, loadNsfw) })
 
-        // Convert and load APK (keiyoushi) extensions
+        // Convert and load legacy APK (keiyoushi) extensions
         if (apkFiles.isNotEmpty()) {
+            logger.warn { "Legacy APK extensions found: ${apkFiles.map { it.name }}. Pre-converted JAR repos are recommended." }
             convertAndLoadApks(apkFiles, extensionsDir, results, trustStore, loadNsfw)
         }
 
@@ -110,8 +114,12 @@ object MacOSExtensionLoader {
     }
 
     /**
-     * Convert keiyoushi APK files to JARs and load them.
+     * Convert legacy keiyoushi APK files to JARs and load them.
      * Uses [DexClassLoader] to decompile DEX bytecode via jadx + javac.
+     *
+     * **DEPRECATED**: Pre-converted JAR repos are the preferred distribution
+     * format. Runtime APK conversion is fragile, slow, and requires users to
+     * install jadx. This fallback may be removed in a future release.
      *
      * Limitations:
      * - Requires jadx to be installed (`brew install jadx`)
@@ -120,6 +128,7 @@ object MacOSExtensionLoader {
      * - Source-api JAR paths are resolved by DexClassLoader internally or
      *   must be provided in the extensions directory's parent structure
      */
+    @Suppress("DEPRECATION")
     private fun convertAndLoadApks(
         apkFiles: List<File>,
         extensionsDir: File,
@@ -128,8 +137,8 @@ object MacOSExtensionLoader {
         loadNsfw: Boolean = false,
     ) {
         if (!DexClassLoader.isAvailable()) {
-            logger.warn { "jadx not available — cannot convert ${apkFiles.size} APK extension(s). Install: brew install jadx" }
-            apkFiles.forEach { apk ->
+            logger.warn { "jadx not available — cannot convert ${apkFiles.size} legacy APK extension(s). Install: brew install jadx, or use a pre-converted JAR repo." }
+            apkFiles.forEach { _ ->
                 results.add(LoadResult.Error)
             }
             return
@@ -139,14 +148,14 @@ object MacOSExtensionLoader {
             val jarName = apkFile.nameWithoutExtension + ".jar"
             val jarFile = File(extensionsDir, jarName)
 
-            logger.info { "Converting APK extension: ${apkFile.name} → ${jarFile.name}" }
+            logger.warn { "Converting legacy APK extension: ${apkFile.name} → ${jarFile.name}" }
             val success = DexClassLoader.convertToJar(apkFile, jarFile, null, null)
 
             if (success && jarFile.isFile) {
                 logger.info { "Loading converted extension: ${jarFile.name}" }
                 results.add(loadExtension(jarFile, extensionsDir, trustStore, loadNsfw))
             } else {
-                logger.error { "Failed to convert APK extension: ${apkFile.name}" }
+                logger.error { "Failed to convert legacy APK extension: ${apkFile.name}" }
                 results.add(LoadResult.Error)
             }
         }

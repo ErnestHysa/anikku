@@ -25,7 +25,9 @@ import app.anikku.macos.ui.TabSwitchHandler
 import app.anikku.macos.platform.data.LibraryRepository
 import app.anikku.macos.platform.data.HistoryRepository
 import app.anikku.macos.platform.data.LocalLibraryRepository
+import app.anikku.macos.platform.data.LocalDownloadManager
 import app.anikku.macos.platform.data.LocalHistoryRepository
+import app.anikku.macos.platform.download.MacOSDownloadManager
 import app.anikku.macos.platform.preference.BookmarkStore
 import app.anikku.macos.platform.preference.LocalBookmarkStore
 import app.anikku.macos.platform.auth.LocalTrackerManager
@@ -82,6 +84,14 @@ fun main() = application {
         val bookmarkStore = remember { BookmarkStore(app.preferenceStore) }
         val libraryRepository = remember { app.libraryRepository }
         val historyRepository = remember { app.historyRepository }
+        val downloadManager = remember {
+            try {
+                org.koin.core.context.GlobalContext.get().get<MacOSDownloadManager>()
+            } catch (e: Exception) {
+                println("[AnikkuApp] Failed to resolve MacOSDownloadManager from Koin: ${e.message}")
+                null
+            }
+        }
         val toastHostState = remember { ToastHostState() }
 
         var showAboutDialog by remember { mutableStateOf(false) }
@@ -148,6 +158,7 @@ fun main() = application {
             LocalBookmarkStore provides bookmarkStore,
             LocalLibraryRepository provides libraryRepository,
             LocalHistoryRepository provides historyRepository,
+            LocalDownloadManager provides downloadManager,
             LocalToastHost provides toastHostState,
             LocalTrackerManager provides trackerManager,
         ) {

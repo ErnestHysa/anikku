@@ -155,6 +155,7 @@ data class AnimeDetailScreen(
         val toastHost = LocalToastHost.current
         val bookmarkStore = LocalBookmarkStore.current
         val libraryRepo = LocalLibraryRepository.current
+        val effectiveDownloadManager = downloadManager ?: LocalDownloadManager.current
         val focusRequester = remember { FocusRequester() }
 
         // State for source-backed data
@@ -168,8 +169,8 @@ data class AnimeDetailScreen(
         // Track download states per episode (keyed by episodeNumber)
         var downloadStateMap by remember { mutableStateOf(mapOf<Double, Boolean>()) }
         LaunchedEffect(downloadManager) {
-            if (downloadManager != null) {
-                downloadManager.downloads.collect { downloads ->
+            if (effectiveDownloadManager != null) {
+                effectiveDownloadManager.downloads.collect { downloads ->
                     downloadStateMap = downloads.filter { it.animeId == animeId }.associate {
                         it.episodeNumber to (it.isActive || it.status == DownloadRepository.DownloadStatus.COMPLETED)
                     }
@@ -397,13 +398,15 @@ data class AnimeDetailScreen(
                                     episodeId = episode.id,
                                     sourceId = sourceId,
                                     episodeUrl = episode.url,
+                                    animeUrl = anime?.url ?: animeUrl,
+                                    animeTitle = anime?.title ?: animeTitle,
                                     extensionManager = extensionManager,
-                                    downloadManager = downloadManager,
+                                    downloadManager = effectiveDownloadManager,
                                 )
                             )
                         },
                         onDownloadEpisode = { episode ->
-                            val dm = downloadManager
+                            val dm = effectiveDownloadManager
                             if (dm != null && sourceId != null) {
                                 val isAlready = downloadStateMap[episode.episodeNumber] == true
                                 if (isAlready) {

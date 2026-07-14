@@ -85,13 +85,10 @@ data class ExtensionsScreen(
         val untrustedExtensions by (extensionManager?.untrustedExtensionsFlow?.collectAsState() ?: remember { mutableStateOf(emptyList()) })
 
         var selectedTab by remember { mutableStateOf(0) } // 0=Installed, 1=Available, 2=Repos, 3=Untrusted
-        // Default repos — the macOS-optimized JAR repo is tried first,
-        // then the community manga/anime APK repo as fallback
+        // Default repo — pre-converted JAR extensions for macOS.
+        // Legacy APK repos are no longer auto-selected because they require
+        // jadx/DexClassLoader conversion which is slow and unreliable.
         val defaultRepoUrl = "https://raw.githubusercontent.com/ErnestHysa/anikku-extensions-jar/main/"
-        val fallbackRepoUrls = listOf(
-            defaultRepoUrl,
-            "https://raw.githubusercontent.com/keiyoushi/extensions/repo/",
-        )
 
         var repoUrl by remember { mutableStateOf(defaultRepoUrl) }
         var isFetching by remember { mutableStateOf(false) }
@@ -106,17 +103,7 @@ data class ExtensionsScreen(
                 isFetching = true
                 try {
                     // Use force=false so the 1-day rate limit in MacOSExtensionManager is respected
-                    var extensions = extensionManager.findAvailableExtensions(defaultRepoUrl, force = false)
-                    if (extensions.isEmpty()) {
-                        // Fall back to keiyoushi repo if salmanbappi returns nothing
-                        for (fallbackUrl in fallbackRepoUrls.drop(1)) {
-                            extensions = extensionManager.findAvailableExtensions(fallbackUrl, force = false)
-                            if (extensions.isNotEmpty()) {
-                                repoUrl = fallbackUrl
-                                break
-                            }
-                        }
-                    }
+                    extensionManager.findAvailableExtensions(defaultRepoUrl, force = false)
                 } catch (e: Exception) {
                     toastHost.show("Failed to fetch extensions: ${e.message?.take(60)}", ToastDuration.LONG)
                 }
@@ -234,10 +221,20 @@ data class ExtensionsScreen(
                     if (availableExtensions.isEmpty() && !isFetching) {
                         item {
                             Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                                Text(
-                                    "Tap the download button to fetch available extensions",
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text(
+                                        "No extensions available",
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Spacer(Modifier.height(8.dp))
+                                    Text(
+                                        "Make sure the repo URL points to an index.min.json file. " +
+                                            "For the best experience, use a pre-converted JAR repo.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                    )
+                                }
                             }
                         }
                     } else {
@@ -375,17 +372,17 @@ data class ExtensionsScreen(
                         Spacer(Modifier.height(12.dp))
                     }
 
-                    // Pre-configured repos — macOS-optimized JARs first, then community APK repo
+                    // Pre-configured repos — macOS-optimized JARs first, legacy APK repo last
                     val repoInfo = listOf(
                         Triple(
                             defaultRepoUrl,
                             "Anikku macOS Extensions",
-                            "Pre-converted JVM JARs for macOS — built from yuzono/anime-extensions sources"
+                            "Pre-converted JVM JARs for macOS — recommended, no conversion needed"
                         ),
                         Triple(
                             "https://raw.githubusercontent.com/keiyoushi/extensions/repo/",
-                            "keiyoushi/extensions",
-                            "Community APK repo — primarily manga (some anime sources via dex2jar)"
+                            "keiyoushi/extensions (Legacy APK)",
+                            "Requires jadx to convert APKs on macOS — slow and unreliable"
                         ),
                     )
 

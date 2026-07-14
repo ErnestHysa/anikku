@@ -100,6 +100,10 @@ class ExtensionRepoIntegrationTest {
                 val extensions = testManager.findAvailableExtensions(baseUrl, force = true)
                 Assert.assertEquals("Should find 1 extension", 1, extensions.size)
 
+                // Verify the index request path
+                val indexRequest = server.takeRequest()
+                Assert.assertEquals("/index.min.json", indexRequest.path)
+
                 var progressValues = mutableListOf<Float>()
                 var completedSteps = mutableListOf<String>()
 
@@ -111,6 +115,11 @@ class ExtensionRepoIntegrationTest {
                         is InstallStep.Error -> completedSteps.add("error: ${step.message}")
                     }
                 }
+
+                // Verify the JAR download request path — pre-converted JAR repos
+                // serve files at the root, not under /apk/
+                val jarRequest = server.takeRequest()
+                Assert.assertEquals("/${sampleJar.name}", jarRequest.path)
 
                 Assert.assertTrue("Should track progress", progressValues.isNotEmpty())
                 Assert.assertTrue("Progress should reach near 1.0", progressValues.last() >= 0.9f)
@@ -225,6 +234,70 @@ class ExtensionRepoIntegrationTest {
                 // Wait for stateIn to propagate after both installs
                 val untrusted = testManager.untrustedExtensionsFlow.first { it.size >= 2 }
                 Assert.assertEquals("Both should be untrusted", 2, untrusted.size)
+            } finally {
+                testManager.close()
+                tempDir.deleteRecursively()
+            }
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun `legacy APK repo downloads from apk subdirectory`() = runBlocking {
+        val sampleJar = File(sampleJarPath)
+        Assert.assertTrue("Sample JAR not built", sampleJar.exists())
+
+        val server = MockWebServer().apply { start(0) }
+        try {
+            val baseUrl = server.url("").toString().trimEnd('/')
+
+            // Index with a legacy .apk extension
+            val indexJson = """
+            [{
+              "name": "Aniyomi: LegacyApk",
+              "pkg": "com.example.legacyapk",
+              "apk": "legacy.apk",
+              "lang": "en",
+              "code": 100,
+              "version": "14.1",
+              "nsfw": 0,
+              "sources": [{"id": 999020, "lang": "en", "name": "Legacy", "baseUrl": "https://legacy.test"}]
+            }]
+            """.trimIndent()
+            server.enqueue(MockResponse().apply { setResponseCode(200); setBody(indexJson) })
+            server.enqueue(MockResponse().apply {
+                setResponseCode(200)
+                setHeader("Content-Type", "application/octet-stream")
+                setBody(okio.Buffer().write(sampleJar.readBytes()))
+            })
+
+            val (testManager, tempDir) = createIsolatedManager()
+            try {
+                val extensions = testManager.findAvailableExtensions(baseUrl, force = true)
+                Assert.assertEquals("Should find 1 extension", 1, extensions.size)
+
+                val indexRequest = server.takeRequest()
+                Assert.assertEquals("/index.min.json", indexRequest.path)
+
+                var errorMessage: String? = null
+                testManager.installExtension(extensions.first()) { step ->
+                    if (step is InstallStep.Error) {
+                        errorMessage = step.message
+                    }
+                }
+
+                // The download should hit /apk/ because the index entry ends with .apk
+                val apkRequest = server.takeRequest()
+                Assert.assertEquals("/apk/legacy.apk", apkRequest.path)
+
+                // Without jadx installed, installation should report an error
+                Assert.assertNotNull("Should report an error for APK without jadx", errorMessage)
+                Assert.assertTrue(
+                    "Error should mention jadx or pre-converted JAR repo",
+                    errorMessage.orEmpty().contains("jadx", ignoreCase = true) ||
+                        errorMessage.orEmpty().contains("pre-converted", ignoreCase = true)
+                )
             } finally {
                 testManager.close()
                 tempDir.deleteRecursively()

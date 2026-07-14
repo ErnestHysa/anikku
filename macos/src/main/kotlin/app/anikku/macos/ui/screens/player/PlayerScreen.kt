@@ -120,6 +120,8 @@ data class PlayerScreen(
     val episodeId: Long,
     val sourceId: Long? = null,
     val episodeUrl: String? = null,
+    val animeUrl: String? = null,
+    val animeTitle: String? = null,
     val extensionManager: MacOSExtensionManager? = null,
     val downloadManager: MacOSDownloadManager? = null,
 ) : AnikkuScreen() {
@@ -167,15 +169,15 @@ data class PlayerScreen(
 
         // Priority 2: Source API — use full SEpisode with all fields populated
         if (sourceId != null && sEpisode != null) {
-            val episodeUrl = try { sEpisode.url } catch (_: Exception) { null }
+            val currentEpisodeUrl = try { sEpisode.url } catch (_: Exception) { null }
             val source = extensionManager?.getSource(sourceId)
-            if (source != null && episodeUrl != null) {
+            if (source != null && currentEpisodeUrl != null) {
                 try {
                     val videos = source.getVideoList(sEpisode)
                     if (videos.isNotEmpty()) {
                         val best = videos.firstOrNull { it.preferred } ?: videos.first()
                         onQuality(best.resolution, best.videoTitle.takeIf { it.isNotBlank() })
-                        UIActionLogger.logVideoResolution(sourceId, episodeUrl, best.videoUrl.take(80))
+                        UIActionLogger.logVideoResolution(sourceId, currentEpisodeUrl, best.videoUrl.take(80))
 
                         // Extract headers from the video object for mpv.
                         // Many sources set a Referer header that the stream server requires.
@@ -199,10 +201,10 @@ data class PlayerScreen(
 
                         return VideoResolution(url = best.videoUrl, headers = videoHeaders)
                     } else {
-                        UIActionLogger.logVideoResolution(sourceId, episodeUrl, "no_videos_found")
+                        UIActionLogger.logVideoResolution(sourceId, currentEpisodeUrl, "no_videos_found")
                     }
                 } catch (e: Exception) {
-                    UIActionLogger.logVideoResolution(sourceId, episodeUrl, "error: ${e::class.simpleName}: ${e.message?.take(50)}")
+                    UIActionLogger.logVideoResolution(sourceId, currentEpisodeUrl, "error: ${e::class.simpleName}: ${e.message?.take(50)}")
                     onError?.invoke("Video resolution failed: ${e.message?.take(60)}")
                     // Fall through
                 }
@@ -270,7 +272,7 @@ data class PlayerScreen(
         var allEpisodes by remember { mutableStateOf<MutableList<EpisodeModel>>(mutableListOf()) }
         var sourceEpisodes by remember { mutableStateOf<List<SEpisode>>(emptyList()) }
         var currentEpisodeIndex by remember { mutableIntStateOf(0) }
-        var animeTitle by remember { mutableStateOf("Unknown") }
+        var animeTitle by remember { mutableStateOf(this@PlayerScreen.animeTitle ?: "Unknown") }
         var resolvedVideo by remember { mutableStateOf<VideoResolution?>(null) }
         var videoQualityResolution by remember { mutableStateOf<Int?>(null) }
         var videoQualityLabel by remember { mutableStateOf<String?>(null) }
@@ -296,15 +298,18 @@ data class PlayerScreen(
                     resolutionStatusText = "Fetching episode list..."
                     val source = extensionManager?.getSource(sourceId)
                     if (source != null) {
-                        // Normalize the anime URL: ensure it starts with '/' if it's a relative path.
-                        // Some extensions store episode URLs as relative paths without leading '/'
-                        // (e.g. "tv/37854/23"). The anime URL is derived by stripping the last
-                        // path segment, and must start with '/' for correct baseUrl concatenation.
-                        val normalizedAnimeUrl = episodeUrl.substringBeforeLast("/").let { path ->
-                            if (path.startsWith("/") || path.startsWith("http")) path else "/$path"
+                                        // Use the explicit anime URL when available; fall back to deriving it
+                        // from the episode URL only as a last resort (the heuristic is fragile
+                        // and breaks for query parameters, hashed IDs, etc.).
+                        val fallbackUrl = this@PlayerScreen.animeUrl ?: run {
+                            logger.warn { "PlayerScreen: animeUrl is null for sourceId=$sourceId, deriving anime URL from episode URL. This may fail for some sources." }
+                            episodeUrl?.substringBeforeLast("/")?.let { path ->
+                                if (path.startsWith("/") || path.startsWith("http")) path else "/$path"
+                            }
                         }
+                        val resolvedAnimeUrl = fallbackUrl ?: ""
                         val sAnime = eu.kanade.tachiyomi.animesource.model.SAnime.create().apply {
-                            url = normalizedAnimeUrl
+                            url = resolvedAnimeUrl
                         }
                         resolutionStatusText = "Loading episodes from \"${source.name}\"..."
                         val fetchedEpisodes = source.getEpisodeList(sAnime)
@@ -383,16 +388,6 @@ data class PlayerScreen(
                 isLoading = false
                 resolutionStatusText = ""
                 videoResolutionError = "Failed to play video — stream URL may be invalid"
-            }
-        }
-
-        // Update anime title from episode data if unknown
-        LaunchedEffect(allEpisodes) {
-            if (animeTitle == "Unknown" && allEpisodes.isNotEmpty() && sourceId != null) {
-                val source = extensionManager?.getSource(sourceId)
-                if (source != null && source is eu.kanade.tachiyomi.source.CatalogueSource) {
-                    // Title stays as "Unknown" when no source is available
-                }
             }
         }
 
@@ -503,39 +498,6 @@ data class PlayerScreen(
                         )
                         if (resolved != null) {
                             resolvedVideo = resolved
-                        } else if (sourceId != null && episode.url != null) {
-                            // Fall back to source API — build full SEpisode from EpisodeModel
-                            val source = extensionManager?.getSource(sourceId)
-                            if (source != null) {
-                                try {
-                                    val sEpisode = SEpisode.create().apply {
-                                        url = episode.url
-                                        name = episode.name
-                                        episode_number = episode.episodeNumber.toFloat()
-                                        date_upload = episode.dateUpload
-                                        scanlator = episode.scanlator
-                                    }
-                                    val videos = source.getVideoList(sEpisode)
-                                    if (videos.isNotEmpty()) {
-                                        val best = videos.firstOrNull { it.preferred } ?: videos.first()
-                                        val fallbackHeaders = try {
-                                            best.headers?.let { h ->
-                                                val map = mutableMapOf<String, String>()
-                                                for (i in 0 until h.size) {
-                                                    map[h.name(i)] = h.value(i)
-                                                }
-                                                if (!map.containsKey("User-Agent")) {
-                                                    map["User-Agent"] = DEFAULT_USER_AGENT
-                                                }
-                                                map
-                                            } ?: mapOf("User-Agent" to DEFAULT_USER_AGENT)
-                                        } catch (_: Exception) { null }
-                                        resolvedVideo = VideoResolution(url = best.videoUrl, headers = fallbackHeaders)
-                                    }
-                                } catch (_: Exception) {
-                                    toastHost.show("Failed to load episode", ToastDuration.SHORT)
-                                }
-                            }
                         } else {
                             toastHost.show("No video source available", ToastDuration.SHORT)
                         }
@@ -710,10 +672,11 @@ private fun PlayerContent(
         return
     }
 
-    // Show error state when source was needed but not available and we have no episodes
-    // Also show when no video URL was resolved despite having a source available
-    // Show error state when video URL resolution failed (mpv is available but no video loaded)
-    val videoResolutionFailed = !hasVideoUrl && currentEpisode != null && !isLoading && playbackState == PlaybackState.IDLE
+    // Show error state when video URL resolution failed, mpv reported an error,
+    // or we are not still resolving it. Do NOT check playbackState == IDLE here
+    // — mpv starts in IDLE while the video is loading.
+    val videoResolutionFailed = currentEpisode != null && !isLoading && !isResolvingVideo &&
+        (!hasVideoUrl || playbackState == PlaybackState.ERROR || videoResolutionError != null)
     if (!isMPVAvailable && episodes.isEmpty() && currentEpisode == null) {
         Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {

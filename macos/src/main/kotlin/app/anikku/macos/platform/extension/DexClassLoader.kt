@@ -38,6 +38,10 @@ private val logger = KotlinLogging.logger {}
  * from source as JVM bytecode. See `macos/docs/MIGRATION-GUIDE.md` for details.
  * This class loader is a fallback for loading existing keiyoushi APKs.
  */
+@Deprecated(
+    message = "Runtime APK conversion is deprecated. Use pre-converted JAR repos or build from source instead.",
+    replaceWith = ReplaceWith("Build extensions from source or use a pre-converted JAR repo"),
+)
 object DexClassLoader {
 
     private const val JADX_CMD = "jadx"

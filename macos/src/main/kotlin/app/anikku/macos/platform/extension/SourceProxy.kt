@@ -52,7 +52,7 @@ private val logger = KotlinLogging.logger {}
 class ReflectiveSourceProxy(
     /** The loaded extension instance (e.g., a Gogoanime source). */
     private val delegate: Any,
-) : CatalogueSource {
+) : eu.kanade.tachiyomi.animesource.AnimeCatalogueSource {
 
     private val delegateClass: Class<*> = delegate.javaClass
 
@@ -67,6 +67,9 @@ class ReflectiveSourceProxy(
 
     override val supportsLatest: Boolean
         get() = reflectiveGet<Boolean>("supportsLatest") ?: false
+
+    override val supportsRelatedAnimes: Boolean
+        get() = reflectiveGet<Boolean>("supportsRelatedAnimes") ?: false
 
     override fun getFilterList(): AnimeFilterList {
         return try {

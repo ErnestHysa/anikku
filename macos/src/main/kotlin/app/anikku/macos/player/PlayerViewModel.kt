@@ -289,7 +289,11 @@ class PlayerViewModel {
         var allOk = true
         val criticalOptions = listOf(
             "vo" to "libmpv",
-            "hwdec" to "videotoolbox",
+            // Use videotoolbox-copy so mpv decodes on the GPU but copies the
+            // decoded frame back to CPU RAM for the software renderer. Plain
+            // "videotoolbox" would keep frames on the GPU and is incompatible
+            // with MPV_RENDER_API_TYPE_SW.
+            "hwdec" to "videotoolbox-copy",
             "cache" to "yes",
             "cache-secs" to "30",
             "demuxer-max-bytes" to "150M",

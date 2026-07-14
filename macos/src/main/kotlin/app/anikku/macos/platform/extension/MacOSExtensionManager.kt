@@ -22,6 +22,8 @@ import kotlinx.serialization.json.Json
 import okhttp3.Request
 import okio.IOException
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.time.Instant
 import kotlin.time.Duration.Companion.days
 
@@ -240,17 +242,28 @@ class MacOSExtensionManager(
     /**
      * Download and install an extension.
      *
-     * The repo serves Android APK files. On macOS these must be converted to
-     * JVM JARs via jadx decompilation + javac recompilation. If jadx is not
-     * installed, the APK is saved with a .apk extension and will be converted
-     * on the next app startup (via [MacOSExtensionLoader.loadExtensions]).
+     * The preferred repo format serves pre-converted JVM JARs. These are
+     * downloaded directly and loaded without any conversion.
+     *
+     * Legacy Android APK files are still supported as a fallback, but they
+     * require jadx to be installed and are significantly slower/less reliable.
+     * If jadx is not available, the install fails with a clear error message.
      */
+    @Suppress("DEPRECATION")
     suspend fun installExtension(
         extension: Extension.Available,
         onProgress: ((InstallStep) -> Unit)? = null,
     ) {
-        val apkUrl = "${extension.repoUrl}/apk/${extension.apkName}"
-        val apkTmpFile = File(extensionsDir, "${extension.pkgName}.apk.tmp")
+        val isPreConvertedJar = extension.apkName.endsWith(".jar", ignoreCase = true)
+
+        // Pre-converted JAR repos serve files at the root; legacy APK repos use /apk/
+        val downloadUrl = if (isPreConvertedJar) {
+            "${extension.repoUrl}/${extension.apkName}"
+        } else {
+            "${extension.repoUrl}/apk/${extension.apkName}"
+        }
+
+        val tmpFile = File(extensionsDir, "${extension.pkgName}.download.tmp")
         val finalJar = File(extensionsDir, "${extension.pkgName}.jar")
         val apkFile = File(extensionsDir, "${extension.pkgName}.apk")
 
@@ -259,11 +272,11 @@ class MacOSExtensionManager(
 
             // Remove any previous downloads or JARs for this package
             apkFile.delete()
-            apkTmpFile.delete()
+            tmpFile.delete()
             finalJar.delete()
 
             val request = Request.Builder()
-                .url(apkUrl)
+                .url(downloadUrl)
                 .get()
                 .build()
 
@@ -274,7 +287,7 @@ class MacOSExtensionManager(
 
             // Download to temp file
             response.body?.byteStream()?.use { input ->
-                apkTmpFile.outputStream().use { output ->
+                tmpFile.outputStream().use { output ->
                     val buffer = ByteArray(8 * 1024)
                     val contentLength = response.body?.contentLength() ?: -1L
                     var bytesRead: Int
@@ -294,19 +307,23 @@ class MacOSExtensionManager(
 
             onProgress?.invoke(InstallStep.Installing)
 
-            // Rename temp to .apk/.tmp after successful download
-            apkTmpFile.renameTo(apkFile)
-
-            // Determine whether the downloaded file is a pre-converted JAR or an APK
-            val isPreConvertedJar = extension.apkName.endsWith(".jar", ignoreCase = true)
-
             if (isPreConvertedJar) {
-                // Pre-converted JAR from repo — rename directly (atomic on same filesystem)
-                logger.info { "Extension is already a JAR: ${extension.pkgName}" }
-                apkFile.renameTo(finalJar)
-                logger.info { "Installed JAR directly: ${extension.pkgName} (${finalJar.length()} bytes)" }
-            } else if (DexClassLoader.isAvailable()) {
-                // APK — needs jadx conversion
+                // Atomic move from temp to final JAR
+                moveOrCopy(tmpFile, finalJar)
+                logger.info { "Installed pre-converted JAR: ${extension.pkgName} (${finalJar.length()} bytes)" }
+            } else {
+                // Legacy APK path — move temp to .apk and attempt conversion
+                moveOrCopy(tmpFile, apkFile)
+
+                logger.warn { "Legacy APK extension detected: ${extension.pkgName}. Pre-converted JAR repos are recommended." }
+
+                if (!DexClassLoader.isAvailable()) {
+                    throw IOException(
+                        "APK extensions require jadx to convert on macOS. " +
+                            "Install with: brew install jadx, or switch to a pre-converted JAR repo."
+                    )
+                }
+
                 logger.info { "Converting APK to JAR: ${extension.pkgName}" }
                 val sourceApiJar = findSourceApiJar()
                 val commonJvmJar = findCommonJvmJar()
@@ -319,12 +336,9 @@ class MacOSExtensionManager(
                     // Conversion failed — clean up both APK and broken JAR
                     apkFile.delete()
                     finalJar.delete()
-                    logger.warn { "APK conversion failed for ${extension.pkgName}. User should install jadx and retry." }
-                    throw IOException("Conversion failed. Ensure jadx is installed (brew install jadx) and retry.")
+                    logger.warn { "APK conversion failed for ${extension.pkgName}." }
+                    throw IOException("APK conversion failed. Try a pre-converted JAR repo instead.")
                 }
-            } else {
-                // No jadx available — keep APK for batch conversion on startup
-                logger.info { "jadx not available — ${extension.pkgName}.apk saved for batch conversion on restart" }
             }
 
             onProgress?.invoke(InstallStep.Complete)
@@ -333,10 +347,38 @@ class MacOSExtensionManager(
             reloadExtension(extension.pkgName)
             logger.info { "Installed extension: ${extension.pkgName}" }
         } catch (e: Exception) {
-            apkTmpFile.delete()
+            tmpFile.delete()
+            apkFile.delete()
+            if (finalJar.exists()) finalJar.delete()
             logger.error(e) { "Failed to install extension: ${extension.pkgName}" }
             onProgress?.invoke(InstallStep.Error(e.message ?: "Unknown error"))
             // Don't throw — let the UI show the error message gracefully
+        }
+    }
+
+    /**
+     * Move [source] to [destination] atomically if possible, falling back to
+     * a copy+delete. Throws [IOException] if the destination does not exist
+     * after the operation.
+     */
+    private fun moveOrCopy(source: File, destination: File) {
+        if (source == destination) return
+        try {
+            Files.move(
+                source.toPath(),
+                destination.toPath(),
+                StandardCopyOption.ATOMIC_MOVE,
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        } catch (e: IOException) {
+            // Atomic move failed (different filesystems, etc.) — fall back to copy+delete
+            logger.warn(e) { "Atomic move failed from ${source.absolutePath} to ${destination.absolutePath}, falling back to copy+delete" }
+            source.copyTo(destination, overwrite = true)
+            source.delete()
+        }
+
+        if (!destination.isFile) {
+            throw IOException("Failed to move ${source.absolutePath} to ${destination.absolutePath}")
         }
     }
 
@@ -551,12 +593,12 @@ class MacOSExtensionManager(
      * Look up a source by its ID across all installed extensions.
      *
      * @param sourceId The source ID to find.
-     * @return The source if found, null otherwise.
+     * @return The anime source if found, null otherwise.
      */
-    fun getSource(sourceId: Long): eu.kanade.tachiyomi.source.Source? {
+    fun getSource(sourceId: Long): eu.kanade.tachiyomi.animesource.AnimeSource? {
         return installedExtensionsMapFlow.value.values
             .flatMap { it.sources }
-            .filterIsInstance<eu.kanade.tachiyomi.source.Source>()
+            .filterIsInstance<eu.kanade.tachiyomi.animesource.AnimeSource>()
             .find { it.id == sourceId }
     }
 
