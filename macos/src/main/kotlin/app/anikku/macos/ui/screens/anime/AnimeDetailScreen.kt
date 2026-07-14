@@ -57,6 +57,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -99,6 +100,8 @@ import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.currentOrThrow
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.source.Source
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.awt.Desktop
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
@@ -159,6 +162,7 @@ data class AnimeDetailScreen(
         val trackerManager = LocalTrackerManager.current
         val effectiveDownloadManager = downloadManager ?: LocalDownloadManager.current
         val focusRequester = remember { FocusRequester() }
+        val scope = rememberCoroutineScope()
 
         // State for source-backed data
         var isLoading by remember { mutableStateOf(true) }
@@ -357,10 +361,18 @@ data class AnimeDetailScreen(
                                 episodes = episodes.map { it.copy(seen = true) }
                                 toastHost.show("Marked $unseenCount episodes as seen", ToastDuration.SHORT)
                                 episodes.maxByOrNull { it.episodeNumber }?.let { lastEp ->
-                                    trackerManager?.scrobbleProgress(
-                                        anime?.title ?: animeTitle ?: "",
-                                        lastEp.episodeNumber.toInt(),
-                                    )
+                                    scope.launch(Dispatchers.IO) {
+                                        val result = trackerManager?.scrobbleProgress(
+                                            anime?.title ?: animeTitle ?: "",
+                                            lastEp.episodeNumber.toInt(),
+                                        ) ?: return@launch
+                                        result.toToastMessage()?.let { message ->
+                                            withContext(Dispatchers.Main) {
+                                                val duration = if (result.failures.isNotEmpty()) ToastDuration.LONG else ToastDuration.SHORT
+                                                toastHost.show(message, duration)
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         },

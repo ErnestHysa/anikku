@@ -184,28 +184,51 @@ class TrackerManager(
     }
 
     /**
-     * Fire-and-forget scrobble for an anime across all logged-in trackers.
+     * Scrobble progress for an anime across all logged-in trackers.
      * Searches for the anime by title and updates the progress to [episodeNumber].
+     *
+     * **Note:** This method performs synchronous network I/O. Call it from a
+     * background thread (e.g., via `scope.launch { ... }`) to avoid blocking
+     * the UI.
      *
      * @param animeTitle The anime title to search for.
      * @param episodeNumber The episode number to report.
+     * @return A [ScrobbleResult] listing trackers that succeeded, failed, or
+     *         could not find a matching anime.
      */
-    fun scrobbleProgress(animeTitle: String, episodeNumber: Int) {
-        if (animeTitle.isBlank()) return
-        scope.launch(Dispatchers.IO) {
-            tokenStore.getAllStatuses()
-                .filter { it.isLoggedIn }
-                .forEach { status ->
-                    try {
-                        val results = searchAnime(status.tracker, animeTitle)
-                        val bestMatch = results.firstOrNull() ?: return@forEach
-                        updateProgress(status.tracker, bestMatch.id, episodeNumber)
-                        logger.info { "Scrobbled \"$animeTitle\" ep $episodeNumber to ${status.tracker} (id=${bestMatch.id})" }
-                    } catch (e: Exception) {
-                        logger.error(e) { "Failed to scrobble \"$animeTitle\" to ${status.tracker}" }
+    fun scrobbleProgress(animeTitle: String, episodeNumber: Int): ScrobbleResult {
+        if (animeTitle.isBlank()) return ScrobbleResult()
+
+        val successes = mutableListOf<String>()
+        val failures = mutableListOf<String>()
+        val notFound = mutableListOf<String>()
+
+        tokenStore.getAllStatuses()
+            .filter { it.isLoggedIn }
+            .forEach { status ->
+                try {
+                    val results = searchAnime(status.tracker, animeTitle)
+                    val bestMatch = results.firstOrNull()
+                    if (bestMatch == null) {
+                        notFound.add(status.tracker)
+                        logger.info { "No ${status.tracker} match for \"$animeTitle\"" }
+                        return@forEach
                     }
+                    val updated = updateProgress(status.tracker, bestMatch.id, episodeNumber)
+                    if (updated) {
+                        successes.add(status.tracker)
+                        logger.info { "Scrobbled \"$animeTitle\" ep $episodeNumber to ${status.tracker} (id=${bestMatch.id})" }
+                    } else {
+                        failures.add(status.tracker)
+                        logger.warn { "Tracker ${status.tracker} rejected progress update for \"$animeTitle\"" }
+                    }
+                } catch (e: Exception) {
+                    failures.add(status.tracker)
+                    logger.error(e) { "Failed to scrobble \"$animeTitle\" to ${status.tracker}" }
                 }
-        }
+            }
+
+        return ScrobbleResult(successes, failures, notFound)
     }
 
     // -----------------------------------------------------------------------
@@ -427,6 +450,39 @@ data class TrackerSearchResult(
     val title: String,
     val imageUrl: String? = null,
 )
+
+/**
+ * Result of a scrobble attempt across all logged-in trackers.
+ */
+data class ScrobbleResult(
+    val successes: List<String> = emptyList(),
+    val failures: List<String> = emptyList(),
+    val notFound: List<String> = emptyList(),
+) {
+    val isEmpty: Boolean
+        get() = successes.isEmpty() && failures.isEmpty() && notFound.isEmpty()
+
+    /**
+     * Format a user-facing toast message from this result, or null if there
+     * is nothing to report.
+     */
+    fun toToastMessage(): String? {
+        if (isEmpty) return null
+
+        val parts = mutableListOf<String>()
+        if (successes.isNotEmpty()) {
+            parts.add("Scrobbled to ${successes.joinToString()}")
+        }
+        if (failures.isNotEmpty()) {
+            parts.add("failed: ${failures.joinToString()}")
+        }
+        if (notFound.isNotEmpty()) {
+            parts.add("no match: ${notFound.joinToString()}")
+        }
+
+        return parts.joinToString("; ")
+    }
+}
 
 /**
  * CompositionLocal for [TrackerManager] — used in SettingsScreen

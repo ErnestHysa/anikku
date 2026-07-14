@@ -83,8 +83,10 @@ import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.currentOrThrow
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 private val logger = KotlinLogging.logger {}
@@ -408,7 +410,17 @@ data class PlayerScreen(
             // so we only hit the tracker APIs once per episode.
             if (!hasScrobbledThisEpisode && total > 0 && position.toDouble() / total >= 0.8) {
                 hasScrobbledThisEpisode = true
-                trackerManager?.scrobbleProgress(animeTitle, episode.episodeNumber.toInt())
+                trackerManager?.let { manager ->
+                    scope.launch(Dispatchers.IO) {
+                        val result = manager.scrobbleProgress(animeTitle, episode.episodeNumber.toInt())
+                        result.toToastMessage()?.let { message ->
+                            withContext(Dispatchers.Main) {
+                                val duration = if (result.failures.isNotEmpty()) ToastDuration.LONG else ToastDuration.SHORT
+                                toastHost.show(message, duration)
+                            }
+                        }
+                    }
+                }
             }
 
             historyRepo.add(
