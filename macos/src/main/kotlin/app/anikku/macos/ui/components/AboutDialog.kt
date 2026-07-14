@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Button
@@ -111,6 +112,7 @@ fun AboutDialog(
             shape = RoundedCornerShape(12.dp),
             tonalElevation = 4.dp,
         ) {
+            SelectionContainer {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -322,6 +324,7 @@ fun AboutDialog(
                     Text("Close")
                 }
             }
+            } // End SelectionContainer
         }
     }
 }
