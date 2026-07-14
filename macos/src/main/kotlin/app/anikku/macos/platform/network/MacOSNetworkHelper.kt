@@ -96,6 +96,7 @@ class MacOSNetworkHelper(
                     maxSize = 5L * 1024 * 1024, // 5 MiB
                 ),
             )
+            .dns(FallbackDns)
             .addInterceptor(UserAgentInterceptor(userAgentProvider))
             .addInterceptor(cloudflareInterceptor)
             .addNetworkInterceptor(BrotliInterceptor)

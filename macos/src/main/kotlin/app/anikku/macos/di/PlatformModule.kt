@@ -11,6 +11,7 @@ import app.anikku.macos.platform.network.CloudflareInterceptor
 import app.anikku.macos.platform.network.DiagnosticLoggingInterceptor
 import app.anikku.macos.platform.network.HttpRetryInterceptor
 import app.anikku.macos.platform.network.MacOSCookieJar
+import app.anikku.macos.platform.network.FallbackDns
 import app.anikku.macos.platform.network.MacOSNetworkHelper
 import app.anikku.macos.platform.notification.MacOSNotificationManager
 import app.anikku.macos.platform.preference.MacOSPreferenceStore
@@ -78,6 +79,7 @@ fun platformModule(app: AnikkuApplication) = module {
             preferences = eu.kanade.tachiyomi.network.NetworkPreferences(get<PreferenceStore>()),
             isDebugBuild = false,
             cookieJar = app.cookieJar,
+            dns = FallbackDns,
             extraInterceptors = listOf(
                 // HttpRetryInterceptor handles transient errors (502, 503, 504, 429)
                 // with exponential backoff. It runs BEFORE other interceptors so retries

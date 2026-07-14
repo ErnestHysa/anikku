@@ -14,6 +14,7 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 private val logger = KotlinLogging.logger {}
@@ -72,6 +73,13 @@ object ChromeCDPClient {
      * @param timeoutSeconds Max time to wait for challenge resolution
      * @return Map of cookie name → value, or empty map on failure
      */
+    /**
+     * Maximum number of retry attempts for a single Cloudflare bypass.
+     * Some sites return intermediate challenge pages that require multiple
+     * navigation cycles to resolve (e.g., Turnstile, reCAPTCHA overlay).
+     */
+    private const val MAX_BYPASS_RETRIES = 3
+
     @Synchronized
     fun fetchCloudflareCookies(
         url: String,
@@ -83,37 +91,46 @@ object ChromeCDPClient {
             return emptyMap()
         }
 
-        var process: Process? = null
-        try {
-            // Launch Chrome with remote debugging, parse port from stderr
-            val (chromeProcess, debugPort) = launchChromeWithPort()
-            process = chromeProcess
+        // Try up to MAX_BYPASS_RETRIES times with fresh Chrome instances
+        for (attempt in 1..MAX_BYPASS_RETRIES) {
+            var process: Process? = null
+            try {
+                // Launch Chrome with remote debugging, parse port from stderr
+                val (chromeProcess, debugPort) = launchChromeWithPort()
+                process = chromeProcess
 
-            // Get the WebSocket debugger URL
-            val wsUrl = getDebuggerUrl(debugPort)
-            if (wsUrl == null) {
-                logger.warn { "Failed to get Chrome DevTools URL on port $debugPort" }
-                return emptyMap()
+                // Get the WebSocket debugger URL
+                val wsUrl = getDebuggerUrl(debugPort)
+                if (wsUrl == null) {
+                    logger.warn { "Failed to get Chrome DevTools URL on port $debugPort (attempt $attempt/$MAX_BYPASS_RETRIES)" }
+                    continue
+                }
+
+                // Navigate to URL and wait for Cloudflare challenge to resolve
+                val cookies = navigateAndWait(wsUrl, url, timeoutSeconds)
+                if (cookies.isNotEmpty()) {
+                    logger.info { "✅ Cloudflare bypass succeeded on attempt $attempt/$MAX_BYPASS_RETRIES — got ${cookies.size} cookie(s)" }
+                    return cookies
+                }
+
+                logger.warn { "No Cloudflare cookies found on attempt $attempt/$MAX_BYPASS_RETRIES — challenge may have failed" }
+            } catch (e: Exception) {
+                logger.error(e) { "Cloudflare bypass failed on attempt $attempt/$MAX_BYPASS_RETRIES" }
+            } finally {
+                process?.let {
+                    it.destroyForcibly()
+                    try { it.waitFor(2, TimeUnit.SECONDS) } catch (_: Exception) {}
+                }
             }
 
-            // Navigate to URL and wait for Cloudflare challenge to resolve
-            val cookies = navigateAndWait(wsUrl, url, timeoutSeconds)
-            if (cookies.isNotEmpty()) {
-                logger.info { "✅ Cloudflare bypass succeeded — got ${cookies.size} cookie(s)" }
-            } else {
-                logger.warn { "No Cloudflare cookies found — challenge may have failed" }
-            }
-
-            return cookies
-        } catch (e: Exception) {
-            logger.error(e) { "Cloudflare bypass failed" }
-            return emptyMap()
-        } finally {
-            process?.let {
-                it.destroyForcibly()
-                try { it.waitFor(2, TimeUnit.SECONDS) } catch (_: Exception) {}
+            // Brief pause between retries
+            if (attempt < MAX_BYPASS_RETRIES) {
+                try { Thread.sleep(1500L * attempt) } catch (_: Exception) {}
             }
         }
+
+        logger.warn { "❌ Cloudflare bypass failed after $MAX_BYPASS_RETRIES attempts" }
+        return emptyMap()
     }
 
     // ── Internal ──────────────────────────────────────────────────────
@@ -218,6 +235,12 @@ object ChromeCDPClient {
     /**
      * Navigate to a URL via CDP WebSocket, wait for page load (Cloudflare
      * JS challenge included), then extract cookies via Network.getCookies.
+     *
+     * Uses a multi-phase approach:
+     * 1. Wait for Page.loadEventFired (initial page load complete)
+     * 2. Schedule first cookie fetch after 1.5s
+     * 3. If failed, wait up to [timeoutSeconds] polling Network.getCookies
+     *    every 2s (handles slow challenges that need multiple attempts)
      */
     private fun navigateAndWait(
         wsUrl: String,
@@ -227,6 +250,7 @@ object ChromeCDPClient {
         val latch = CountDownLatch(1)
         val cookies = ConcurrentHashMap<String, String>()
         var messageId = 0
+        val pageLoaded = AtomicBoolean(false)
 
         val ws = httpClient.newWebSocket(
             Request.Builder().url(wsUrl).build(),
@@ -234,6 +258,10 @@ object ChromeCDPClient {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     messageId++
                     webSocket.send("""{"id":$messageId,"method":"Page.enable"}""")
+                    messageId++
+                    webSocket.send(
+                        """{"id":$messageId,"method":"Network.enable"}"""
+                    )
                     messageId++
                     webSocket.send(
                         """{"id":$messageId,"method":"Page.navigate","params":{"url":"$targetUrl"}}"""
@@ -246,9 +274,9 @@ object ChromeCDPClient {
                         val method = msg["method"]?.jsonPrimitive?.content
 
                         // Page fully loaded → Cloudflare JS challenge resolved.
-                        // Schedule cookie fetch after a brief delay to let post-load
-                        // CF JavaScript finish executing.
                         if (method == "Page.loadEventFired") {
+                            pageLoaded.set(true)
+                            // First cookie fetch: wait 1.5s for post-load CF JS
                             scheduleCookieFetch(webSocket, targetUrl, delayMs = 1500)
                         }
 
@@ -258,20 +286,24 @@ object ChromeCDPClient {
                         if (result != null && msgId != null) {
                             val cookiesArray = result.jsonObject["cookies"]?.jsonArray
                             if (cookiesArray != null && cookiesArray.isNotEmpty()) {
+                                var found = false
                                 for (cookieElement in cookiesArray) {
                                     val cookie = cookieElement.jsonObject
                                     val name = cookie["name"]?.jsonPrimitive?.content ?: continue
                                     val value = cookie["value"]?.jsonPrimitive?.content ?: continue
                                     if (name in CLOUDFLARE_COOKIE_NAMES) {
                                         cookies[name] = value
+                                        found = true
                                     }
                                 }
-                                latch.countDown()
-                                webSocket.close(1000, "Cookies extracted")
+                                if (found) {
+                                    latch.countDown()
+                                    webSocket.close(1000, "Cookies extracted")
+                                }
                             }
                         }
 
-                        // Page load error — still try to get cookies (CF may have set them)
+                        // Page load error or stopped — still try to get cookies
                         if (method == "Page.frameStoppedLoading") {
                             scheduleCookieFetch(webSocket, targetUrl, delayMs = 1000)
                         }
@@ -287,7 +319,26 @@ object ChromeCDPClient {
             },
         )
 
+        // Wait for initial cookie fetch or timeout
         val success = latch.await(timeoutSeconds, TimeUnit.SECONDS)
+
+        // If page loaded but no cookies yet, try a few more polling rounds
+        if (cookies.isEmpty() && pageLoaded.get()) {
+            logger.debug { "Page loaded but no CF cookies yet — polling for more time..." }
+            val pollLatch = CountDownLatch(1)
+            val remainingMs = (timeoutSeconds * 1000) - (System.currentTimeMillis() % (timeoutSeconds * 1000))
+            val maxPollMs = remainingMs.coerceAtMost(15000L)
+            val startPoll = System.currentTimeMillis()
+
+            while (cookies.isEmpty() && System.currentTimeMillis() - startPoll < maxPollMs) {
+                val pollId = cookieFetchId.incrementAndGet()
+                ws.send(
+                    """{"id":$pollId,"method":"Network.getCookies","params":{"urls":["$targetUrl"]}}"""
+                )
+                try { Thread.sleep(2000) } catch (_: Exception) { break }
+            }
+        }
+
         if (!success) {
             logger.warn { "Timed out waiting for Cloudflare challenge after ${timeoutSeconds}s" }
             ws.close(1000, "Timeout")

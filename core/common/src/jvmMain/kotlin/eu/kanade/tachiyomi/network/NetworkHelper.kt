@@ -4,6 +4,7 @@ import eu.kanade.tachiyomi.network.interceptor.IgnoreGzipInterceptor
 import eu.kanade.tachiyomi.network.interceptor.UncaughtExceptionInterceptor
 import eu.kanade.tachiyomi.network.interceptor.UserAgentInterceptor
 import okhttp3.CookieJar
+import okhttp3.Dns
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.brotli.BrotliInterceptor
@@ -17,6 +18,9 @@ actual open class NetworkHelper(
     // and diagnostic logging. Extension HTTP calls go through this client.
     private val cookieJar: CookieJar? = null,
     private val extraInterceptors: List<Interceptor> = emptyList(),
+    // macOS: Custom DNS resolver for DoH fallback when system DNS fails.
+    // When set, used as the default DNS before any DoH provider preference.
+    private val dns: Dns? = null,
 ) {
 
     actual val client: OkHttpClient =
@@ -35,6 +39,11 @@ actual open class NetworkHelper(
             .addInterceptor(UserAgentInterceptor(::defaultUserAgentProvider))
             .addNetworkInterceptor(IgnoreGzipInterceptor())
             .addNetworkInterceptor(BrotliInterceptor)
+
+        // macOS/JVM: set custom DNS resolver (e.g., system→DoH fallback)
+        if (dns != null) {
+            builder.dns(dns)
+        }
 
         // macOS/JVM: inject shared cookie jar so Cloudflare bypass cookies
         // obtained by ChromeCDPClient flow through to extension HTTP calls
