@@ -269,6 +269,13 @@ fun SettingsScreen() {
         HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
 
         // =====================================================================
+        // Network
+        // =====================================================================
+        NetworkSettingsPanel()
+
+        HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
+
+        // =====================================================================
         // Tracking
         // =====================================================================
         val trackerManager = LocalTrackerManager.current

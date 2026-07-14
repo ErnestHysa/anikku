@@ -1,14 +1,19 @@
 package app.anikku.macos.platform.network
 
 import app.anikku.macos.platform.storage.MacOSStorageProvider
+import okhttp3.Authenticator
 import okhttp3.Cache
+import okhttp3.Credentials
 import okhttp3.Headers
 import okhttp3.OkHttpClient
 import okhttp3.Response
+import okhttp3.Route
 import okhttp3.brotli.BrotliInterceptor
 import okio.IOException
 import java.io.File
 import java.io.RandomAccessFile
+import java.net.InetSocketAddress
+import java.net.Proxy
 import java.util.concurrent.TimeUnit
 import kotlin.math.pow
 import kotlin.random.Random
@@ -19,12 +24,25 @@ import kotlin.random.Random
  * Uses MacOSStorageProvider for cache directory and MacOSCookieJar for cookies.
  *
  * DoH (DNS-over-HTTPS) providers are the same as the Android version.
+ *
+ * Proxy support:
+ * - HTTP/HTTPS proxy with optional authentication
+ * - SOCKS4/SOCKS5 proxy with optional authentication
+ * - Proxy type, host, port, username/password are read via [proxyProvider]
  */
 class MacOSNetworkHelper(
     private val storageProvider: MacOSStorageProvider,
     private val userAgentProvider: () -> String = { DEFAULT_USER_AGENT },
     private val isDebugBuild: Boolean = false,
 ) {
+
+    /**
+     * Function that returns the current proxy configuration.
+     * Called on every client-build to pick up live changes from Settings.
+     * Default: no proxy.
+     */
+    @Volatile
+    var proxyProvider: () -> ProxyConfig? = { null }
 
     val cookieJar: MacOSCookieJar = MacOSCookieJar(
         cookieFile = File(storageProvider.dataDirectory, "cookies.json"),
@@ -33,12 +51,39 @@ class MacOSNetworkHelper(
     /** Cloudflare bypass interceptor using Chrome CDP for solving JS challenges */
     val cloudflareInterceptor: CloudflareInterceptor = CloudflareInterceptor(cookieJar, userAgentProvider)
 
-    val client: OkHttpClient = buildClient()
+    /**
+     * The active OkHttp client. Use [rebuildClient] to pick up proxy changes.
+     */
+    @Volatile
+    var client: OkHttpClient = buildClient()
+        private set
 
-    private fun buildClient(
+    /**
+     * OkHttp Proxy.Type requires HTTP or SOCKS. Map our ProxyType accordingly.
+     */
+    private fun ProxyType.toOkHttpProxyType(): java.net.Proxy.Type = when (this) {
+        ProxyType.HTTP -> java.net.Proxy.Type.HTTP
+        ProxyType.SOCKS4, ProxyType.SOCKS5 -> java.net.Proxy.Type.SOCKS
+        ProxyType.DISABLED -> java.net.Proxy.Type.DIRECT
+    }
+
+    /**
+     * Rebuild the OkHttp client with the current proxy configuration.
+     * Call this after changing [proxyProvider] to apply proxy changes immediately.
+     */
+    fun rebuildClient(connectTimeout: Long = 30, readTimeout: Long = 60, callTimeout: Long = 180) {
+        client = buildClient(connectTimeout, readTimeout, callTimeout)
+    }
+
+    /**
+     * Build the OkHttp client. Rebuilds from scratch each time so that
+     * proxy settings take effect immediately (requires a new client instance).
+     */
+    fun buildClient(
         connectTimeout: Long = 30,
         readTimeout: Long = 60,
         callTimeout: Long = 180,
+        proxyConfig: ProxyConfig? = null,
     ): OkHttpClient {
         val builder = OkHttpClient.Builder()
             .cookieJar(cookieJar)
@@ -59,7 +104,39 @@ class MacOSNetworkHelper(
         // In debug builds, also logs a summary for all requests.
         builder.addInterceptor(DiagnosticLoggingInterceptor(isDebugBuild))
 
+        // Apply proxy if configured (use explicit config or provider)
+        val config = proxyConfig ?: proxyProvider()
+        if (config != null) {
+            applyProxy(builder, config)
+        }
+
         return builder.build()
+    }
+
+    /**
+     * Apply proxy configuration to the OkHttpClient builder.
+     */
+    private fun applyProxy(builder: OkHttpClient.Builder, config: ProxyConfig) {
+        if (!config.isEnabled) return
+
+        val okHttpProxyType = config.type.toOkHttpProxyType()
+        val proxy = Proxy(okHttpProxyType, InetSocketAddress(config.host, config.port))
+        builder.proxy(proxy)
+
+        // Proxy authentication
+        if (config.username.isNotBlank()) {
+            builder.proxyAuthenticator(object : Authenticator {
+                override fun authenticate(route: Route?, response: Response): okhttp3.Request? {
+                    // Only respond to proxy auth challenges
+                    if (response.code != 407) return null
+                    // Avoid infinite auth loops
+                    val credential = Credentials.basic(config.username, config.password)
+                    return response.request.newBuilder()
+                        .header("Proxy-Authorization", credential)
+                        .build()
+                }
+            })
+        }
     }
 
     /**

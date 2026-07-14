@@ -35,6 +35,9 @@ import app.anikku.macos.platform.auth.LocalTrackerManager
 import app.anikku.macos.platform.auth.TrackerManager
 import app.anikku.macos.platform.auth.TrackerOAuthManager
 import app.anikku.macos.platform.auth.TrackerTokenStore
+import app.anikku.macos.platform.network.ChromeCDPClient
+import app.anikku.macos.platform.network.ProxyConfig
+import app.anikku.macos.platform.network.ProxyType
 import app.anikku.macos.ui.components.LocalToastHost
 import app.anikku.macos.ui.components.ToastHost
 import app.anikku.macos.ui.components.ToastHostState
@@ -82,6 +85,28 @@ fun main() = application {
         state = windowState,
     ) {
         val settingsState = remember { SettingsState(app.preferenceStore) }
+
+        // Wire proxy settings from UI to network helper.
+        // The proxyProvider lambda reads the current settings on every client build.
+        app.networkHelper.proxyProvider = {
+            val type = settingsState.proxyType
+            if (type != ProxyType.DISABLED && settingsState.proxyHost.isNotBlank()) {
+                ProxyConfig(
+                    type = type,
+                    host = settingsState.proxyHost,
+                    port = settingsState.proxyPort,
+                    username = settingsState.proxyUsername,
+                    password = settingsState.proxyPassword,
+                )
+            } else {
+                null
+            }
+        }
+        // Rebuild the client so the proxy takes effect immediately
+        app.networkHelper.rebuildClient()
+
+        // Wire Chrome path from settings to CDP client
+        ChromeCDPClient.customChromePath = settingsState.chromePath
         val bookmarkStore = remember { BookmarkStore(app.preferenceStore) }
         val libraryRepository = remember { app.libraryRepository }
         val historyRepository = remember { app.historyRepository }

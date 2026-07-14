@@ -2,6 +2,7 @@ package app.anikku.macos.ui.settings
 
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.mutableStateOf
+import app.anikku.macos.platform.network.ProxyType
 import app.anikku.macos.platform.preference.MacOSPreferenceStore
 import app.anikku.macos.ui.theme.AnikkuTheme
 
@@ -27,6 +28,11 @@ enum class ThemeMode {
     DARK,
 }
 
+/**
+ * Proxy type enum is defined in app.anikku.macos.platform.network.ProxyType
+ * for shared use between settings and network infrastructure.
+ */
+
 class SettingsState(
     private val preferenceStore: MacOSPreferenceStore? = null,
 ) {
@@ -45,6 +51,14 @@ class SettingsState(
         // Download settings
         private const val KEY_DOWNLOAD_WIFI_ONLY = "download_wifi_only"
         private const val KEY_SIMULTANEOUS_DOWNLOADS = "simultaneous_downloads"
+
+        // Network settings
+        private const val KEY_PROXY_TYPE = "proxy_type"
+        private const val KEY_PROXY_HOST = "proxy_host"
+        private const val KEY_PROXY_PORT = "proxy_port"
+        private const val KEY_PROXY_USERNAME = "proxy_username"
+        private const val KEY_PROXY_PASSWORD = "proxy_password"
+        private const val KEY_CHROME_PATH = "chrome_path"
     }
 
     private val themePref = preferenceStore?.getString(KEY_THEME, AnikkuTheme.Theme.DEFAULT.name)
@@ -161,6 +175,100 @@ class SettingsState(
             _simultaneousDownloads.value = clamped
             simultaneousPref?.set(clamped)
         }
+
+    // -------------------------------------------------------------------------
+    // Network settings
+    // -------------------------------------------------------------------------
+
+    private val proxyTypePref = preferenceStore?.getString(KEY_PROXY_TYPE, ProxyType.DISABLED.name)
+    private val _proxyType = mutableStateOf(ProxyType.valueOf(proxyTypePref?.get() ?: ProxyType.DISABLED.name))
+
+    /** Proxy type: DISABLED, HTTP, SOCKS4, SOCKS5. */
+    var proxyType: ProxyType
+        get() = _proxyType.value
+        set(value) {
+            _proxyType.value = value
+            proxyTypePref?.set(value.name)
+        }
+
+    private val proxyHostPref = preferenceStore?.getString(KEY_PROXY_HOST, "")
+    private val _proxyHost = mutableStateOf(proxyHostPref?.get() ?: "")
+
+    /** Proxy hostname or IP address. */
+    var proxyHost: String
+        get() = _proxyHost.value
+        set(value) {
+            _proxyHost.value = value
+            proxyHostPref?.set(value)
+        }
+
+    private val proxyPortPref = preferenceStore?.getInt(KEY_PROXY_PORT, 8080)
+    private val _proxyPort = mutableStateOf(proxyPortPref?.get() ?: 8080)
+
+    /** Proxy port number. */
+    var proxyPort: Int
+        get() = _proxyPort.value
+        set(value) {
+            _proxyPort.value = value
+            proxyPortPref?.set(value)
+        }
+
+    private val proxyUsernamePref = preferenceStore?.getString(KEY_PROXY_USERNAME, "")
+    private val _proxyUsername = mutableStateOf(proxyUsernamePref?.get() ?: "")
+
+    /** Proxy authentication username. */
+    var proxyUsername: String
+        get() = _proxyUsername.value
+        set(value) {
+            _proxyUsername.value = value
+            proxyUsernamePref?.set(value)
+        }
+
+    private val proxyPasswordPref = preferenceStore?.getString(KEY_PROXY_PASSWORD, "")
+    private val _proxyPassword = mutableStateOf(proxyPasswordPref?.get() ?: "")
+
+    /** Proxy authentication password. */
+    var proxyPassword: String
+        get() = _proxyPassword.value
+        set(value) {
+            _proxyPassword.value = value
+            proxyPasswordPref?.set(value)
+        }
+
+    private val chromePathPref = preferenceStore?.getString(KEY_CHROME_PATH, "")
+    private val _chromePath = mutableStateOf(chromePathPref?.get() ?: "")
+
+    /**
+     * Custom Chrome/Chromium executable path. Empty = auto-detect.
+     * macOS default: /Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+     */
+    var chromePath: String
+        get() = _chromePath.value
+        set(value) {
+            _chromePath.value = value
+            chromePathPref?.set(value)
+        }
+
+    /**
+     * Resolve the effective Chrome executable path.
+     * Returns user-configured path if set, otherwise auto-detects from standard install locations.
+     */
+    fun resolveChromePath(): String {
+        if (_chromePath.value.isNotBlank()) return _chromePath.value
+        // Standard macOS Chrome location
+        val standardPath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        if (java.io.File(standardPath).isFile) return standardPath
+        // Chromium via Homebrew
+        val chromiumPath = "/opt/homebrew/bin/chromium"
+        if (java.io.File(chromiumPath).isFile) return chromiumPath
+        // Brave
+        val bravePath = "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"
+        if (java.io.File(bravePath).isFile) return bravePath
+        // Microsoft Edge
+        val edgePath = "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
+        if (java.io.File(edgePath).isFile) return edgePath
+        return standardPath
+    }
 
     /**
      * Resolve the effective dark mode from the theme mode and system preference.

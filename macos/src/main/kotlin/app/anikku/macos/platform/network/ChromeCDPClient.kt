@@ -46,10 +46,22 @@ object ChromeCDPClient {
         .readTimeout(10, TimeUnit.SECONDS)
         .build()
 
-    /** Is Chrome installed at the standard macOS path? */
-    val isChromeInstalled: Boolean by lazy {
-        chromeExecutable().isFile
-    }
+    /**
+     * Custom Chrome/Chromium executable path. Set before calling [fetchCloudflareCookies].
+     * If empty, auto-detects from standard install locations:
+     * 1. /Applications/Google Chrome.app (default)
+     * 2. /opt/homebrew/bin/chromium (Homebrew Chromium)
+     * 3. /Applications/Brave Browser.app
+     * 4. /Applications/Microsoft Edge.app
+     */
+    @Volatile
+    var customChromePath: String = ""
+
+    /**
+     * Is Chrome (or alternative browser) installed?
+     * Computed property (not lazy) so [customChromePath] set after object init is respected.
+     */
+    val isChromeInstalled: Boolean get() = chromeExecutable().isFile
 
     /**
      * Fetch Cloudflare bypass cookies for a URL.
@@ -107,7 +119,25 @@ object ChromeCDPClient {
     // ── Internal ──────────────────────────────────────────────────────
 
     private fun chromeExecutable(): File {
-        return File("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+        // Custom path takes priority
+        if (customChromePath.isNotBlank()) {
+            val customFile = File(customChromePath)
+            if (customFile.isFile) return customFile
+        }
+        // Standard macOS Chrome location
+        val standardPath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        if (File(standardPath).isFile) return File(standardPath)
+        // Chromium via Homebrew
+        val chromiumPath = "/opt/homebrew/bin/chromium"
+        if (File(chromiumPath).isFile) return File(chromiumPath)
+        // Brave
+        val bravePath = "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"
+        if (File(bravePath).isFile) return File(bravePath)
+        // Microsoft Edge
+        val edgePath = "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
+        if (File(edgePath).isFile) return File(edgePath)
+        // Fallback
+        return File(standardPath)
     }
 
     /**
