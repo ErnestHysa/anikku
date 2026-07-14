@@ -60,6 +60,7 @@ import app.anikku.macos.player.MPVSoftwareRenderer
 import app.anikku.macos.player.MPVVideoSurface
 import app.anikku.macos.player.PlaybackState
 import app.anikku.macos.player.PlayerViewModel
+import app.anikku.macos.platform.auth.LocalTrackerManager
 import app.anikku.macos.platform.data.HistoryRepository
 import app.anikku.macos.platform.data.LocalDownloadManager
 import app.anikku.macos.platform.data.LocalHistoryRepository
@@ -224,6 +225,7 @@ data class PlayerScreen(
         val navigator = LocalNavigator.currentOrThrow
         val toastHost = LocalToastHost.current
         val historyRepo = LocalHistoryRepository.current
+        val trackerManager = LocalTrackerManager.current
 
         // Initialize the player view model (Phase 6)
         val playerViewModel = remember { PlayerViewModel() }
@@ -281,6 +283,7 @@ data class PlayerScreen(
         var isOfflinePlayback by remember { mutableStateOf(false) }
         var resolutionStatusText by remember { mutableStateOf("Connecting...") }
         var videoResolutionError by remember { mutableStateOf<String?>(null) }
+        var hasScrobbledThisEpisode by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
 
         UIActionLogger.logScreenOpen("PlayerScreen", mapOf(
@@ -399,6 +402,15 @@ data class PlayerScreen(
         // Save resume position to history
         fun saveResumePosition(episode: EpisodeModel?, position: Long, total: Long) {
             if (episode == null || position <= 0) return
+
+            // Scrobble progress to linked trackers when the user has watched
+            // at least 80% of the episode or reached the end. Guard with a flag
+            // so we only hit the tracker APIs once per episode.
+            if (!hasScrobbledThisEpisode && total > 0 && position.toDouble() / total >= 0.8) {
+                hasScrobbledThisEpisode = true
+                trackerManager?.scrobbleProgress(animeTitle, episode.episodeNumber.toInt())
+            }
+
             historyRepo.add(
                 HistoryRepository.HistoryEntry(
                     animeId = animeId,

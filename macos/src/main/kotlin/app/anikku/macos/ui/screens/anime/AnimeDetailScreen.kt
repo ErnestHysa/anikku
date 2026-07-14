@@ -75,6 +75,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import app.anikku.macos.platform.MacOSShareUtil
+import app.anikku.macos.platform.auth.LocalTrackerManager
 import app.anikku.macos.platform.data.DownloadRepository
 import app.anikku.macos.platform.data.LibraryRepository
 import app.anikku.macos.platform.data.LocalDownloadManager
@@ -155,6 +156,7 @@ data class AnimeDetailScreen(
         val toastHost = LocalToastHost.current
         val bookmarkStore = LocalBookmarkStore.current
         val libraryRepo = LocalLibraryRepository.current
+        val trackerManager = LocalTrackerManager.current
         val effectiveDownloadManager = downloadManager ?: LocalDownloadManager.current
         val focusRequester = remember { FocusRequester() }
 
@@ -354,6 +356,12 @@ data class AnimeDetailScreen(
                             } else {
                                 episodes = episodes.map { it.copy(seen = true) }
                                 toastHost.show("Marked $unseenCount episodes as seen", ToastDuration.SHORT)
+                                episodes.maxByOrNull { it.episodeNumber }?.let { lastEp ->
+                                    trackerManager?.scrobbleProgress(
+                                        anime?.title ?: animeTitle ?: "",
+                                        lastEp.episodeNumber.toInt(),
+                                    )
+                                }
                             }
                         },
                         onShare = {
