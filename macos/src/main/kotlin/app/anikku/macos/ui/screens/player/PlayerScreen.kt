@@ -89,6 +89,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+import javax.net.ssl.SSLException
 
 private val logger = KotlinLogging.logger {}
 
@@ -218,6 +222,162 @@ data class PlayerScreen(
      * @property headers Optional HTTP headers (Referer, User-Agent, etc.) needed by mpv
      * @property candidateIndex The index in the [VideoCandidate] list that was selected
      */
+    /**
+     * Diagnostic error classification that tells the user WHY the video
+     * resolution failed in plain English, with a suggestion for how to
+     * resolve the issue.
+     */
+    data class ErrorDiagnostic(
+        val title: String,
+        val description: String,
+        val suggestion: String,
+        val category: ErrorCategory = ErrorCategory.OTHER,
+    ) {
+        enum class ErrorCategory {
+            DNS,            // Domain name not found
+            SSL,            // SSL/TLS certificate error
+            TIMEOUT,        // Connection/read timeout
+            FORBIDDEN,      // HTTP 403 — blocked
+            NOT_FOUND,      // HTTP 404 — API changed
+            SERVER_ERROR,   // HTTP 5xx — server down
+            CONNECTION,     // Connection refused / network error
+            EMPTY_RESULT,   // Source returned no videos
+            EMBED_URL,      // Source returned embed page instead of video
+            API_CHANGED,    // Extension API format doesn't match source
+            OTHER,          // Unclassified
+        }
+
+        companion object {
+            /**
+             * Classify an exception into a user-friendly diagnostic.
+             * @param e The exception thrown during video resolution
+             * @param sourceName Optional source name for context in the suggestion
+             */
+            fun fromException(e: Exception, sourceName: String? = null): ErrorDiagnostic {
+                val source = sourceName ?: "this source"
+
+                return when (e) {
+                    is UnknownHostException -> ErrorDiagnostic(
+                        title = "DNS Resolution Failed",
+                        description = "The domain for $source could not be found. This usually means the website is down, has moved to a new address, or your DNS resolver can't reach it.",
+                        suggestion = "Try a different source extension. If the site recently changed domains, the extension may need to be updated.",
+                        category = ErrorCategory.DNS,
+                    )
+                    is SSLException, is javax.net.ssl.SSLHandshakeException -> ErrorDiagnostic(
+                        title = "SSL/TLS Error",
+                        description = "$source returned an SSL certificate error. The website's security certificate may have expired or is invalid.",
+                        suggestion = "Try a different source. If you trust this site, check if it's accessible in a browser.",
+                        category = ErrorCategory.SSL,
+                    )
+                    is SocketTimeoutException, is java.util.concurrent.TimeoutException -> ErrorDiagnostic(
+                        title = "Connection Timed Out",
+                        description = "The request to $source timed out. The server may be overloaded or unreachable from your network.",
+                        suggestion = "Check your internet connection and try again. The source may be temporarily down.",
+                        category = ErrorCategory.TIMEOUT,
+                    )
+                    is ConnectException -> ErrorDiagnostic(
+                        title = "Connection Refused",
+                        description = "$source actively refused the connection. The server may be down or blocking requests from this app.",
+                        suggestion = "Try again later, or use a different source extension.",
+                        category = ErrorCategory.CONNECTION,
+                    )
+                    else -> {
+                        // Try to classify by error message patterns
+                        val msg = e.message ?: ""
+                        val lowerMsg = msg.lowercase()
+                        when {
+                            lowerMsg.contains("403") || lowerMsg.contains("forbidden") ->
+                                ErrorDiagnostic(
+                                    title = "Access Forbidden (HTTP 403)",
+                                    description = "$source is blocking the request. This is often due to Cloudflare protection or region restrictions.",
+                                    suggestion = "Try enabling a proxy in Network Settings, or use a different source.",
+                                    category = ErrorCategory.FORBIDDEN,
+                                )
+                            lowerMsg.contains("404") || lowerMsg.contains("not found") ->
+                                ErrorDiagnostic(
+                                    title = "Page Not Found (HTTP 404)",
+                                    description = "The video API endpoint for $source returned a 'not found' error. The source's API may have changed.",
+                                    suggestion = "This source's video API has likely changed and the extension needs to be updated. Try a different source.",
+                                    category = ErrorCategory.NOT_FOUND,
+                                )
+                            lowerMsg.contains("5") && (lowerMsg.contains("server") || lowerMsg.contains("gateway") || lowerMsg.contains("503") || lowerMsg.contains("502") || lowerMsg.contains("520")) ->
+                                ErrorDiagnostic(
+                                    title = "Server Error (HTTP 5xx)",
+                                    description = "$source's server returned a server error. The site may be temporarily down or overloaded.",
+                                    suggestion = "Try again later, or use a different source.",
+                                    category = ErrorCategory.SERVER_ERROR,
+                                )
+                            lowerMsg.contains("embed") || lowerMsg.contains("player") || lowerMsg.contains("iframe") ->
+                                ErrorDiagnostic(
+                                    title = "Embed Page Instead of Video",
+                                    description = "$source returned a player/embed page URL instead of a direct video stream. This extension needs an update to extract video URLs from the embed page.",
+                                    suggestion = "Try a different source that returns direct video URLs.",
+                                    category = ErrorCategory.EMBED_URL,
+                                )
+                            lowerMsg.contains("cloudflare") || lowerMsg.contains("cf-") || lowerMsg.contains("checking your browser") ->
+                                ErrorDiagnostic(
+                                    title = "Cloudflare Challenge Detected",
+                                    description = "$source is protected by Cloudflare and requires a JavaScript challenge to be solved.",
+                                    suggestion = "The app will try to bypass Cloudflare automatically using Chrome. Press Retry or enable Chrome in Network Settings.",
+                                    category = ErrorCategory.FORBIDDEN,
+                                )
+                            lowerMsg.contains("empty") || lowerMsg.contains("no videos") ->
+                                ErrorDiagnostic(
+                                    title = "No Videos Available",
+                                    description = "$source returned an empty video list for this episode. The episode may not be available on this source.",
+                                    suggestion = "Try a different episode or a different source.",
+                                    category = ErrorCategory.EMPTY_RESULT,
+                                )
+                            else ->
+                                ErrorDiagnostic(
+                                    title = "Video Resolution Failed",
+                                    description = "An unexpected error occurred while resolving the video URL from $source: ${e::class.simpleName ?: "Unknown error"}",
+                                    suggestion = "Check the app logs for details. Try a different source or retry.",
+                                    category = ErrorCategory.OTHER,
+                                )
+                        }
+                    }
+                }
+            }
+
+            /** Fallback diagnostic for when no exception is available (e.g., empty video list). */
+            fun fromMessage(message: String, sourceName: String? = null): ErrorDiagnostic {
+                val source = sourceName ?: "this source"
+                val lowerMsg = message.lowercase()
+                return when {
+                    lowerMsg.contains("no videos") || lowerMsg.contains("empty") ->
+                        ErrorDiagnostic(
+                            title = "No Videos Available",
+                            description = "$source returned an empty video list for this episode.",
+                            suggestion = "Try a different episode or a different source.",
+                            category = ErrorCategory.EMPTY_RESULT,
+                        )
+                    lowerMsg.contains("embed") || lowerMsg.contains("player") ->
+                        ErrorDiagnostic(
+                            title = "Embed Page Instead of Video",
+                            description = "$source returned embed page URLs instead of direct video streams.",
+                            suggestion = "Try a different source that returns direct video URLs.",
+                            category = ErrorCategory.EMBED_URL,
+                        )
+                    lowerMsg.contains("remaining") || lowerMsg.contains("all candidate") ->
+                        ErrorDiagnostic(
+                            title = "All Video Qualities Rejected",
+                            description = "Every available video quality from $source was checked and rejected. The extension may need an update.",
+                            suggestion = "Try a different source, or check if the source website is accessible in a browser.",
+                            category = ErrorCategory.API_CHANGED,
+                        )
+                    else ->
+                        ErrorDiagnostic(
+                            title = "Video Resolution Failed",
+                            description = "$source was unable to provide a playable video URL for this episode: $message",
+                            suggestion = "Try retrying, or use a different source.",
+                            category = ErrorCategory.OTHER,
+                        )
+                }
+            }
+        }
+    }
+
     data class ResolveResult(
         val url: String,
         val headers: Map<String, String>? = null,
@@ -242,6 +402,7 @@ data class PlayerScreen(
      * @param startIndex Index in the ordered video list to start from (0 = first quality).
      * @param onCandidateList Called with the full list of available video candidates.
      * @param onError Called when resolution fails with an error message.
+     * @param onDiagnostic Called with a classified [ErrorDiagnostic] describing the failure cause.
      * @return A [ResolveResult] with the video URL and headers, or null if all videos fail.
      */
     private suspend fun resolveVideoUrl(
@@ -251,6 +412,7 @@ data class PlayerScreen(
         startIndex: Int = 0,
         onCandidateList: (List<VideoCandidate>) -> Unit = {},
         onError: ((String) -> Unit)? = null,
+        onDiagnostic: ((ErrorDiagnostic) -> Unit)? = null,
     ): ResolveResult? {
         // Priority 1: Local download
         if (downloadManager != null && episodeNumber > 0) {
@@ -348,13 +510,19 @@ data class PlayerScreen(
                             "All video streams from this source appear to be embed pages — try a different source"
                         }
                         onError?.invoke(msg)
+                        onDiagnostic?.invoke(ErrorDiagnostic.fromMessage(msg, source.name))
                     } else {
                         UIActionLogger.logVideoResolution(sourceId, currentEpisodeUrl, "no_videos_found")
-                        onError?.invoke("Source returned no videos for this episode")
+                        val msg = "Source returned no videos for this episode"
+                        onError?.invoke(msg)
+                        onDiagnostic?.invoke(ErrorDiagnostic.fromMessage(msg, source.name))
                     }
                 } catch (e: Exception) {
                     UIActionLogger.logVideoResolution(sourceId, currentEpisodeUrl, "error: ${e::class.simpleName}: ${e.message?.take(50)}")
-                    onError?.invoke("Video resolution failed: ${e.message?.take(60)}")
+                    val sourceName = try { source.name } catch (_: Exception) { null }
+                    val diag = ErrorDiagnostic.fromException(e, sourceName)
+                    onDiagnostic?.invoke(diag)
+                    onError?.invoke("${diag.title}: ${e.message?.take(40)}")
                     // Fall through
                 }
             }
@@ -431,6 +599,7 @@ data class PlayerScreen(
         var isOfflinePlayback by remember { mutableStateOf(false) }
         var resolutionStatusText by remember { mutableStateOf("Connecting...") }
         var videoResolutionError by remember { mutableStateOf<String?>(null) }
+        var videoErrorDiagnostic by remember { mutableStateOf<ErrorDiagnostic?>(null) }
         var hasScrobbledThisEpisode by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
 
@@ -510,6 +679,9 @@ data class PlayerScreen(
                 onError = { msg ->
                     videoResolutionError = msg
                     toastHost.show(msg, ToastDuration.LONG)
+                },
+                onDiagnostic = { diag ->
+                    videoErrorDiagnostic = diag
                 },
             )
             isResolvingVideo = false
@@ -655,6 +827,9 @@ data class PlayerScreen(
                         videoResolutionError = msg
                         toastHost.show(msg, ToastDuration.LONG)
                     },
+                    onDiagnostic = { diag ->
+                        videoErrorDiagnostic = diag
+                    },
                 )
                 isResolvingVideo = false
                 isLoading = false
@@ -773,6 +948,7 @@ data class PlayerScreen(
             isResolvingVideo = isResolvingVideo,
             resolutionStatusText = resolutionStatusText,
             videoResolutionError = videoResolutionError,
+            videoErrorDiagnostic = videoErrorDiagnostic,
             videoQualityResolution = videoQualityResolution,
             videoQualityLabel = videoQualityLabel,
             isLoading = isLoading,
@@ -814,6 +990,9 @@ data class PlayerScreen(
                                 videoCandidates = candidates
                             },
                             onError = { msg -> toastHost.show(msg, ToastDuration.LONG) },
+                            onDiagnostic = { diag ->
+                                videoErrorDiagnostic = diag
+                            },
                         )
                         if (resolved != null) {
                             resolvedVideo = VideoResolution(url = resolved.url, headers = resolved.headers)
@@ -878,6 +1057,7 @@ private fun PlayerContent(
     isResolvingVideo: Boolean = false,
     resolutionStatusText: String = "",
     videoResolutionError: String? = null,
+    videoErrorDiagnostic: PlayerScreen.ErrorDiagnostic? = null,
     isLive: Boolean = false,
     videoQualityResolution: Int? = null,
     videoQualityLabel: String? = null,
@@ -1094,24 +1274,54 @@ private fun PlayerContent(
                 }
                 Spacer(Modifier.height(16.dp))
                 Text(
-                    "Could not resolve video URL",
+                    videoErrorDiagnostic?.title ?: "Could not resolve video URL",
                     style = MaterialTheme.typography.bodyLarge,
                     color = Color.White.copy(alpha = 0.6f),
                     fontWeight = FontWeight.Bold,
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "This extension's video API may differ from what the app expects. Try a different source.",
+                    videoErrorDiagnostic?.description ?: "This extension's video API may differ from what the app expects. Try a different source.",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.White.copy(alpha = 0.3f),
                     modifier = Modifier.padding(horizontal = 32.dp),
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Check logs (~/Library/Application Support/Anikku/logs/actions.log) for details.",
+                    "💡 ${videoErrorDiagnostic?.suggestion ?: "Check logs (~/Library/Application Support/Anikku/logs/actions.log) for details."}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color.White.copy(alpha = 0.2f),
+                    color = Color(0xFF4ECCA3).copy(alpha = 0.5f),
+                    modifier = Modifier.padding(horizontal = 32.dp),
                 )
+                videoErrorDiagnostic?.let { diag ->
+                    Spacer(Modifier.height(12.dp))
+                    // Category badge
+                    val categoryLabel = when (diag.category) {
+                        PlayerScreen.ErrorDiagnostic.ErrorCategory.DNS -> "🌐 DNS Error"
+                        PlayerScreen.ErrorDiagnostic.ErrorCategory.SSL -> "🔒 SSL Error"
+                        PlayerScreen.ErrorDiagnostic.ErrorCategory.TIMEOUT -> "⏱ Timeout"
+                        PlayerScreen.ErrorDiagnostic.ErrorCategory.FORBIDDEN -> "🚫 Blocked"
+                        PlayerScreen.ErrorDiagnostic.ErrorCategory.NOT_FOUND -> "🔍 Not Found"
+                        PlayerScreen.ErrorDiagnostic.ErrorCategory.SERVER_ERROR -> "⚠ Server Error"
+                        PlayerScreen.ErrorDiagnostic.ErrorCategory.CONNECTION -> "🔌 Connection Error"
+                        PlayerScreen.ErrorDiagnostic.ErrorCategory.EMPTY_RESULT -> "📭 Empty Result"
+                        PlayerScreen.ErrorDiagnostic.ErrorCategory.EMBED_URL -> "📄 Embed Page"
+                        PlayerScreen.ErrorDiagnostic.ErrorCategory.API_CHANGED -> "🔧 API Changed"
+                        PlayerScreen.ErrorDiagnostic.ErrorCategory.OTHER -> "❓ Unknown"
+                    }
+                    Surface(
+                        shape = MaterialTheme.shapes.small,
+                        color = Color.White.copy(alpha = 0.06f),
+                        tonalElevation = 0.dp,
+                    ) {
+                        Text(
+                            categoryLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.4f),
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
+                        )
+                    }
+                }
                 Spacer(Modifier.height(24.dp))
 
                 // Action buttons: Back, Retry, and (if available) Try Different Quality
