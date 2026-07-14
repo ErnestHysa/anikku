@@ -41,31 +41,17 @@ object UrlUtils {
                 }
 
                 // Rebuild base URL with the parent path (preserves scheme + host)
-                val basePath = baseHttpUrl.newBuilder().apply {
-                    encodedPath = parentPath
-                    query(null)
-                    fragment(null)
-                }.build().toString()
+                // Note: HttpUrl.Builder.encodedPath() is a method, not a property setter
+                val basePath = baseHttpUrl.newBuilder()
+                    .encodedPath(parentPath)
+                    .query(null)
+                    .fragment(null)
+                    .build()
+                    .toString()
 
                 basePath + normalizedUrl.trimStart('/')
             }
         }
     }
 
-    /**
-     * Normalize an anime or episode URL to ensure it starts with '/' if it's a relative path.
-     * This prevents malformed URLs when concatenated with a base URL (e.g. baseUrl + path).
-     *
-     * Extensions typically store relative paths (without domain) for anime/episode URLs.
-     * These should always start with '/' for correct baseUrl concatenation.
-     *
-     * @param url The URL or path to normalize
-     * @return A normalized URL string that starts with '/' if it's a relative path
-     */
-    fun normalizeRelativePath(url: String): String {
-        if (url.startsWith("http") || url.startsWith("//") || url.startsWith("/")) {
-            return url
-        }
-        return "/$url"
-    }
 }
