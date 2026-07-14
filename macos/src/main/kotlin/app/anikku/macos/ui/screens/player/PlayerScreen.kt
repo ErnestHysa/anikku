@@ -348,7 +348,7 @@ data class PlayerScreen(
                 downloadManager.isDownloaded(animeId, currentEpisodeNumber)
 
             if (resolved != null) {
-                this.resolvedVideo = resolved
+                resolvedVideo = resolved
                 resolutionStatusText = "Video resolved — loading into player..."
             } else if (!usedSource && allEpisodes.isEmpty()) {
                 // No source data available — show loading completed with no video
@@ -502,7 +502,7 @@ data class PlayerScreen(
                             onError = { msg -> toastHost.show(msg, ToastDuration.LONG) },
                         )
                         if (resolved != null) {
-                            this.resolvedVideo = resolved
+                            resolvedVideo = resolved
                         } else if (sourceId != null && episode.url != null) {
                             // Fall back to source API — build full SEpisode from EpisodeModel
                             val source = extensionManager?.getSource(sourceId)
@@ -530,7 +530,7 @@ data class PlayerScreen(
                                                 map
                                             } ?: mapOf("User-Agent" to DEFAULT_USER_AGENT)
                                         } catch (_: Exception) { null }
-                                        this.resolvedVideo = VideoResolution(url = best.videoUrl, headers = fallbackHeaders)
+                                        resolvedVideo = VideoResolution(url = best.videoUrl, headers = fallbackHeaders)
                                     }
                                 } catch (_: Exception) {
                                     toastHost.show("Failed to load episode", ToastDuration.SHORT)
