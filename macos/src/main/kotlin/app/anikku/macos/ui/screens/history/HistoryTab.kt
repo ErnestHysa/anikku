@@ -38,9 +38,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.anikku.macos.platform.data.HistoryRepository
 import app.anikku.macos.platform.data.LocalHistoryRepository
+import app.anikku.macos.platform.extension.LocalExtensionManager
 import app.anikku.macos.ui.AnikkuScreen
 import app.anikku.macos.ui.components.LocalToastHost
 import app.anikku.macos.ui.components.ToastDuration
+import app.anikku.macos.ui.screens.anime.AnimeDetailScreen
+import cafe.adriel.voyager.navigator.LocalNavigator
+import cafe.adriel.voyager.navigator.currentOrThrow
 import cafe.adriel.voyager.navigator.tab.Tab
 import cafe.adriel.voyager.navigator.tab.TabOptions
 import java.text.SimpleDateFormat
@@ -57,24 +61,44 @@ object HistoryTab : AnikkuScreen(), Tab {
 
     @Composable
     override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
         val toastHost = LocalToastHost.current
         val historyRepo = LocalHistoryRepository.current
+        val extensionManager = LocalExtensionManager.current
         var history by remember { mutableStateOf(historyRepo.getAll()) }
 
         HistoryContent(
             history = history.map { entry ->
                 HistoryItemData(
                     id = entry.episodeId,
+                    animeId = entry.animeId,
                     animeTitle = entry.animeTitle,
                     episodeName = entry.episodeName,
                     episodeNumber = entry.episodeNumber,
                     seenAt = entry.seenAt,
+                    sourceId = entry.sourceId,
+                    animeUrl = entry.animeUrl,
                 )
             },
             onClearAll = {
                 historyRepo.clearAll()
                 history = emptyList()
                 toastHost.show("History cleared", ToastDuration.SHORT)
+            },
+            onAnimeClick = { item ->
+                if (item.sourceId != 0L && !item.animeUrl.isNullOrBlank()) {
+                    navigator.push(
+                        AnimeDetailScreen(
+                            animeId = item.animeId,
+                            sourceId = item.sourceId,
+                            animeUrl = item.animeUrl,
+                            animeTitle = item.animeTitle,
+                            extensionManager = extensionManager,
+                        )
+                    )
+                } else {
+                    toastHost.show("Cannot resume — source information missing", ToastDuration.SHORT)
+                }
             },
         )
     }
@@ -90,16 +114,20 @@ object HistoryTab : AnikkuScreen(), Tab {
 
 data class HistoryItemData(
     val id: Long,
+    val animeId: Long = 0L,
     val animeTitle: String,
     val episodeName: String,
     val episodeNumber: Double,
     val seenAt: Long,
+    val sourceId: Long = 0L,
+    val animeUrl: String? = null,
 )
 
 @Composable
 private fun HistoryContent(
     history: List<HistoryItemData>,
     onClearAll: () -> Unit = {},
+    onAnimeClick: (HistoryItemData) -> Unit = {},
 ) {
     if (history.isEmpty()) {
         Box(
@@ -154,14 +182,17 @@ private fun HistoryContent(
                 items = history,
                 key = { it.id },
             ) { entry ->
-                HistoryItem(entry = entry)
+                HistoryItem(entry = entry, onClick = { onAnimeClick(entry) })
             }
         }
     }
 }
 
 @Composable
-private fun HistoryItem(entry: HistoryItemData) {
+private fun HistoryItem(
+    entry: HistoryItemData,
+    onClick: () -> Unit = {},
+) {
     val dateFormat = remember { SimpleDateFormat("MMM d, yyyy 'at' HH:mm", Locale.getDefault()) }
 
     Card(
@@ -170,6 +201,7 @@ private fun HistoryItem(entry: HistoryItemData) {
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         ),
+        onClick = onClick,
     ) {
         Row(
             modifier = Modifier

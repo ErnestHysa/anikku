@@ -35,6 +35,16 @@ class SettingsState(
         private const val KEY_THEME = "theme"
         private const val KEY_AMOLED_OLED = "amoled_oled"
         private const val KEY_THEME_MODE = "theme_mode"
+
+        // Player settings
+        private const val KEY_AUTO_PLAY_NEXT = "auto_play_next"
+        private const val KEY_RESUME_FROM_LAST = "resume_from_last"
+        private const val KEY_SKIP_INTRO = "skip_intro"
+        private const val KEY_DEFAULT_SPEED = "default_playback_speed"
+
+        // Download settings
+        private const val KEY_DOWNLOAD_WIFI_ONLY = "download_wifi_only"
+        private const val KEY_SIMULTANEOUS_DOWNLOADS = "simultaneous_downloads"
     }
 
     private val themePref = preferenceStore?.getString(KEY_THEME, AnikkuTheme.Theme.DEFAULT.name)
@@ -75,6 +85,81 @@ class SettingsState(
         set(value) {
             _themeMode.value = value
             themeModePref?.set(value.name)
+        }
+
+    // -------------------------------------------------------------------------
+    // Player settings
+    // -------------------------------------------------------------------------
+
+    private val autoPlayPref = preferenceStore?.getBoolean(KEY_AUTO_PLAY_NEXT, true)
+    private val _autoPlayNext = mutableStateOf(autoPlayPref?.get() ?: true)
+
+    /** Whether to automatically play the next episode when the current one ends. */
+    var autoPlayNextEpisode: Boolean
+        get() = _autoPlayNext.value
+        set(value) {
+            _autoPlayNext.value = value
+            autoPlayPref?.set(value)
+        }
+
+    private val resumePref = preferenceStore?.getBoolean(KEY_RESUME_FROM_LAST, true)
+    private val _resumeFromLast = mutableStateOf(resumePref?.get() ?: true)
+
+    /** Whether to resume playback from the last watched position. */
+    var resumeFromLastPosition: Boolean
+        get() = _resumeFromLast.value
+        set(value) {
+            _resumeFromLast.value = value
+            resumePref?.set(value)
+        }
+
+    private val skipIntroPref = preferenceStore?.getBoolean(KEY_SKIP_INTRO, false)
+    private val _skipIntro = mutableStateOf(skipIntroPref?.get() ?: false)
+
+    /** Whether to skip intros when chapter markers are available. */
+    var skipIntro: Boolean
+        get() = _skipIntro.value
+        set(value) {
+            _skipIntro.value = value
+            skipIntroPref?.set(value)
+        }
+
+    private val defaultSpeedPref = preferenceStore?.getFloat(KEY_DEFAULT_SPEED, 1.0f)
+    private val _defaultSpeed = mutableStateOf(defaultSpeedPref?.get() ?: 1.0f)
+
+    /** Default playback speed (1.0 = normal). */
+    var defaultPlaybackSpeed: Float
+        get() = _defaultSpeed.value
+        set(value) {
+            _defaultSpeed.value = value
+            defaultSpeedPref?.set(value)
+        }
+
+    // -------------------------------------------------------------------------
+    // Download settings
+    // -------------------------------------------------------------------------
+
+    private val wifiOnlyPref = preferenceStore?.getBoolean(KEY_DOWNLOAD_WIFI_ONLY, true)
+    private val _downloadWifiOnly = mutableStateOf(wifiOnlyPref?.get() ?: true)
+
+    /** Whether downloads should only run on Wi-Fi. */
+    var downloadOnWifiOnly: Boolean
+        get() = _downloadWifiOnly.value
+        set(value) {
+            _downloadWifiOnly.value = value
+            wifiOnlyPref?.set(value)
+        }
+
+    private val simultaneousPref = preferenceStore?.getInt(KEY_SIMULTANEOUS_DOWNLOADS, 3)
+    private val _simultaneousDownloads = mutableStateOf(simultaneousPref?.get() ?: 3)
+
+    /** Number of simultaneous downloads (1-10). */
+    var simultaneousDownloads: Int
+        get() = _simultaneousDownloads.value
+        set(value) {
+            val clamped = value.coerceIn(1, 10)
+            _simultaneousDownloads.value = clamped
+            simultaneousPref?.set(clamped)
         }
 
     /**

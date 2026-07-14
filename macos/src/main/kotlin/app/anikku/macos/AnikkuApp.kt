@@ -28,6 +28,7 @@ import app.anikku.macos.platform.data.LocalLibraryRepository
 import app.anikku.macos.platform.data.LocalDownloadManager
 import app.anikku.macos.platform.data.LocalHistoryRepository
 import app.anikku.macos.platform.download.MacOSDownloadManager
+import app.anikku.macos.platform.extension.LocalExtensionManager
 import app.anikku.macos.platform.preference.BookmarkStore
 import app.anikku.macos.platform.preference.LocalBookmarkStore
 import app.anikku.macos.platform.auth.LocalTrackerManager
@@ -159,6 +160,7 @@ fun main() = application {
             LocalLibraryRepository provides libraryRepository,
             LocalHistoryRepository provides historyRepository,
             LocalDownloadManager provides downloadManager,
+            LocalExtensionManager provides app.extensionManager,
             LocalToastHost provides toastHostState,
             LocalTrackerManager provides trackerManager,
         ) {

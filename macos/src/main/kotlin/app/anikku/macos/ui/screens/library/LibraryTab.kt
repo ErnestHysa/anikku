@@ -52,6 +52,7 @@ import app.anikku.macos.platform.data.CATEGORY_DEFAULT_ID
 import app.anikku.macos.platform.data.CategoryEntry
 import app.anikku.macos.platform.data.LibraryRepository
 import app.anikku.macos.platform.data.LocalLibraryRepository
+import app.anikku.macos.platform.extension.LocalExtensionManager
 import app.anikku.macos.ui.AnikkuScreen
 import app.anikku.macos.ui.components.AnimeGrid
 import app.anikku.macos.ui.components.AnimeList
@@ -78,6 +79,7 @@ object LibraryTab : AnikkuScreen(), Tab {
     override fun Content() {
         val navigator = LocalNavigator.currentOrThrow
         val libraryRepo = LocalLibraryRepository.current
+        val extensionManager = LocalExtensionManager.current
 
         var displayMode by remember { mutableStateOf(DisplayMode.Grid) }
         var searchQuery by remember { mutableStateOf("") }
@@ -160,6 +162,7 @@ object LibraryTab : AnikkuScreen(), Tab {
                     sourceId = anime.source.takeIf { it != 0L },
                     animeUrl = anime.url,
                     animeTitle = anime.title,
+                    extensionManager = extensionManager,
                 ))
             },
         )

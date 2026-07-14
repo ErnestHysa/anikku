@@ -178,44 +178,49 @@ fun SettingsScreen() {
         // =====================================================================
         HeadingItem("Player")
 
-        var autoPlay by remember { mutableStateOf(true) }
+        var autoPlay by remember { mutableStateOf(settings.autoPlayNextEpisode) }
         CheckboxItem(
             label = "Auto-play next episode",
             checked = autoPlay,
             onClick = {
                 autoPlay = !autoPlay
+                settings.autoPlayNextEpisode = autoPlay
                 toastHost.show("Auto-play: ${if (autoPlay) "on" else "off"}", ToastDuration.SHORT)
             },
         )
 
-        var resumeFromLast by remember { mutableStateOf(true) }
+        var resumeFromLast by remember { mutableStateOf(settings.resumeFromLastPosition) }
         CheckboxItem(
             label = "Resume from last position",
             checked = resumeFromLast,
             onClick = {
                 resumeFromLast = !resumeFromLast
+                settings.resumeFromLastPosition = resumeFromLast
                 toastHost.show("Resume: ${if (resumeFromLast) "on" else "off"}", ToastDuration.SHORT)
             },
         )
 
-        var skipIntro by remember { mutableStateOf(true) }
+        var skipIntro by remember { mutableStateOf(settings.skipIntro) }
         CheckboxItem(
             label = "Skip intro (when available)",
             checked = skipIntro,
             onClick = {
                 skipIntro = !skipIntro
+                settings.skipIntro = skipIntro
                 toastHost.show("Skip intro: ${if (skipIntro) "on" else "off"}", ToastDuration.SHORT)
             },
         )
 
         val playbackSpeedOptions = arrayOf("0.5x", "0.75x", "1.0x", "1.25x", "1.5x", "2.0x")
-        var speedIndex by remember { mutableStateOf(2) } // Default 1.0x
+        val speedValues = floatArrayOf(0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
+        var speedIndex by remember { mutableStateOf(speedValues.indexOfFirst { it == settings.defaultPlaybackSpeed }.coerceAtLeast(0)) }
         SelectItem(
             label = "Default playback speed",
             options = playbackSpeedOptions,
             selectedIndex = speedIndex,
             onSelect = {
                 speedIndex = it
+                settings.defaultPlaybackSpeed = speedValues[it]
                 toastHost.show("Speed: ${playbackSpeedOptions[it]}", ToastDuration.SHORT)
             },
         )
@@ -227,24 +232,26 @@ fun SettingsScreen() {
         // =====================================================================
         HeadingItem("Downloads")
 
-        var downloadOnWifiOnly by remember { mutableStateOf(true) }
+        var downloadOnWifiOnly by remember { mutableStateOf(settings.downloadOnWifiOnly) }
         CheckboxItem(
             label = "Download on Wi-Fi only",
             checked = downloadOnWifiOnly,
             onClick = {
                 downloadOnWifiOnly = !downloadOnWifiOnly
+                settings.downloadOnWifiOnly = downloadOnWifiOnly
                 toastHost.show("Wi-Fi only: ${if (downloadOnWifiOnly) "on" else "off"}", ToastDuration.SHORT)
             },
         )
 
-        var simultaneousDownloads by remember { mutableStateOf(3) }
+        var simultaneousDownloads by remember { mutableStateOf(settings.simultaneousDownloads) }
         SelectItem(
             label = "Simultaneous downloads",
             options = arrayOf("1", "2", "3", "4", "5"),
-            selectedIndex = simultaneousDownloads - 1,
+            selectedIndex = (simultaneousDownloads - 1).coerceIn(0, 4),
             onSelect = {
                 simultaneousDownloads = it + 1
-                toastHost.show("Downloads: ${it + 1} simultaneous", ToastDuration.SHORT)
+                settings.simultaneousDownloads = simultaneousDownloads
+                toastHost.show("Downloads: ${simultaneousDownloads} simultaneous", ToastDuration.SHORT)
             },
         )
 

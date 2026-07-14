@@ -37,7 +37,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.anikku.macos.platform.data.LocalHistoryRepository
 import app.anikku.macos.platform.data.LocalLibraryRepository
+import app.anikku.macos.platform.extension.LocalExtensionManager
 import app.anikku.macos.ui.AnikkuScreen
+import app.anikku.macos.ui.components.LocalToastHost
+import app.anikku.macos.ui.components.ToastDuration
+import app.anikku.macos.ui.screens.anime.AnimeDetailScreen
+import cafe.adriel.voyager.navigator.LocalNavigator
+import cafe.adriel.voyager.navigator.currentOrThrow
 import cafe.adriel.voyager.navigator.tab.Tab
 import cafe.adriel.voyager.navigator.tab.TabOptions
 
@@ -52,8 +58,11 @@ object UpdatesTab : AnikkuScreen(), Tab {
 
     @Composable
     override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
+        val toastHost = LocalToastHost.current
         val libraryRepo = LocalLibraryRepository.current
         val historyRepo = LocalHistoryRepository.current
+        val extensionManager = LocalExtensionManager.current
 
         val libraryEntries = remember { libraryRepo.getAll() }
         val historyEntries = remember { historyRepo.getAll() }
@@ -93,7 +102,26 @@ object UpdatesTab : AnikkuScreen(), Tab {
             }
         }
 
-        UpdatesContent(updates = updates, libraryCount = libraryEntries.size)
+        UpdatesContent(
+            updates = updates,
+            libraryCount = libraryEntries.size,
+            onUpdateClick = { update ->
+                val libraryEntry = libraryEntries.find { it.animeId == update.animeId }
+                if (libraryEntry != null && libraryEntry.sourceId != 0L) {
+                    navigator.push(
+                        AnimeDetailScreen(
+                            animeId = update.animeId,
+                            sourceId = libraryEntry.sourceId,
+                            animeUrl = libraryEntry.url,
+                            animeTitle = update.animeTitle,
+                            extensionManager = extensionManager,
+                        )
+                    )
+                } else {
+                    toastHost.show("Cannot open update — source information missing", ToastDuration.SHORT)
+                }
+            },
+        )
     }
 
     override val options: TabOptions
@@ -117,7 +145,11 @@ data class UpdateItemData(
 )
 
 @Composable
-private fun UpdatesContent(updates: List<UpdateItemData>, libraryCount: Int = 0) {
+private fun UpdatesContent(
+    updates: List<UpdateItemData>,
+    libraryCount: Int = 0,
+    onUpdateClick: (UpdateItemData) -> Unit = {},
+) {
     if (updates.isEmpty()) {
         Box(
             modifier = Modifier.fillMaxSize(),
@@ -163,20 +195,24 @@ private fun UpdatesContent(updates: List<UpdateItemData>, libraryCount: Int = 0)
                 items = updates,
                 key = { it.episodeId },
             ) { update ->
-                UpdatesItem(update = update)
+                UpdatesItem(update = update, onClick = { onUpdateClick(update) })
             }
         }
     }
 }
 
 @Composable
-private fun UpdatesItem(update: UpdateItemData) {
+private fun UpdatesItem(
+    update: UpdateItemData,
+    onClick: () -> Unit = {},
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         ),
+        onClick = onClick,
     ) {
         Row(
             modifier = Modifier

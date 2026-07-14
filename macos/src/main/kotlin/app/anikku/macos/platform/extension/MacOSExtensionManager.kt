@@ -2,6 +2,7 @@ package app.anikku.macos.platform.extension
 
 import app.anikku.macos.platform.network.MacOSNetworkHelper
 import app.anikku.macos.platform.storage.MacOSStorageProvider
+import androidx.compose.runtime.compositionLocalOf
 import eu.kanade.tachiyomi.extension.model.Extension
 import eu.kanade.tachiyomi.extension.model.InstallStep
 import eu.kanade.tachiyomi.extension.model.LoadResult
@@ -615,6 +616,13 @@ class MacOSExtensionManager(
         logger.info { "Extension manager shut down" }
     }
 }
+
+/**
+ * CompositionLocal for [MacOSExtensionManager].
+ * Provided in AnikkuApp.kt so any screen can access the extension manager
+ * without threading it through every constructor.
+ */
+val LocalExtensionManager = compositionLocalOf<MacOSExtensionManager?> { null }
 
 // ---------------------------------------------------------------------------
 // Extension JSON models (matches Android ExtensionApi format)

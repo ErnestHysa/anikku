@@ -24,6 +24,7 @@ class HistoryRepository(private val dataDir: File) {
         val episodeName: String = "",
         val episodeNumber: Double = 0.0,
         val sourceId: Long = 0L,
+        val animeUrl: String? = null,
         val episodeUrl: String? = null,
         val seenAt: Long = System.currentTimeMillis(),
         val watchDuration: Long = 0L,

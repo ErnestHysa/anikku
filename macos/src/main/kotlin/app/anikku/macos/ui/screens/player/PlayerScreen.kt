@@ -315,7 +315,12 @@ data class PlayerScreen(
                         val fetchedEpisodes = source.getEpisodeList(sAnime)
                         sourceEpisodes = fetchedEpisodes
                         allEpisodes = fetchedEpisodes.map { it.toEpisodeModel(animeId) }.toMutableList()
-                        val idx = fetchedEpisodes.indexOfFirst { it.url == episodeUrl }
+                        val idx = fetchedEpisodes.indexOfFirst { ep ->
+                            // Safely read episode URL — some sources return SEpisode objects
+                            // with uninitialized lateinit url fields.
+                            val epUrl = try { ep.url } catch (_: UninitializedPropertyAccessException) { null }
+                            epUrl != null && epUrl == episodeUrl
+                        }
                         if (idx >= 0) currentEpisodeIndex = idx
                         usedSource = true
                     }
@@ -402,6 +407,7 @@ data class PlayerScreen(
                     episodeName = episode.name,
                     episodeNumber = episode.episodeNumber,
                     sourceId = sourceId ?: 0L,
+                    animeUrl = this@PlayerScreen.animeUrl,
                     episodeUrl = episode.url,
                     seenAt = System.currentTimeMillis(),
                     watchDuration = position,
