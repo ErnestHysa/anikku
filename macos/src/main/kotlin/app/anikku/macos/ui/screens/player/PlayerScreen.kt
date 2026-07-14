@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.PlayCircle
 import androidx.compose.material.icons.outlined.CameraAlt
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -142,30 +143,122 @@ data class PlayerScreen(
     )
 
     /**
+     * Immutable snapshot of a video candidate from the source's video list.
+     * Used to store and display available quality options for the user.
+     */
+    data class VideoCandidate(
+        val url: String,
+        val label: String?,
+        val resolution: Int?,
+    )
+
+    /**
+     * Verify that a video URL isn't an HTML page by checking its Content-Type
+     * via a lightweight HEAD request. Only performs the network check for URLs
+     * that don't have a recognizable video file extension — ambiguous URLs
+     * (e.g., CDN proxies with hashed paths) are assumed to be valid.
+     *
+     * @return true if the URL looks like a playable video stream,
+     *         false if the server returned text/html (indicating an embed page).
+     */
+    private suspend fun checkUrlContentType(url: String): Boolean {
+        // Fast path: URLs with known video extensions skip the HEAD request
+        val knownVideoExts = listOf(
+            ".mp4", ".m3u8", ".ts", ".webm", ".mkv", ".avi", ".mov",
+            ".flv", ".wmv", ".ogv", ".3gp", ".mpd", ".m4v",
+        )
+        val lowerUrl = url.lowercase()
+        if (knownVideoExts.any { lowerUrl.contains(it) }) {
+            return true
+        }
+
+        // Slow path: do a HEAD request to check Content-Type
+        return withContext(Dispatchers.IO) {
+            try {
+                val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                connection.requestMethod = "HEAD"
+                connection.connectTimeout = 3000
+                connection.readTimeout = 3000
+                connection.setRequestProperty("User-Agent", DEFAULT_USER_AGENT)
+                // Some CDNs require a Referer matching their embed page to serve content
+                connection.setRequestProperty("Referer", url.substringBeforeLast("/"))
+                connection.connect()
+
+                val contentType = connection.contentType ?: ""
+                val responseCode = connection.responseCode
+                connection.disconnect()
+
+                if (contentType.startsWith("text/html")) {
+                    logger.warn { "🎬 VIDEO_URL_CONTENT_CHECK: URL returned text/html (HTTP $responseCode) " +
+                        "— likely an embed/player page, not a video stream: ${url.take(80)}" }
+                    return@withContext false
+                }
+
+                if (responseCode in 400..499) {
+                    logger.warn { "🎬 VIDEO_URL_CONTENT_CHECK: URL returned HTTP $responseCode " +
+                        "— may be blocked or require auth: ${url.take(80)}" }
+                    // Don't reject — allow it through so mpv can try with proper headers
+                }
+
+                logger.info { "🎬 VIDEO_URL_CONTENT_CHECK: URL content-type=$contentType (HTTP $responseCode) — looks playable: ${url.take(60)}" }
+                true
+            } catch (e: Exception) {
+                // If we can't check (timeout, DNS failure, etc.), allow it through.
+                // mpv will try to play it and handle failures with its own timeouts.
+                logger.debug { "🎬 VIDEO_URL_CONTENT_CHECK: Could not verify URL (non-fatal): ${e.message}" }
+                true
+            }
+        }
+    }
+
+    /**
+     * Result of resolving a video for an episode — includes the resolution and
+     * which candidate was selected so the caller can track what was tried.
+     * @property url The video URL to play
+     * @property headers Optional HTTP headers (Referer, User-Agent, etc.) needed by mpv
+     * @property candidateIndex The index in the [VideoCandidate] list that was selected
+     */
+    data class ResolveResult(
+        val url: String,
+        val headers: Map<String, String>? = null,
+        val candidateIndex: Int = -1,
+        val qualityResolution: Int? = null,
+        val qualityLabel: String? = null,
+    )
+
+    /**
      * Resolve the video URL for a given episode.
      * Priority:
      * 1. Local file (if downloaded) → serve via MacOSHttpServer
-     * 2. Source API (if extension is available) — uses the full [SEpisode] from
-     *    the source so all fields (name, episode_number, url, etc.) are populated
+     * 2. Source API (if extension is available) — tries videos starting from [startIndex]
      * 3. null (fallback mode)
      *
-     * Returns a [VideoResolution] that includes both the URL and any HTTP headers
-     (such as Referer) that mpv needs to send when requesting the video stream.
+     * When a source returns multiple video qualities, [startIndex] allows retrying
+     * with a different quality by skipping the previously-failed index.
+     *
+     * @param sEpisode The full episode object from the source (needed for getVideoList).
+     * @param episodeNumber Episode number for local-file lookup.
+     * @param httpServer Local HTTP server for serving downloaded files.
+     * @param startIndex Index in the ordered video list to start from (0 = first quality).
+     * @param onCandidateList Called with the full list of available video candidates.
+     * @param onError Called when resolution fails with an error message.
+     * @return A [ResolveResult] with the video URL and headers, or null if all videos fail.
      */
     private suspend fun resolveVideoUrl(
         sEpisode: SEpisode?,
         episodeNumber: Double,
         httpServer: MacOSHttpServer?,
-        onQuality: (resolution: Int?, label: String?) -> Unit = { _, _ -> },
+        startIndex: Int = 0,
+        onCandidateList: (List<VideoCandidate>) -> Unit = {},
         onError: ((String) -> Unit)? = null,
-    ): VideoResolution? {
+    ): ResolveResult? {
         // Priority 1: Local download
         if (downloadManager != null && episodeNumber > 0) {
             val localFile = downloadManager.getLocalFile(animeId, episodeNumber)
             if (localFile != null && httpServer != null && httpServer.isRunning) {
                 val streamUrl = httpServer.getStreamUrl(localFile)
                 if (streamUrl != null) {
-                    return VideoResolution(url = streamUrl)
+                    return ResolveResult(url = streamUrl)
                 }
             }
         }
@@ -178,33 +271,86 @@ data class PlayerScreen(
                 try {
                     val videos = source.getVideoList(sEpisode)
                     if (videos.isNotEmpty()) {
-                        val best = videos.firstOrNull { it.preferred } ?: videos.first()
-                        onQuality(best.resolution, best.videoTitle.takeIf { it.isNotBlank() })
-                        UIActionLogger.logVideoResolution(sourceId, currentEpisodeUrl, best.videoUrl.take(80))
+                        // Build ordered candidate list: preferred first, then others
+                        val orderedVideos = listOfNotNull(
+                            videos.firstOrNull { it.preferred },
+                        ) + videos.filter { !it.preferred }
 
-                        // Extract headers from the video object for mpv.
-                        // Many sources set a Referer header that the stream server requires.
-                        // Use a try/catch to handle edge cases where headers may be malformed.
-                        val videoHeaders = try {
-                            best.headers?.let { headers ->
-                                val map = mutableMapOf<String, String>()
-                                for (i in 0 until headers.size) {
-                                    map[headers.name(i)] = headers.value(i)
-                                }
-                                // Always include a modern User-Agent for stream servers
-                                if (!map.containsKey("User-Agent")) {
-                                    map["User-Agent"] = DEFAULT_USER_AGENT
-                                }
-                                map
-                            } ?: mapOf("User-Agent" to DEFAULT_USER_AGENT)
-                        } catch (e: Exception) {
-                            logger.warn { "Failed to extract headers from video: ${e.message}" }
-                            mapOf("User-Agent" to DEFAULT_USER_AGENT)
+                        // Expose the candidate list to the caller for UI display
+                        val candidates = orderedVideos.map { video ->
+                            VideoCandidate(
+                                url = video.videoUrl,
+                                label = video.videoTitle.takeIf { it.isNotBlank() },
+                                resolution = video.resolution,
+                            )
+                        }
+                        onCandidateList(candidates)
+
+                        // Try each video starting from startIndex
+                        for ((orderedIndex, video) in orderedVideos.withIndex()) {
+                            if (orderedIndex < startIndex) continue // skip previously-tried qualities
+
+                            val videoUrl = video.videoUrl
+                            if (videoUrl.isBlank()) continue
+
+                            // Quick URL-level check: skip known embed patterns
+                            val lowerVideoUrl = videoUrl.lowercase()
+                            val embedPatterns = listOf("/embed", "/iframe", "/player/", "embed-")
+                            if (embedPatterns.any { lowerVideoUrl.contains(it) }) {
+                                logger.warn { "🎬 VIDEO_URL_REJECTED: Source returned embed URL for candidate #$orderedIndex: ${videoUrl.take(80)}" }
+                                continue
+                            }
+
+                            // Content-Type verification (HEAD request) — only for ambiguous URLs
+                            val isPlayable = checkUrlContentType(videoUrl)
+                            if (!isPlayable) {
+                                logger.warn { "🎬 VIDEO_URL_REJECTED: Content-Type check failed for candidate #$orderedIndex — trying next quality" }
+                                continue
+                            }
+
+                            // This URL passed all checks — use it
+                            UIActionLogger.logVideoResolution(sourceId, currentEpisodeUrl, videoUrl.take(80))
+
+                            // Extract headers from the video object for mpv.
+                            // Many sources set a Referer header that the stream server requires.
+                            val videoHeaders = try {
+                                video.headers?.let { headers ->
+                                    val map = mutableMapOf<String, String>()
+                                    for (i in 0 until headers.size) {
+                                        map[headers.name(i)] = headers.value(i)
+                                    }
+                                    if (!map.containsKey("User-Agent")) {
+                                        map["User-Agent"] = DEFAULT_USER_AGENT
+                                    }
+                                    map
+                                } ?: mapOf("User-Agent" to DEFAULT_USER_AGENT)
+                            } catch (e: Exception) {
+                                logger.warn { "Failed to extract headers from video: ${e.message}" }
+                                mapOf("User-Agent" to DEFAULT_USER_AGENT)
+                            }
+
+                            return ResolveResult(
+                                url = videoUrl,
+                                headers = videoHeaders,
+                                candidateIndex = orderedIndex,
+                                qualityResolution = video.resolution,
+                                qualityLabel = video.videoTitle.takeIf { it.isNotBlank() },
+                            )
                         }
 
-                        return VideoResolution(url = best.videoUrl, headers = videoHeaders)
+                        // All videos starting from startIndex rejected
+                        val rejectedCount = orderedVideos.size - startIndex
+                        logger.warn { "🎬 VIDEO_URL_REJECTED: All $rejectedCount remaining candidate(s) rejected for source ${source.name} (started at index $startIndex)" }
+                        UIActionLogger.logVideoResolution(sourceId, currentEpisodeUrl, "all_candidates_rejected")
+                        val msg = if (startIndex > 0) {
+                            "All remaining video qualities failed — try a different source"
+                        } else {
+                            "All video streams from this source appear to be embed pages — try a different source"
+                        }
+                        onError?.invoke(msg)
                     } else {
                         UIActionLogger.logVideoResolution(sourceId, currentEpisodeUrl, "no_videos_found")
+                        onError?.invoke("Source returned no videos for this episode")
                     }
                 } catch (e: Exception) {
                     UIActionLogger.logVideoResolution(sourceId, currentEpisodeUrl, "error: ${e::class.simpleName}: ${e.message?.take(50)}")
@@ -288,6 +434,16 @@ data class PlayerScreen(
         var hasScrobbledThisEpisode by remember { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
 
+        // State for "Retry with different quality" functionality
+        // Stores all video candidates from the source so we can iterate through them.
+        var videoCandidates by remember { mutableStateOf<List<VideoCandidate>>(emptyList()) }
+        // Index in videoCandidates that was just attempted (failed or passed checks but mpv failed).
+        var lastAttemptedIndex by remember { mutableIntStateOf(-1) }
+
+        // State for "Try All Qualities" auto-retry
+        var isAutoRetrying by remember { mutableStateOf(false) }
+        var autoRetryIndex by remember { mutableIntStateOf(0) }
+
         UIActionLogger.logScreenOpen("PlayerScreen", mapOf(
             "animeId" to animeId, "episodeId" to episodeId, "sourceId" to sourceId
         ))
@@ -347,9 +503,9 @@ data class PlayerScreen(
                 sEpisode = currentSEpisode,
                 episodeNumber = currentEpisodeNumber,
                 httpServer = httpServer,
-                onQuality = { res, label ->
-                    videoQualityResolution = res
-                    videoQualityLabel = label
+                startIndex = 0,
+                onCandidateList = { candidates ->
+                    videoCandidates = candidates
                 },
                 onError = { msg ->
                     videoResolutionError = msg
@@ -363,7 +519,10 @@ data class PlayerScreen(
                 downloadManager.isDownloaded(animeId, currentEpisodeNumber)
 
             if (resolved != null) {
-                resolvedVideo = resolved
+                resolvedVideo = VideoResolution(url = resolved.url, headers = resolved.headers)
+                lastAttemptedIndex = resolved.candidateIndex
+                videoQualityResolution = resolved.qualityResolution
+                videoQualityLabel = resolved.qualityLabel
                 resolutionStatusText = "Video resolved — loading into player..."
             } else if (!usedSource && allEpisodes.isEmpty()) {
                 // No source data available — show loading completed with no video
@@ -382,7 +541,12 @@ data class PlayerScreen(
         LaunchedEffect(resolvedVideo, mpvHandle) {
             val video = resolvedVideo
             if (video != null && mpvHandle != null) {
-                resolutionStatusText = "Loading video into mpv player..."
+                // Preserve quality-specific progress text during auto-retry
+                resolutionStatusText = if (isAutoRetrying && videoQualityLabel != null) {
+                    "${videoQualityLabel} — starting playback..."
+                } else {
+                    "Loading video into mpv player..."
+                }
                 playerViewModel.loadEpisode(video.url, video.headers)
             }
         }
@@ -461,6 +625,124 @@ data class PlayerScreen(
             allEpisodes.getOrNull(currentEpisodeIndex)
         }
 
+        // Shared helper: re-resolve the video URL starting from the given index.
+        // Updates state consistently: error, video candidates, quality, and lastAttemptedIndex.
+        fun resolveAndPlay(startIndex: Int) {
+            scope.launch {
+                videoResolutionError = null
+                resolvedVideo = null
+                isResolvingVideo = true
+                isLoading = true
+                resolutionStatusText = when {
+                    isAutoRetrying && videoCandidates.size > 1 -> {
+                        "Auto-trying quality ${startIndex + 1}/${videoCandidates.size}..."
+                    }
+                    startIndex > 0 -> "Trying next video quality..."
+                    else -> "Retrying video resolution..."
+                }
+
+                val se = sourceEpisodes.getOrNull(currentEpisodeIndex)
+                val episodeNumber = allEpisodes.getOrNull(currentEpisodeIndex)?.episodeNumber ?: 0.0
+                val resolved = resolveVideoUrl(
+                    sEpisode = se,
+                    episodeNumber = episodeNumber,
+                    httpServer = httpServer,
+                    startIndex = startIndex,
+                    onCandidateList = { candidates ->
+                        videoCandidates = candidates
+                    },
+                    onError = { msg ->
+                        videoResolutionError = msg
+                        toastHost.show(msg, ToastDuration.LONG)
+                    },
+                )
+                isResolvingVideo = false
+                isLoading = false
+
+                if (resolved != null) {
+                    resolvedVideo = VideoResolution(url = resolved.url, headers = resolved.headers)
+                    lastAttemptedIndex = resolved.candidateIndex
+                    videoQualityResolution = resolved.qualityResolution
+                    videoQualityLabel = resolved.qualityLabel
+                    // Keep quality progress visible during mpv loading
+                    val qualityLabel = resolved.qualityLabel?.takeIf { it.isNotBlank() }
+                    resolutionStatusText = if (isAutoRetrying && videoCandidates.size > 1) {
+                        val label = qualityLabel ?: "quality ${resolved.candidateIndex + 1}"
+                        "$label loaded — starting playback..."
+                    } else {
+                        "Video resolved — loading into player..."
+                    }
+                } else {
+                    resolutionStatusText = ""
+                }
+            }
+        }
+
+        // Retry function: re-resolve the video URL for the current episode
+        // starting from index 0 (same as initial load, useful after a transient failure).
+        fun retryLoad() {
+            resolveAndPlay(startIndex = 0)
+        }
+
+        // Retry with the next available video quality. Skips the previously-tried
+        // candidate and picks the next one from the source's video list.
+        fun retryWithNextQuality() {
+            val nextIndex = lastAttemptedIndex + 1
+            if (nextIndex < videoCandidates.size) {
+                resolveAndPlay(startIndex = nextIndex)
+            } else {
+                // No more qualities — just do a full retry from the beginning
+                toastHost.show("No more qualities available — retrying from start", ToastDuration.SHORT)
+                retryLoad()
+            }
+        }
+
+        // Try All Qualities: automatically iterates through all available video
+        // qualities until one works or all are exhausted. Uses a LaunchedEffect
+        // keyed on playbackState to detect mpv errors and try the next quality.
+        fun retryAllQualities() {
+            if (videoCandidates.size <= 1) {
+                // Single quality (or none) — just do a normal retry
+                retryLoad()
+                return
+            }
+            isAutoRetrying = true
+            autoRetryIndex = 0
+            val total = videoCandidates.size
+            resolutionStatusText = "Auto-trying all qualities (1/$total)..."
+            resolveAndPlay(startIndex = 0)
+        }
+
+        // Auto-retry LaunchedEffect: watches for mpv ERROR state while auto-retry
+        // mode is active, then automatically tries the next quality.
+        // Keyed only on playbackState so intermediate resolvedVideo=null changes
+        // during retry don't re-trigger the logic.
+        LaunchedEffect(playbackState) {
+            when {
+                playbackState == PlaybackState.ERROR && isAutoRetrying && resolvedVideo != null -> {
+                    val nextIndex = autoRetryIndex + 1
+                    if (nextIndex < videoCandidates.size) {
+                        autoRetryIndex = nextIndex
+                        // Toast showing which quality is being tried
+                        val total = videoCandidates.size
+                        val nextCandidate = videoCandidates.getOrNull(nextIndex)
+                        val qualityHint = nextCandidate?.label?.takeIf { it.isNotBlank() }
+                            ?: "quality ${nextIndex + 1}"
+                        toastHost.show("Trying $qualityHint (${nextIndex + 1}/$total)...", ToastDuration.SHORT)
+                        resolveAndPlay(startIndex = nextIndex)
+                    } else {
+                        // All qualities exhausted
+                        isAutoRetrying = false
+                        videoResolutionError = "All $autoRetryIndex quality option(s) failed — try a different source"
+                    }
+                }
+                playbackState == PlaybackState.PLAYING || playbackState == PlaybackState.ENDED -> {
+                    // Success — stop auto-retry
+                    isAutoRetrying = false
+                }
+            }
+        }
+
         PlayerContent(
             playerViewModel = playerViewModel,
             mpvHandle = mpvHandle,
@@ -495,6 +777,13 @@ data class PlayerScreen(
             videoQualityLabel = videoQualityLabel,
             isLoading = isLoading,
             onBack = { navigator.pop() },
+            onRetry = { retryLoad() },
+            onRetryNext = { retryWithNextQuality() },
+            onRetryAll = { retryAllQualities() },
+            isAutoRetrying = isAutoRetrying,
+            hasNextQuality = lastAttemptedIndex >= 0 && lastAttemptedIndex + 1 < videoCandidates.size,
+            nextQualityLabel = videoCandidates.getOrNull(lastAttemptedIndex + 1)
+                ?.label?.takeIf { it.isNotBlank() } ?: "next quality",
             onNavigateEpisode = { index ->
                 if (index in allEpisodes.indices) {
                     // Save resume position for current episode before switching
@@ -520,14 +809,17 @@ data class PlayerScreen(
                             sEpisode = se,
                             episodeNumber = episode.episodeNumber,
                             httpServer = httpServer,
-                            onQuality = { res, label ->
-                                videoQualityResolution = res
-                                videoQualityLabel = label
+                            startIndex = 0,
+                            onCandidateList = { candidates ->
+                                videoCandidates = candidates
                             },
                             onError = { msg -> toastHost.show(msg, ToastDuration.LONG) },
                         )
                         if (resolved != null) {
-                            resolvedVideo = resolved
+                            resolvedVideo = VideoResolution(url = resolved.url, headers = resolved.headers)
+                            lastAttemptedIndex = resolved.candidateIndex
+                            videoQualityResolution = resolved.qualityResolution
+                            videoQualityLabel = resolved.qualityLabel
                         } else {
                             toastHost.show("No video source available", ToastDuration.SHORT)
                         }
@@ -590,7 +882,13 @@ private fun PlayerContent(
     videoQualityResolution: Int? = null,
     videoQualityLabel: String? = null,
     isLoading: Boolean = true,
+    hasNextQuality: Boolean = false,
+    nextQualityLabel: String? = null,
+    isAutoRetrying: Boolean = false,
     onBack: () -> Unit,
+    onRetry: () -> Unit = {},
+    onRetryNext: () -> Unit = {},
+    onRetryAll: () -> Unit = {},
     onNavigateEpisode: (Int) -> Unit,
     onTogglePlay: () -> Unit = {},
     onSeekTo: (Double) -> Unit = {},
@@ -697,6 +995,15 @@ private fun PlayerContent(
                         color = Color.White.copy(alpha = 0.3f),
                     )
                 }
+                if (isAutoRetrying && videoQualityLabel != null) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Quality: ${videoQualityLabel}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFF1A73E8).copy(alpha = 0.6f),
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
             }
         }
         return
@@ -738,9 +1045,30 @@ private fun PlayerContent(
         return
     }
 
-    // Show video resolution failure state with actionable info
+    // Show video resolution failure state with actionable info + Retry button
     if (videoResolutionFailed) {
-        Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier.fillMaxSize()
+                .background(Color.Black)
+                .onKeyEvent { event ->
+                    when (event.key) {
+                        Key.A -> {
+                            if (hasNextQuality && !isAutoRetrying) {
+                                onRetryAll()
+                                true
+                            } else {
+                                false
+                            }
+                        }
+                        Key.R -> {
+                            onRetry()
+                            true
+                        }
+                        else -> false
+                    }
+                },
+            contentAlignment = Alignment.Center,
+        ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(32.dp)) {
                 Icon(
                     Icons.Outlined.PlayCircle,
@@ -780,13 +1108,114 @@ private fun PlayerContent(
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Check ~/Library/Application Support/Anikku/logs/actions.log for VIDEO_RESOLVE details.",
+                    "Check logs (~/Library/Application Support/Anikku/logs/actions.log) for details.",
                     style = MaterialTheme.typography.bodySmall,
                     color = Color.White.copy(alpha = 0.2f),
                 )
                 Spacer(Modifier.height(24.dp))
-                IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Go back", tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
+
+                // Action buttons: Back, Retry, and (if available) Try Different Quality
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    // Primary row: Back + Retry
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // Back button
+                        IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Go back", tint = Color.White.copy(alpha = 0.5f), modifier = Modifier.size(32.dp))
+                        }
+                        Spacer(Modifier.width(24.dp))
+                        // Retry button
+                        Surface(
+                            onClick = onRetry,
+                            shape = MaterialTheme.shapes.medium,
+                            color = Color(0xFF1A73E8), // Google Blue
+                            tonalElevation = 0.dp,
+                            modifier = Modifier.height(44.dp),
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(start = 20.dp, end = 20.dp),
+                            ) {
+                                Icon(
+                                    Icons.Outlined.Refresh,
+                                    contentDescription = "Retry",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    "Retry",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = Color.White,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                        }
+                    }
+
+                    // Secondary row: Try Different Quality (only if more qualities available)
+                    if (hasNextQuality && !isAutoRetrying) {
+                        Spacer(Modifier.height(12.dp))
+                        // Manual: try the next single quality
+                        Surface(
+                            onClick = onRetryNext,
+                            shape = MaterialTheme.shapes.small,
+                            color = Color.White.copy(alpha = 0.08f),
+                            tonalElevation = 0.dp,
+                            modifier = Modifier.height(36.dp),
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(start = 16.dp, end = 16.dp),
+                            ) {
+                                Icon(
+                                    Icons.Outlined.Refresh,
+                                    contentDescription = "Try different quality",
+                                    tint = Color.White.copy(alpha = 0.7f),
+                                    modifier = Modifier.size(16.dp),
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    "Try: ${nextQualityLabel ?: "next quality"}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color.White.copy(alpha = 0.7f),
+                                    fontWeight = FontWeight.Medium,
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        // Auto: try all qualities automatically
+                        Surface(
+                            onClick = onRetryAll,
+                            shape = MaterialTheme.shapes.small,
+                            color = Color(0xFF1A73E8).copy(alpha = 0.15f),
+                            tonalElevation = 0.dp,
+                            modifier = Modifier.height(36.dp),
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(start = 16.dp, end = 16.dp),
+                            ) {
+                                Text(
+                                    "▶",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFF1A73E8),
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    "Try All Qualities",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = Color(0xFF1A73E8),
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "Press [A] for Auto-Try All",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.White.copy(alpha = 0.25f),
+                        )
+                    }
                 }
             }
         }

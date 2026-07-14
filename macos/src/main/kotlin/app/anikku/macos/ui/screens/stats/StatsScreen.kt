@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccessTime
@@ -29,6 +28,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import app.anikku.macos.platform.data.LocalHistoryRepository
+import app.anikku.macos.platform.data.LocalLibraryRepository
 import app.anikku.macos.ui.AnikkuScreen
 import cafe.adriel.voyager.core.screen.ScreenKey
 import cafe.adriel.voyager.core.screen.uniqueScreenKey
@@ -36,14 +37,12 @@ import cafe.adriel.voyager.core.screen.uniqueScreenKey
 /**
  * Stats screen — Phase 5.11.
  *
- * Shows anime watching statistics:
- * - Total anime watched / in library
+ * Shows anime watching statistics computed from real data:
+ * - Total anime in library
  * - Total episodes watched
  * - Estimated watch time
- * - Genre breakdown
- * - Recent activity
- *
- * TODO Phase 7: Connect to real data sources when domain layer is wired.
+ * - Completed / ongoing breakdown
+ * - Top genres
  */
 class StatsScreen : AnikkuScreen() {
 
@@ -51,22 +50,39 @@ class StatsScreen : AnikkuScreen() {
 
     @Composable
     override fun Content() {
-        // Mock stats data for display
-        val stats = remember {
+        val libraryRepo = LocalLibraryRepository.current
+        val historyRepo = LocalHistoryRepository.current
+
+        val libraryEntries = remember { libraryRepo.getAll() }
+        val historyEntries = remember { historyRepo.getAll() }
+
+        // Compute stats from real data
+        val stats = remember(libraryEntries, historyEntries) {
+            val totalAnime = libraryEntries.size
+            val totalEpisodes = historyEntries.size
+            val totalWatchTimeMinutes = historyEntries.sumOf { it.watchDuration } / 60_000L
+
+            val completedSeries = libraryEntries.count { it.status == 2 }
+            val ongoingSeries = libraryEntries.count { it.status == 1 }
+
+            // Aggregate genres from library entries, sorted by frequency (top 6)
+            val genreCounts: Map<String, Int> = libraryEntries
+                .mapNotNull { it.genre }
+                .flatten()
+                .groupingBy { it }
+                .eachCount()
+            val topGenres = genreCounts.entries
+                .sortedByDescending { it.value }
+                .take(6)
+                .map { it.key to it.value }
+
             StatsData(
-                totalAnime = 12,
-                totalEpisodes = 156,
-                totalWatchTimeMinutes = 4320L, // 72 hours
-                completedSeries = 7,
-                ongoingSeries = 5,
-                topGenres = listOf(
-                    "Action" to 8,
-                    "Supernatural" to 4,
-                    "Fantasy" to 3,
-                    "Comedy" to 3,
-                    "Drama" to 2,
-                    "Adventure" to 2,
-                ),
+                totalAnime = totalAnime,
+                totalEpisodes = totalEpisodes,
+                totalWatchTimeMinutes = totalWatchTimeMinutes,
+                completedSeries = completedSeries,
+                ongoingSeries = ongoingSeries,
+                topGenres = topGenres,
             )
         }
 
@@ -151,37 +167,51 @@ private fun StatsContent(stats: StatsData) {
         }
 
         // Top genres
-        item {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                ),
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "Top Genres",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Spacer(Modifier.height(12.dp))
+        if (stats.topGenres.isNotEmpty()) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    ),
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "Top Genres",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Spacer(Modifier.height(12.dp))
 
-                    stats.topGenres.forEach { (genre, count) ->
-                        GenreRow(genre = genre, count = count, maxCount = stats.topGenres.first().second)
-                        Spacer(Modifier.height(6.dp))
+                        stats.topGenres.forEach { (genre, count) ->
+                            GenreRow(genre = genre, count = count, maxCount = stats.topGenres.first().second)
+                            Spacer(Modifier.height(6.dp))
+                        }
                     }
                 }
             }
         }
 
-        item {
-            Text(
-                text = "More stats coming when domain layer is connected",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                modifier = Modifier.padding(top = 8.dp),
-            )
+        // Show a hint if there's no data yet
+        if (stats.totalAnime == 0 && stats.totalEpisodes == 0) {
+            item {
+                Text(
+                    text = "Start adding anime to your library and watching episodes to see statistics here.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
+        } else {
+            item {
+                Text(
+                    text = "Stats are computed from your library and watch history.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.padding(top = 8.dp),
+                )
+            }
         }
     }
 }

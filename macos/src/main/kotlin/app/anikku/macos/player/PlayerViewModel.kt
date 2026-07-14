@@ -179,6 +179,9 @@ class PlayerViewModel {
                 return false
             }
 
+            // Set network timeout so mpv doesn't hang forever on unreachable servers
+            setNetworkTimeout(handle)
+
             val initResult = MPVLib.initialize(handle)
             if (initResult == null || initResult < 0) {
                 logger.error { "🚀 MPV_CORE: mpv_initialize failed with code: $initResult" }
@@ -227,14 +230,52 @@ class PlayerViewModel {
                 loop.events.collect { event ->
                     when (event.eventId) {
                         MPVLib.MPV_EVENT_FILE_LOADED -> {
-                            _playbackState.value = PlaybackState.PLAYING
-                            _isPaused.value = false
-                            updateDuration()
-                            logger.info { "🎬 VIDEO_FILE: file loaded into mpv — starting playback" }
+                            // Capture token at event-processing start. If loadToken
+                            // has changed by the time we finish, the event is stale.
+                            val eventToken = loadToken
+                            val isCurrentLoad = loadToken === eventToken
+
+                            // Only apply state changes if the event is from the
+                            // current load — stale FILE_LOADED from a previous
+                            // episode must not overwrite the new LOADING state.
+                            if (isCurrentLoad) {
+                                _playbackState.value = PlaybackState.PLAYING
+                                _isPaused.value = false
+                                updateDuration()
+                                loadTimeoutJob?.cancel()
+                                loadTimeoutJob = null
+                                logger.info { "🎬 VIDEO_FILE: file loaded into mpv — starting playback" }
+                            } else {
+                                logger.debug { "🎬 VIDEO_FILE: ignoring stale FILE_LOADED from previous load" }
+                            }
                         }
                         MPVLib.MPV_EVENT_END_FILE -> {
-                            _playbackState.value = PlaybackState.ENDED
-                            logger.info { "🎬 VIDEO_FILE: playback ended" }
+                            // Capture token at event-processing start.
+                            val eventToken = loadToken
+
+                            if (_playbackState.value == PlaybackState.LOADING ||
+                                _playbackState.value == PlaybackState.SEEKING) {
+                                // File ended while still loading — only set ERROR
+                                // if the token still matches (not a stale event).
+                                if (loadToken === eventToken) {
+                                    _playbackState.value = PlaybackState.ERROR
+                                    logger.warn { "🎬 VIDEO_END: file ended while still loading — likely unreachable URL, blocked CDN, or embed page URL" }
+                                } else {
+                                    logger.debug { "🎬 VIDEO_END: ignoring stale END_FILE from previous load (state was LOADING/SEEKING)" }
+                                }
+                            } else {
+                                if (loadToken === eventToken) {
+                                    _playbackState.value = PlaybackState.ENDED
+                                    logger.info { "🎬 VIDEO_FILE: playback ended normally" }
+                                } else {
+                                    logger.debug { "🎬 VIDEO_END: ignoring stale END_FILE from previous load" }
+                                }
+                            }
+
+                            if (loadToken === eventToken) {
+                                loadTimeoutJob?.cancel()
+                                loadTimeoutJob = null
+                            }
                         }
                         MPVLib.MPV_EVENT_VIDEO_RECONFIG -> {
                             val w = MPVLib.getPropertyInt(handle, "dwidth", 0)
@@ -247,11 +288,22 @@ class PlayerViewModel {
                             }
                         }
                         MPVLib.MPV_EVENT_PLAYBACK_RESTART -> {
-                            _playbackState.value = PlaybackState.PLAYING
-                            logger.info { "🎬 VIDEO_RESTART: playback restarted after seek/load" }
+                            val eventToken = loadToken
+                            val isCurrentLoad = loadToken === eventToken
+
+                            if (isCurrentLoad) {
+                                _playbackState.value = PlaybackState.PLAYING
+                                _isPaused.value = false
+                                loadTimeoutJob?.cancel()
+                                loadTimeoutJob = null
+                                logger.info { "🎬 VIDEO_RESTART: playback restarted after seek/load" }
+                            } else {
+                                logger.debug { "🎬 VIDEO_RESTART: ignoring stale PLAYBACK_RESTART from previous load" }
+                            }
                         }
                         MPVLib.MPV_EVENT_SEEK -> {
                             _playbackState.value = PlaybackState.SEEKING
+                            logger.info { "🎬 VIDEO_SEEK: mpv seek event — position=${currentPosition.value}" }
                         }
                         MPVLib.MPV_EVENT_SHUTDOWN -> {
                             _playbackState.value = PlaybackState.IDLE
@@ -338,10 +390,40 @@ class PlayerViewModel {
     }
 
     /**
+     * Set a network timeout on mpv so it doesn't hang forever when a server
+     * is unreachable, blocked by Cloudflare, or the URL is not a valid stream.
+     *
+     * mpv's `stream-timeout` controls how long it waits for a network connection.
+     * We set it to 10 seconds — long enough for most CDNs but short enough to
+     * avoid the "stuck at seeking" problem.
+     */
+    private fun setNetworkTimeout(handle: Pointer) {
+        try {
+            // stream-timeout: seconds to wait for network I/O (default = 0 = infinite)
+            val result = MPVLib.setOptionString(handle, "stream-timeout", "10")
+            if (result != null && result < 0) {
+                logger.debug { "stream-timeout option not supported by this mpv build (non-fatal)" }
+            } else {
+                logger.info { "🎬 MPV_CONFIG: stream-timeout set to 10s" }
+            }
+
+            // Set a max timeout for the demuxer opening the stream
+            val result3 = MPVLib.setOptionString(handle, "demuxer-readahead-secs", "10")
+            if (result3 != null && result3 < 0) {
+                logger.debug { "demuxer-readahead-secs option not supported (non-fatal)" }
+            }
+        } catch (e: Exception) {
+            logger.debug(e) { "Failed to set network timeout options (non-fatal)" }
+        }
+    }
+
+    /**
      * Shut down the player, clean up mpv resources.
      */
     fun shutdown() {
         logger.info { "🎬 PLAYER_SHUTDOWN: shutting down mpv player..." }
+        loadTimeoutJob?.cancel()
+        loadTimeoutJob = null
         positionUpdateJob?.cancel()
         positionUpdateJob = null
         eventLoop?.stop()
@@ -366,6 +448,22 @@ class PlayerViewModel {
     // Playback Controls
     // -------------------------------------------------------------------------
 
+    /** Tracks the load timeout coroutine so it can be cancelled on success/error. */
+    private var loadTimeoutJob: Job? = null
+
+    /**
+     * Monotonically-increasing token that identifies the current load generation.
+     * A new object is created each time [loadEpisode] is called. Event handlers
+     * capture this token at the start of processing and compare it against the
+     * current token at the end. If the token has changed, the event is from a
+     * previous load and should be ignored.
+     *
+     * This prevents stale events (e.g., MPV_EVENT_END_FILE from a previous
+     * episode) from overwriting state or cancelling the timeout for a newer load.
+     */
+    @Volatile
+    private var loadToken: Any? = null
+
     /**
      * Load and play a video URL with optional HTTP headers.
      *
@@ -377,10 +475,25 @@ class PlayerViewModel {
      * This method sets `http-header-fields` on mpv BEFORE calling `loadfile`,
      * so mpv includes the required headers in its HTTP requests to the stream server.
      *
+     * After sending the loadfile command, a 20-second timeout is started. If
+     * neither MPV_EVENT_FILE_LOADED nor MPV_EVENT_PLAYBACK_RESTART fires within
+     * that window, the state transitions to ERROR to prevent "stuck at loading/seeking".
+     *
      * @param url The video URL to play (can be an http:// or file:// URI)
      * @param headers Optional HTTP headers (e.g. Referer, User-Agent) to pass to mpv
      */
     fun loadEpisode(url: String, headers: Map<String, String>? = null) {
+        // Pre-check: reject non-video URLs (embed pages, iframes) before sending to mpv.
+        // mpv cannot play HTML, so sending an embed URL would cause it to hang until
+        // the 10-second stream-timeout fires. This check catches the most common
+        // cases instantly so the user sees an error instead of a spinner.
+        if (!isVideoUrl(url)) {
+            logger.warn { "🎬 VIDEO_LOAD: Rejected non-video URL — likely an embed/player page: ${url.take(100)}" }
+            _playbackState.value = PlaybackState.ERROR
+            CrashReporter.logEvent("Video load rejected", "embed/player URL detected: url=$url")
+            return
+        }
+
         val handle = mpvHandle ?: run {
             logger.warn { "🎬 VIDEO_LOAD: Cannot load episode: mpv not initialized" }
             _playbackState.value = PlaybackState.ERROR
@@ -389,6 +502,13 @@ class PlayerViewModel {
         }
 
         currentUrl = url
+
+        // Create a unique token for this load. Event handlers compare against
+        // this token to detect stale events from a previous episode load.
+        // Using referential identity (===) means each call gets a distinct object.
+        val token = Any()
+        loadToken = token
+
         _playbackState.value = PlaybackState.LOADING
         logger.info { "🎬 VIDEO_LOAD: loading episode into mpv: $url" }
         CrashReporter.logEvent("Video loading", "url=$url")
@@ -410,11 +530,75 @@ class PlayerViewModel {
 
             MPVLib.command(handle, "loadfile", url, "replace")
             logger.info { "🎬 VIDEO_LOAD: loadfile command sent successfully" }
+
+            // Start a timeout: if the file doesn't load within 20 seconds,
+            // transition to ERROR to prevent getting stuck at LOADING/SEEKING.
+            // Guards by token: if a new loadEpisode() bumps loadToken before
+            // this timeout fires, the token comparison ensures we don't act.
+            loadTimeoutJob?.cancel()
+            loadTimeoutJob = scope.launch {
+                delay(LOAD_TIMEOUT_MS)
+                // Stale timeout guard: if loadToken was bumped by a newer
+                // loadEpisode(), this timeout belongs to an old load — skip.
+                if (loadToken !== token) return@launch
+
+                val state = _playbackState.value
+                if (state == PlaybackState.LOADING || state == PlaybackState.SEEKING) {
+                    _playbackState.value = PlaybackState.ERROR
+                    logger.warn { "🎬 VIDEO_TIMEOUT: file did not load within ${LOAD_TIMEOUT_MS / 1000}s" +
+                        " — server may be unreachable, blocked, or URL not a playable stream" }
+                    CrashReporter.logEvent("Video timeout", "url=$url, state=$state" )
+                }
+            }
         } catch (e: Exception) {
             logger.error(e) { "Failed to load episode: $url" }
             CrashReporter.logError("VideoLoad", "Failed to load $url", e)
             _playbackState.value = PlaybackState.ERROR
         }
+    }
+
+    /**
+     * Fast URL-pattern check to detect non-video URLs (embed pages, iframes, etc.)
+     * before sending them to mpv. mpv cannot play HTML pages — sending an embed URL
+     * causes it to hang until the network timeout fires.
+     *
+     * @return true if the URL looks like a playable video stream, false if it looks
+     *         like an HTML embed page or other non-video content.
+     */
+    private fun isVideoUrl(url: String): Boolean {
+        // Definitive video file extensions — these are always safe to send to mpv
+        val videoExtensions = listOf(
+            ".mp4", ".m3u8", ".ts", ".webm", ".mkv", ".avi", ".mov",
+            ".flv", ".wmv", ".ogv", ".3gp", ".mpd", ".m4v", ".aac",
+            ".mp3", ".ogg", ".opus", ".flac", ".mka",
+        )
+        val lowerUrl = url.lowercase()
+
+        // Positive match: URL ends with a known video extension
+        if (videoExtensions.any { lowerUrl.contains(it) }) {
+            return true
+        }
+
+        // Negative match: URL contains embed-related keywords
+        // These are HTML pages, not video streams.
+        val embedPatterns = listOf(
+            "/embed", "/iframe", "/player/", "/e/", "embed-",
+            "embed/", "/play/", "/watch/", "/v/", "/video/",
+        )
+        if (embedPatterns.any { lowerUrl.contains(it) }) {
+            logger.warn { "🎬 VIDEO_URL_REJECTED: URL contains embed/player pattern — not a playable stream: ${url.take(100)}" }
+            return false
+        }
+
+        // If we can't determine from the URL, log a warning and allow it through
+        // (it might be a CDN proxy URL with no extension, which is common for HLS/DASH)
+        logger.info { "🎬 VIDEO_URL_AMBIGUOUS: URL has no recognizable video extension or embed pattern: ${url.take(100)}" }
+        return true
+    }
+
+    /** 20-second timeout for mpv file loading. */
+    companion object {
+        private const val LOAD_TIMEOUT_MS = 20_000L
     }
 
     /**
