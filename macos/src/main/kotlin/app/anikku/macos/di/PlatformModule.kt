@@ -69,17 +69,26 @@ fun platformModule(app: AnikkuApplication) = module {
     single<android.content.Context> { android.app.Application() }
     // NetworkHelper for extension HTTP calls.
     // Crucial: uses the app's MacOSCookieJar (shared cookie store) and injects
-    // the CloudflareInterceptor + DiagnosticLoggingInterceptor so that extension
-    // HTTP calls get Cloudflare bypass, diagnostic logging, and cookie sharing.
+    // the CloudflareInterceptor + DiagnosticLoggingInterceptor + HttpRetryInterceptor
+    // so that extension HTTP calls get Cloudflare bypass, diagnostic logging,
+    // HTTP retry for transient errors, and cookie sharing.
     single<eu.kanade.tachiyomi.network.NetworkHelper> {
         eu.kanade.tachiyomi.network.NetworkHelper(
             preferences = eu.kanade.tachiyomi.network.NetworkPreferences(get<PreferenceStore>()),
             isDebugBuild = false,
             cookieJar = app.cookieJar,
             extraInterceptors = listOf(
+                // HttpRetryInterceptor handles transient errors (502, 503, 504, 429)
+                // with exponential backoff. It runs BEFORE other interceptors so retries
+                // also go through Cloudflare bypass and diagnostic logging.
+                HttpRetryInterceptor(maxRetries = 3, baseDelayMs = 1000),
+                // CloudflareInterceptor detects cf-challenge responses and uses
+                // headless Chrome to extract cf_clearance cookies, then retries.
                 CloudflareInterceptor(app.cookieJar) {
                     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
                 },
+                // DiagnosticLoggingInterceptor logs error responses (non-2xx) with
+                // full request/response details for debugging extension API errors.
                 DiagnosticLoggingInterceptor(isDebugBuild = false),
             ),
         )

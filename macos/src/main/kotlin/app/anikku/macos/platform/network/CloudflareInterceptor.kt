@@ -31,6 +31,14 @@ class CloudflareInterceptor(
 
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
+
+        // Check for infinite retry loop guard BEFORE proceeding.
+        // Use the original request (before any headers were added) to check.
+        if (request.header(X_CF_BYPASS) != null) {
+            logger.debug { "Cloudflare bypass already attempted for ${request.url} — skipping bypass" }
+            return chain.proceed(request)
+        }
+
         val response = chain.proceed(request)
 
         // Not a Cloudflare block — pass through
@@ -41,18 +49,12 @@ class CloudflareInterceptor(
         val url = request.url.toString()
         logger.warn { "🛡 Cloudflare block detected: $url (HTTP ${response.code})" }
 
-        // Prevent infinite retry loops
-        if (request.header(X_CF_BYPASS) != null) {
-            logger.warn { "Cloudflare bypass already attempted for $url — giving up" }
-            return response
-        }
-
         // Close the blocked response body
         response.close()
 
         // Check if Chrome is available
         if (!ChromeCDPClient.isChromeInstalled) {
-            logger.warn { "Chrome not installed — Cloudflare bypass unavailable" }
+            logger.warn { "Chrome not installed — Cloudflare bypass unavailable, marking as attempted" }
             return chain.proceed(request.newBuilder().header(X_CF_BYPASS, "1").build())
         }
 

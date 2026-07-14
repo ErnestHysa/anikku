@@ -363,10 +363,20 @@ class PlayerViewModel {
     // -------------------------------------------------------------------------
 
     /**
-     * Load and play a video URL.
+     * Load and play a video URL with optional HTTP headers.
+     *
+     * Many streaming sources require specific HTTP headers (like Referer or Origin)
+     * to serve the video stream. Without them, the server may reject the request,
+     * return a 403, or serve a placeholder file (causing "stuck at seeking" or
+     * 1-second playback).
+     *
+     * This method sets `http-header-fields` on mpv BEFORE calling `loadfile`,
+     * so mpv includes the required headers in its HTTP requests to the stream server.
+     *
      * @param url The video URL to play (can be an http:// or file:// URI)
+     * @param headers Optional HTTP headers (e.g. Referer, User-Agent) to pass to mpv
      */
-    fun loadEpisode(url: String) {
+    fun loadEpisode(url: String, headers: Map<String, String>? = null) {
         val handle = mpvHandle ?: run {
             logger.warn { "🎬 VIDEO_LOAD: Cannot load episode: mpv not initialized" }
             _playbackState.value = PlaybackState.ERROR
@@ -380,6 +390,20 @@ class PlayerViewModel {
         CrashReporter.logEvent("Video loading", "url=$url")
 
         try {
+            // Set HTTP headers BEFORE loadfile so mpv sends them with the initial request.
+            // mpv's http-header-fields format: "Header1: value1", "Header2: value2"
+            if (!headers.isNullOrEmpty()) {
+                val httpHeaderFields = headers.entries.joinToString(",") { (name, value) ->
+                    val escapedValue = value.replace("\"", "\\\"")
+                    "\"$name: $escapedValue\""
+                }
+                logger.info { "🎬 VIDEO_LOAD: setting http-header-fields: $httpHeaderFields" }
+                val headerResult = MPVLib.setOptionString(handle, "http-header-fields", httpHeaderFields)
+                if (headerResult != null && headerResult < 0) {
+                    logger.warn { "🎬 VIDEO_LOAD: http-header-fields returned $headerResult (non-fatal)" }
+                }
+            }
+
             MPVLib.command(handle, "loadfile", url, "replace")
             logger.info { "🎬 VIDEO_LOAD: loadfile command sent successfully" }
         } catch (e: Exception) {
