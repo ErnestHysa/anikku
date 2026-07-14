@@ -209,11 +209,11 @@ exit 1
 val buildKeiyoushiExtName: String? by project
 val buildKeiyoushiExtLang: String? by project
 
-tasks.register<Exec>("buildKeiyoushiExtension") {
+tasks.register("buildKeiyoushiExtension") {
     description = "Build a single yuzono anime extension from source as JVM JAR"
     group = "extension"
 
-    doFirst {
+    doLast {
         val extName = buildKeiyoushiExtName
             ?: throw GradleException("Usage: -PbuildKeiyoushiExtName=<name>")
         val extLang = buildKeiyoushiExtLang?.ifBlank { "en" } ?: "en"
@@ -221,14 +221,14 @@ tasks.register<Exec>("buildKeiyoushiExtension") {
 
         logger.lifecycle("Building extension: $extName (lang: $extLang)")
         logger.lifecycle("Script: $scriptPath")
-        logger.lifecycle("Requirements: kotlinc (brew install kotlin)")
 
-        exec {
+        project.exec {
             commandLine(
                 "bash", scriptPath,
                 "--pkg", extName,
                 "--lang", extLang,
             )
+            workingDir = project.projectDir
         }
     }
 }
@@ -236,17 +236,16 @@ tasks.register<Exec>("buildKeiyoushiExtension") {
 val batchExtLang: String? by project
 val batchExtLimit: String? by project
 
-tasks.register<Exec>("batchBuildKeiyoushiExtensions") {
+tasks.register("batchBuildKeiyoushiExtensions") {
     description = "Batch-build ALL yuzono anime extensions from source as JVM JARs"
     group = "extension"
 
-    doFirst {
+    doLast {
         val scriptPath = "${project.projectDir}/scripts/batch-build-keiyoushi-from-source.sh"
         val lang = (batchExtLang?.ifBlank { "en" }) ?: "en"
 
         logger.lifecycle("Batch-building extensions for language: $lang")
         logger.lifecycle("Script: $scriptPath")
-        logger.lifecycle("Requirements: kotlinc (brew install kotlin)")
 
         val args = mutableListOf("bash", scriptPath, "--lang", lang)
         val limit = batchExtLimit
@@ -255,7 +254,10 @@ tasks.register<Exec>("batchBuildKeiyoushiExtensions") {
             args.add(limit)
         }
 
-        exec { commandLine(args) }
+        project.exec {
+            commandLine(args)
+            workingDir = project.projectDir
+        }
     }
 }
 

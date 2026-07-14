@@ -30,21 +30,24 @@ object UrlUtils {
             }
             else -> {
                 // Ensure the path starts with '/' for proper baseUrl concatenation.
-                // If url is a relative path like "tv/37854/23" (no leading '/'),
-                // the path must be normalized to avoid producing malformed URLs
-                // when concatenated with baseUrl (e.g. "https://site.comtv/...").
                 val normalizedUrl = if (url.startsWith("/")) url else "/$url"
+
+                // Build the parent path by removing the last path segment
+                val currentPath = baseHttpUrl.encodedPath
+                val parentPath = if (currentPath.count { it == '/' } > 1) {
+                    currentPath.substringBeforeLast("/") + "/"
+                } else {
+                    "/"
+                }
+
+                // Rebuild base URL with the parent path (preserves scheme + host)
                 val basePath = baseHttpUrl.newBuilder().apply {
-                    // Remove last path segment to get the parent directory
-                    if (pathSize > 0) {
-                        removePathSegment(pathSize - 1)
-                    }
+                    encodedPath = parentPath
                     query(null)
                     fragment(null)
                 }.build().toString()
-                // Ensure basePath ends with / before appending the normalized url
-                val safeBase = if (basePath.endsWith("/")) basePath else "$basePath/"
-                safeBase + normalizedUrl.drop(1)
+
+                basePath + normalizedUrl.trimStart('/')
             }
         }
     }
