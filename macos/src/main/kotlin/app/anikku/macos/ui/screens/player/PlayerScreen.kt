@@ -271,8 +271,7 @@ data class PlayerScreen(
         var sourceEpisodes by remember { mutableStateOf<List<SEpisode>>(emptyList()) }
         var currentEpisodeIndex by remember { mutableIntStateOf(0) }
         var animeTitle by remember { mutableStateOf("Unknown") }
-        var videoUrlToLoad by remember { mutableStateOf<String?>(null) }
-        var videoHeadersToLoad by remember { mutableStateOf<Map<String, String>?>(null) }
+        var resolvedVideo by remember { mutableStateOf<VideoResolution?>(null) }
         var videoQualityResolution by remember { mutableStateOf<Int?>(null) }
         var videoQualityLabel by remember { mutableStateOf<String?>(null) }
         var isLoading by remember { mutableStateOf(true) }
@@ -329,7 +328,7 @@ data class PlayerScreen(
             resolutionStatusText = "Resolving video from \"$sourceName\"..."
             
             val currentSEpisode = sourceEpisodes.getOrNull(currentEpisodeIndex)
-            val resolvedVideo = resolveVideoUrl(
+            val resolved = resolveVideoUrl(
                 sEpisode = currentSEpisode,
                 episodeNumber = currentEpisodeNumber,
                 httpServer = httpServer,
@@ -348,9 +347,8 @@ data class PlayerScreen(
             isOfflinePlayback = downloadManager != null && currentEpisodeNumber > 0 &&
                 downloadManager.isDownloaded(animeId, currentEpisodeNumber)
 
-            if (resolvedVideo != null) {
-                videoUrlToLoad = resolvedVideo.url
-                videoHeadersToLoad = resolvedVideo.headers
+            if (resolved != null) {
+                this.resolvedVideo = resolved
                 resolutionStatusText = "Video resolved — loading into player..."
             } else if (!usedSource && allEpisodes.isEmpty()) {
                 // No source data available — show loading completed with no video
@@ -363,22 +361,21 @@ data class PlayerScreen(
             }
         }
 
-        // When video URL is available AND mpv is ready, load it into mpv
-        // We pass the resolved video URL and HTTP headers (Referer, User-Agent)
-        // to loadEpisode, which sets http-header-fields on mpv before loading.
-        LaunchedEffect(videoUrlToLoad, mpvHandle) {
-            val url = videoUrlToLoad
-            val hdrs = videoHeadersToLoad
-            if (url != null && mpvHandle != null) {
+        // When video is resolved AND mpv is ready, load it into mpv
+        // Uses a single VideoResolution state to ensure URL and headers
+        // are always passed atomically (no race condition).
+        LaunchedEffect(resolvedVideo, mpvHandle) {
+            val video = resolvedVideo
+            if (video != null && mpvHandle != null) {
                 resolutionStatusText = "Loading video into mpv player..."
-                playerViewModel.loadEpisode(url, hdrs)
+                playerViewModel.loadEpisode(video.url, video.headers)
             }
         }
 
         // Transition from loading to playing: when mpv reports playing state,
         // remove the loading screen so the user sees the video
-        LaunchedEffect(videoUrlToLoad, playbackState) {
-            if (videoUrlToLoad != null && playbackState != PlaybackState.IDLE && playbackState != PlaybackState.ERROR) {
+        LaunchedEffect(resolvedVideo, playbackState) {
+            if (resolvedVideo != null && playbackState != PlaybackState.IDLE && playbackState != PlaybackState.ERROR) {
                 // Video is loading/buffering/playing — hide the loading screen
                 isLoading = false
                 resolutionStatusText = ""
@@ -465,7 +462,7 @@ data class PlayerScreen(
             isVflip = isVflip,
             isMPVAvailable = playerViewModel.isMPVAvailable,
             isOfflinePlayback = isOfflinePlayback,
-            hasVideoUrl = videoUrlToLoad != null,
+            hasVideoUrl = resolvedVideo != null,
             isResolvingVideo = isResolvingVideo,
             resolutionStatusText = resolutionStatusText,
             videoResolutionError = videoResolutionError,
@@ -494,7 +491,7 @@ data class PlayerScreen(
                             downloadManager.isDownloaded(animeId, episode.episodeNumber)
 
                         val se = sourceEpisodes.getOrNull(index)
-                        val resolvedVideo = resolveVideoUrl(
+                        val resolved = resolveVideoUrl(
                             sEpisode = se,
                             episodeNumber = episode.episodeNumber,
                             httpServer = httpServer,
@@ -504,9 +501,8 @@ data class PlayerScreen(
                             },
                             onError = { msg -> toastHost.show(msg, ToastDuration.LONG) },
                         )
-                        if (resolvedVideo != null) {
-                            videoUrlToLoad = resolvedVideo.url
-                            videoHeadersToLoad = resolvedVideo.headers
+                        if (resolved != null) {
+                            this.resolvedVideo = resolved
                         } else if (sourceId != null && episode.url != null) {
                             // Fall back to source API — build full SEpisode from EpisodeModel
                             val source = extensionManager?.getSource(sourceId)
@@ -521,7 +517,20 @@ data class PlayerScreen(
                                     }
                                     val videos = source.getVideoList(sEpisode)
                                     if (videos.isNotEmpty()) {
-                                        videoUrlToLoad = videos.first().videoUrl
+                                        val best = videos.firstOrNull { it.preferred } ?: videos.first()
+                                        val fallbackHeaders = try {
+                                            best.headers?.let { h ->
+                                                val map = mutableMapOf<String, String>()
+                                                for (i in 0 until h.size) {
+                                                    map[h.name(i)] = h.value(i)
+                                                }
+                                                if (!map.containsKey("User-Agent")) {
+                                                    map["User-Agent"] = DEFAULT_USER_AGENT
+                                                }
+                                                map
+                                            } ?: mapOf("User-Agent" to DEFAULT_USER_AGENT)
+                                        } catch (_: Exception) { null }
+                                        this.resolvedVideo = VideoResolution(url = best.videoUrl, headers = fallbackHeaders)
                                     }
                                 } catch (_: Exception) {
                                     toastHost.show("Failed to load episode", ToastDuration.SHORT)
