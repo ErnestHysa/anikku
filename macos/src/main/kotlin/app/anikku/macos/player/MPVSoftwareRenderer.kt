@@ -62,7 +62,7 @@ class MPVSoftwareRenderer(
     private var sizeParams: Memory? = null
     private var strideParam: Memory? = null
     private var formatParam: Memory? = null
-    private var renderParams: Memory? = null
+    private var renderParams: Pointer? = null
 
     /** Fallback byte buffer for non-bgr0 pixel formats. */
     private var rawByteBuffer: ByteArray? = null
@@ -145,7 +145,7 @@ class MPVSoftwareRenderer(
     }
 
     /** Build the reusable render params memory for the given pixel format. */
-    private fun buildRenderParamsForFormat(format: String): Memory {
+    private fun buildRenderParamsForFormat(format: String): Pointer {
         formatParam = Memory(5L).also { it.setString(0, format) }
         return MPVLib.buildRenderParams(
             MPVLib.RENDER_PARAM_SW_SIZE to sizeParams,
@@ -162,7 +162,7 @@ class MPVSoftwareRenderer(
         val width: Int,
         val height: Int,
         val stride: Int,
-        val params: Memory,
+        val params: Pointer,
         val intBuffer: IntArray,
         /** Whether the snapshot is using the rgb0 fallback path. */
         val isRgb0Fallback: Boolean = false,

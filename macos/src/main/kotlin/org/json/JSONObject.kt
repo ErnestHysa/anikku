@@ -8,6 +8,36 @@ package org.json
 open class JSONObject {
     companion object {
         val NULL: Any? = null
+
+        /**
+         * Produce a string that is quoted for use in a JSON text.
+         * Escapes quotes, backslashes, and control characters.
+         */
+        fun quote(string: String?): String {
+            if (string == null || string.isEmpty()) return "\"\""
+            val sb = StringBuilder()
+            sb.append('"')
+            for (c in string) {
+                when (c) {
+                    '"' -> sb.append("\\\"")
+                    '\\' -> sb.append("\\\\")
+                    '\b' -> sb.append("\\b")
+                    '\u000C' -> sb.append("\\f")
+                    '\n' -> sb.append("\\n")
+                    '\r' -> sb.append("\\r")
+                    '\t' -> sb.append("\\t")
+                    else -> {
+                        if (c.code in 0..31) {
+                            sb.append(String.format("\\u%04x", c.code))
+                        } else {
+                            sb.append(c)
+                        }
+                    }
+                }
+            }
+            sb.append('"')
+            return sb.toString()
+        }
     }
 
     private val map = linkedMapOf<String, Any?>()
