@@ -13,6 +13,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.concurrent.TimeUnit
 
 private val logger = KotlinLogging.logger {}
 
@@ -73,6 +75,16 @@ class PlayerViewModel {
 
     /** Current video URL being played. */
     private var currentUrl: String? = null
+
+    /** Magnet streamer process when playing a torrent. */
+    private var magnetProcess: Process? = null
+
+    /**
+     * Token to guard against stale magnet-load coroutines firing after
+     * the user switches to a different episode.
+     */
+    @Volatile
+    private var magnetLoadToken: Any? = null
 
     // -------------------------------------------------------------------------
     // Observable state
@@ -353,6 +365,9 @@ class PlayerViewModel {
         )
         val nonCriticalOptions = listOf(
             "audio-file-auto" to "no",
+            // Enable yt-dlp integration so mpv can play YouTube, Vimeo, Dailymotion,
+            // Bilibili, Twitch, and hundreds of other streaming sites via yt-dlp.
+            "ytdl" to "yes",
             "sub-auto" to "fuzzy",
             "sub-file-auto" to "no",
             "osd-level" to "0",
@@ -439,6 +454,16 @@ class PlayerViewModel {
         _handle.value = null
         mpvHandle = null
         eventLoop = null
+
+        // Clean up magnet streamer process if running
+        magnetProcess?.let { proc ->
+            try {
+                MagnetStreamer.stopStreaming(MagnetStreamResult.Success("", proc))
+            } catch (_: Exception) { }
+            magnetProcess = null
+            logger.info { "🧲 MAGNET_SHUTDOWN: torrent stream process terminated" }
+        }
+
         _playbackState.value = PlaybackState.IDLE
         logger.info { "🎬 PLAYER_SHUTDOWN: mpv player shut down complete" }
         CrashReporter.logEvent("Player shutdown")
@@ -483,6 +508,14 @@ class PlayerViewModel {
      * @param headers Optional HTTP headers (e.g. Referer, User-Agent) to pass to mpv
      */
     fun loadEpisode(url: String, headers: Map<String, String>? = null) {
+        // ── Magnet link handling ────────────────────────────────────
+        // If the URL is a magnet: link, delegate to MagnetStreamer to
+        // convert it into a local HTTP stream via webtorrent-cli.
+        if (url.startsWith("magnet:")) {
+            loadMagnetEpisode(url)
+            return
+        }
+
         // Pre-check: reject non-video URLs (embed pages, iframes) before sending to mpv.
         // mpv cannot play HTML, so sending an embed URL would cause it to hang until
         // the 10-second stream-timeout fires. This check catches the most common
@@ -554,6 +587,84 @@ class PlayerViewModel {
             logger.error(e) { "Failed to load episode: $url" }
             CrashReporter.logError("VideoLoad", "Failed to load $url", e)
             _playbackState.value = PlaybackState.ERROR
+        }
+    }
+
+    // ── Magnet Link Handling ──────────────────────────────────────
+
+    /**
+     * Load a magnet:// torrent URL by first converting it to a local HTTP stream
+     * via [MagnetStreamer], then feeding that stream URL to mpv.
+     *
+     * Architecture:
+     *   magnet:?xt=urn:btih:...  ─→  webtorrent-cli (spawned by MagnetStreamer)
+     *        │
+     *        ▼  (local HTTP server at http://localhost:PORT/0)
+     *   mpv plays the stream
+     *
+     * If webtorrent-cli is not installed, the user will see an error with
+     * instructions to install it:
+     *   npm install -g webtorrent-cli
+     */
+    private fun loadMagnetEpisode(magnetUrl: String) {
+        logger.info { "🧲 MAGNET: Starting torrent stream: ${magnetUrl.take(80)}..." }
+        _playbackState.value = PlaybackState.LOADING
+
+        // Create a unique token for this load. If loadEpisode is called again
+        // while a magnet stream is starting, the old coroutine will compare
+        // tokens and skip calling loadEpisode with the stale URL.
+        val token = Any()
+        magnetLoadToken = token
+
+        // Kill any previous magnet process
+        magnetProcess?.let { prevProcess ->
+            try {
+                prevProcess.destroy()
+                prevProcess.waitFor(3, TimeUnit.SECONDS)
+                MagnetStreamer.stopStreaming(MagnetStreamResult.Success("", prevProcess))
+            } catch (_: Exception) { }
+            magnetProcess = null
+        }
+
+        scope.launch {
+            try {
+                val result = MagnetStreamer.startStreaming(magnetUrl)
+
+                // Stale guard: if loadEpisode was called again while we were
+                // waiting for webtorrent to start, ignore this result.
+                if (magnetLoadToken !== token) return@launch
+
+                withContext(Dispatchers.Main) {
+                    when (result) {
+                        is MagnetStreamResult.Success -> {
+                            magnetProcess = result.process
+                            logger.info { "🧲 MAGNET: webtorrent server ready at ${result.httpUrl}" }
+                            // Stale guard check again after context switch
+                            if (magnetLoadToken !== token) {
+                                MagnetStreamer.stopStreaming(result)
+                                return@withContext
+                            }
+                            // Load the HTTP stream URL into mpv (no special headers needed
+                            // for localhost streaming)
+                            loadEpisode(result.httpUrl)
+                        }
+                        is MagnetStreamResult.Failure -> {
+                            // Don't show error if this was superseded by a newer load
+                            if (magnetLoadToken !== token) return@withContext
+                            _playbackState.value = PlaybackState.ERROR
+                            logger.warn { "🧲 MAGNET: Failed to start torrent stream: ${result.message}" }
+                            CrashReporter.logEvent("Magnet stream failed", result.message)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                if (magnetLoadToken !== token) return@launch
+                withContext(Dispatchers.Main) {
+                    _playbackState.value = PlaybackState.ERROR
+                    logger.error(e) { "🧲 MAGNET: Unexpected error streaming torrent" }
+                    CrashReporter.logError("MagnetError", e.message ?: "", e)
+                }
+            }
         }
     }
 

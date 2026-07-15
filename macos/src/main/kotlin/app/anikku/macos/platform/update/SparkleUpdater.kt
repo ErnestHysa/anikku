@@ -244,6 +244,8 @@ class SparkleUpdater(
                 "build/sparkle/libSparkleHelper.dylib",
                 "macos/build/sparkle/libSparkleHelper.dylib",
                 "../build/sparkle/libSparkleHelper.dylib",
+                "src/main/resources/dist/Frameworks/libSparkleHelper.dylib",
+                "macos/src/main/resources/dist/Frameworks/libSparkleHelper.dylib",
             )
             val cwd = System.getProperty("user.dir", ".")
             for (candidate in candidates) {

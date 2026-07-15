@@ -209,6 +209,61 @@ exit 1
 val buildKeiyoushiExtName: String? by project
 val buildKeiyoushiExtLang: String? by project
 
+// ---- Nyaa.si Extension Build -----------------------------------------------
+
+/**
+ * Build the Nyaa.si torrent search extension JAR.
+ *
+ * The Nyaa.si extension is a separate Gradle sub-project at macos/nyaa-extension/.
+ * This task delegates to that project's build script.
+ *
+ * Usage:
+ *   ./gradlew -p macos buildNyaaExtension
+ *
+ * After building, the JAR is at:
+ *   macos/nyaa-extension/build/libs/nyaa-extension-1.0.0.jar
+ *
+ * Install it:
+ *   cp macos/nyaa-extension/build/libs/nyaa-extension-1.0.0.jar \
+ *     ~/Library/Application\ Support/Anikku/extensions/
+ */
+tasks.register("buildNyaaExtension") {
+    description = "Build the Nyaa.si torrent search extension JAR"
+    group = "extension"
+
+    doLast {
+        val extDir = file("${project.projectDir}/nyaa-extension")
+        if (!extDir.isDirectory) {
+            throw GradleException("Nyaa extension directory not found at ${extDir.absolutePath}")
+        }
+
+        logger.lifecycle("Building Nyaa.si extension from ${extDir.absolutePath}")
+
+        project.exec {
+            workingDir = extDir
+            commandLine(
+                "./gradlew", "buildNyaaExtensionJar", "--no-daemon", "-q",
+            )
+            environment("JAVA_HOME", System.getenv("JAVA_HOME") ?: "/opt/homebrew/opt/openjdk@17")
+        }
+
+        val jarFile = file("${extDir}/build/libs/nyaa-extension-1.0.0.jar")
+        if (jarFile.isFile) {
+            logger.lifecycle("✅ Nyaa.si extension built: ${jarFile.absolutePath} (${jarFile.length()} bytes)")
+
+            // Optionally copy to extensions directory
+            val extensionsDir = file("${System.getProperty("user.home")}/Library/Application Support/Anikku/extensions")
+            if (extensionsDir.isDirectory) {
+                val target = File(extensionsDir, "eu.kanade.tachiyomi.animeextension.en.nyaasi.jar")
+                jarFile.copyTo(target, overwrite = true)
+                logger.lifecycle("✅ Copied to: ${target.absolutePath}")
+            }
+        } else {
+            logger.warn("⚠️ JAR not found at expected path: ${jarFile.absolutePath}")
+        }
+    }
+}
+
 tasks.register("buildKeiyoushiExtension") {
     description = "Build a single yuzono anime extension from source as JVM JAR"
     group = "extension"

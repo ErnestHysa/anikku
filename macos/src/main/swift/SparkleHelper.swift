@@ -94,5 +94,6 @@ public func sparkle_feedURL() -> UnsafePointer<CChar>? {
         return nil
     }
     // Sparkle reads SUFeedURL from Info.plist, not UserDefaults.
-    return controller.updater.feedURL?.absoluteString.flatMap { strdup($0) }
+    guard let urlString = controller.updater.feedURL?.absoluteString else { return nil }
+    return UnsafePointer(strdup(urlString))
 }
