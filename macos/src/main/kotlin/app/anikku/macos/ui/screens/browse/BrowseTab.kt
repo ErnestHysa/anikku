@@ -296,11 +296,12 @@ private fun SourceItem(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    val health = SourceHealthChecker.getHealth(source.id)
-                    if (health.status == SourceHealthChecker.Health.FAILING && health.category != null) {
+                    val health by SourceHealthChecker.observeHealth(source.id).collectAsState()
+                    val category = health.category
+                    if (health.status == SourceHealthChecker.Health.FAILING && category != null) {
                         Spacer(Modifier.width(8.dp))
                         Text(
-                            text = "· ${errorCategoryEmoji(health.category)} ${health.category}",
+                            text = "· ${errorCategoryEmoji(category)} $category",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error.copy(alpha = 0.8f),
                         )

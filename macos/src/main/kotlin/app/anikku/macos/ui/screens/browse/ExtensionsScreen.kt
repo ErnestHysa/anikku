@@ -494,6 +494,28 @@ private fun InstalledExtensionCard(
                         color = MaterialTheme.colorScheme.tertiary,
                     )
                 }
+                // Show health indicator badges for up to 8 sources, then "+N"
+                if (extension.sources.isNotEmpty()) {
+                    Spacer(Modifier.height(4.dp))
+                    val displaySources = extension.sources.take(8)
+                    val remaining = extension.sources.size - displaySources.size
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.dp),
+                    ) {
+                        displaySources.forEach { source ->
+                            SourceHealthBadge(source = source)
+                        }
+                        if (remaining > 0) {
+                            Text(
+                                "+$remaining",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                modifier = Modifier.padding(start = 2.dp),
+                            )
+                        }
+                    }
+                }
             }
             IconButton(onClick = onRemove) {
                 Icon(
@@ -605,6 +627,30 @@ private fun AvailableExtensionCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                // Show cached health badges (gray if never installed before)
+                if (extension.sources.isNotEmpty()) {
+                    Spacer(Modifier.height(4.dp))
+                    val displaySources = extension.sources.take(8)
+                    val remaining = extension.sources.size - displaySources.size
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(3.dp),
+                    ) {
+                        displaySources.forEach { animeSource ->
+                            SourceHealthBadge(
+                                sourceId = animeSource.id,
+                            )
+                        }
+                        if (remaining > 0) {
+                            Text(
+                                "+$remaining",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                modifier = Modifier.padding(start = 2.dp),
+                            )
+                        }
+                    }
+                }
             }
             if (isInstalled) {
                 Icon(

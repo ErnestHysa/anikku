@@ -6,22 +6,22 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+import eu.kanade.tachiyomi.extension.model.Extension
 import eu.kanade.tachiyomi.source.CatalogueSource
 import eu.kanade.tachiyomi.source.Source
 import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
-import java.util.concurrent.ConcurrentHashMap
 
 private val logger = KotlinLogging.logger {}
 
@@ -30,6 +30,9 @@ private val logger = KotlinLogging.logger {}
  * Health checks are performed once and cached per source ID for the session
  * (the process lifetime). To force a refresh, clear the cache by calling
  * [clearCache] or restart the app.
+ *
+ * Uses [StateFlow] internally so composables can observe health changes reactively
+ * via [observeHealth].
  */
 object SourceHealthChecker {
 
@@ -54,15 +57,34 @@ object SourceHealthChecker {
         val cachedAt: Long = System.currentTimeMillis(),
     )
 
-    private val healthCache = ConcurrentHashMap<Long, HealthResult>()
+    // Reactive state — the full map of all source health results
+    private val _healthFlow = MutableStateFlow<Map<Long, HealthResult>>(emptyMap())
+
+    /** Public read-only flow of the complete health map. */
+    val healthFlow: StateFlow<Map<Long, HealthResult>> = _healthFlow.asStateFlow()
+
+    // Per-source reactive flows so composables can observe individual sources
+    private val sourceFlows = mutableMapOf<Long, MutableStateFlow<HealthResult>>()
 
     private const val TIMEOUT_MS = 8_000L
 
     /**
      * Get the cached health result for a source, or UNKNOWN if not yet checked.
+     * This returns the current snapshot — for reactive observation, use [observeHealth].
      */
     fun getHealth(sourceId: Long): HealthResult {
-        return healthCache[sourceId] ?: HealthResult(Health.UNKNOWN)
+        return _healthFlow.value[sourceId] ?: HealthResult(Health.UNKNOWN)
+    }
+
+    /**
+     * Observe health changes for a specific source reactively.
+     * Returns a [StateFlow] that emits whenever the health result for this source changes.
+     * Composables can use `.collectAsState()` to trigger recomposition automatically.
+     */
+    fun observeHealth(sourceId: Long): StateFlow<HealthResult> {
+        return sourceFlows.getOrPut(sourceId) {
+            MutableStateFlow(getHealth(sourceId))
+        }.asStateFlow()
     }
 
     /**
@@ -72,18 +94,20 @@ object SourceHealthChecker {
      * The check is lightweight: calls [CatalogueSource.getPopularAnime] with a
      * timeout. If that succeeds, the source is marked as WORKING. If the call
      * is not a [CatalogueSource], the source is marked as UNKNOWN.
+     *
+     * All consumers observing this source via [observeHealth] will be notified
+     * automatically when the check completes.
      */
     suspend fun checkHealth(source: Source): HealthResult {
         val sourceId = source.id
 
-        // Return cached result if available
-        healthCache[sourceId]?.let {
-            if (it.status != Health.UNKNOWN) return it
-        }
+        // Return cached result if already checked
+        val cached = _healthFlow.value[sourceId]
+        if (cached != null && cached.status != Health.UNKNOWN) return cached
 
         if (source !is CatalogueSource) {
             val result = HealthResult(Health.UNKNOWN)
-            healthCache[sourceId] = result
+            setResult(sourceId, result)
             return result
         }
 
@@ -92,7 +116,6 @@ object SourceHealthChecker {
             val page = withContext(Dispatchers.IO) {
                 withTimeout(TIMEOUT_MS) {
                     if (source.supportsLatest) {
-                        // For sources that support latest updates, try that (faster path)
                         source.getLatestUpdates(page = 1)
                     } else {
                         source.getPopularAnime(page = 1)
@@ -109,11 +132,11 @@ object SourceHealthChecker {
             } else {
                 HealthResult(Health.FAILING, "Empty", "Returned 0 results in ${elapsed}ms")
             }
-            healthCache[sourceId] = result
+            setResult(sourceId, result)
             result
         } catch (e: kotlinx.coroutines.TimeoutCancellationException) {
             val result = HealthResult(Health.FAILING, "Timeout", "Request timed out after ${TIMEOUT_MS}ms")
-            healthCache[sourceId] = result
+            setResult(sourceId, result)
             result
         } catch (e: Exception) {
             val msg = e.message ?: ""
@@ -132,16 +155,30 @@ object SourceHealthChecker {
             val detail = "${e.javaClass.simpleName}: ${msg.take(60)}"
             logger.debug { "Health check for source #$sourceId: $category — $detail" }
             val result = HealthResult(Health.FAILING, category, detail)
-            healthCache[sourceId] = result
+            setResult(sourceId, result)
             result
         }
     }
 
     /**
+     * Update both the global health map and the per-source flow atomically.
+     */
+    private fun setResult(sourceId: Long, result: HealthResult) {
+        // Update the full map
+        _healthFlow.value = _healthFlow.value + (sourceId to result)
+        // Update the per-source flow if it exists
+        sourceFlows[sourceId]?.value = result
+    }
+
+    /**
      * Clear the health cache — forces re-check on next access.
+     * All observers will be reset to UNKNOWN and composables will recompose
+     * to show gray dots until health checks re-run.
      */
     fun clearCache() {
-        healthCache.clear()
+        _healthFlow.value = emptyMap()
+        sourceFlows.values.forEach { it.value = HealthResult(Health.UNKNOWN) }
+        sourceFlows.clear()
     }
 }
 
@@ -153,6 +190,8 @@ object SourceHealthChecker {
  * - ⚫ GRAY: Unknown (not yet checked)
  *
  * The health check runs once (as a side effect) and is cached for the session.
+ * The dot updates reactively — when the health check completes, the color changes
+ * automatically without requiring recomposition from the parent.
  *
  * @param source The source to check.
  * @param modifier Optional modifier for positioning.
@@ -162,15 +201,53 @@ fun SourceHealthBadge(
     source: Source,
     modifier: Modifier = Modifier,
 ) {
-    // Show cached result immediately, then re-check in background
-    var healthResult by remember(source.id) {
-        mutableStateOf(SourceHealthChecker.getHealth(source.id))
+    // Collect from reactive state flow — updates automatically when health check completes
+    val healthResult by SourceHealthChecker.observeHealth(source.id).collectAsState()
+
+    // Trigger health check once per source per session
+    LaunchedEffect(source.id) {
+        SourceHealthChecker.checkHealth(source)
     }
 
-    // Perform health check once per source per session
-    LaunchedEffect(source.id) {
-        healthResult = SourceHealthChecker.checkHealth(source)
+    val color = when (healthResult.status) {
+        SourceHealthChecker.Health.WORKING -> Color(0xFF4ECCA3)  // green
+        SourceHealthChecker.Health.FAILING -> Color(0xFFE94560)  // red
+        SourceHealthChecker.Health.UNKNOWN -> Color(0xFF666666)  // gray
     }
+
+    val size = when (healthResult.status) {
+        SourceHealthChecker.Health.WORKING -> 8.dp
+        SourceHealthChecker.Health.FAILING -> 8.dp
+        SourceHealthChecker.Health.UNKNOWN -> 6.dp
+    }
+
+    Box(
+        modifier = modifier
+            .size(size)
+            .clip(CircleShape)
+            .background(color),
+    )
+}
+
+/**
+ * A small colored dot that indicates the health of a source by its ID only.
+ * This variant reads from the cache but does NOT trigger a health check — use it
+ * for sources that are not yet instantiated (e.g., from [Extension.Available]).
+ *
+ * The dot will be gray (UNKNOWN) for sources that have never been checked,
+ * or display the cached health color if this source was checked before
+ * (e.g., when the extension was previously installed).
+ *
+ * @param sourceId The source ID to display health for.
+ * @param modifier Optional modifier for positioning.
+ */
+@Composable
+fun SourceHealthBadge(
+    sourceId: Long,
+    modifier: Modifier = Modifier,
+) {
+    // Collect from reactive state flow — shows cached value or UNKNOWN
+    val healthResult by SourceHealthChecker.observeHealth(sourceId).collectAsState()
 
     val color = when (healthResult.status) {
         SourceHealthChecker.Health.WORKING -> Color(0xFF4ECCA3)  // green
