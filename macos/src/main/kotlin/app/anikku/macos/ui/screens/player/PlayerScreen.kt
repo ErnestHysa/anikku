@@ -802,6 +802,7 @@ data class PlayerScreen(
         fun resolveAndPlay(startIndex: Int) {
             scope.launch {
                 videoResolutionError = null
+                videoErrorDiagnostic = null
                 resolvedVideo = null
                 isResolvingVideo = true
                 isLoading = true

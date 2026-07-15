@@ -226,8 +226,7 @@ object BrowseTab : AnikkuScreen(), Tab {
                     items = filteredSources,
                     key = { it.id },
                 ) { source ->                        SourceItem(
-                            sourceName = source.name,
-                            sourceLang = source.lang,
+                            source = source,
                             onClick = {
                                 UIActionLogger.logClick("BrowseTab", source.name, "select source", "id=${source.id}")
                                 navigator.push(SourceBrowseScreen(
@@ -245,8 +244,7 @@ object BrowseTab : AnikkuScreen(), Tab {
 
 @Composable
 private fun SourceItem(
-    sourceName: String,
-    sourceLang: String,
+    source: Source,
     onClick: () -> Unit,
 ) {
     Card(
@@ -261,7 +259,7 @@ private fun SourceItem(
             modifier = Modifier.fillMaxWidth().padding(12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // Language icon
+            // Language icon with health indicator overlay
             Box(
                 modifier = Modifier
                     .size(40.dp)
@@ -270,7 +268,7 @@ private fun SourceItem(
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = sourceLang.uppercase().take(2),
+                    text = source.lang.uppercase().take(2),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
                     fontWeight = FontWeight.Bold,
@@ -280,18 +278,34 @@ private fun SourceItem(
             Spacer(Modifier.width(12.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = sourceName,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = "${sourceLang.uppercase()} source",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = source.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    SourceHealthBadge(source = source)
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "${source.lang.uppercase()} source",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    val health = SourceHealthChecker.getHealth(source.id)
+                    if (health.status == SourceHealthChecker.Health.FAILING && health.category != null) {
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "· ${errorCategoryEmoji(health.category)} ${health.category}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error.copy(alpha = 0.8f),
+                        )
+                    }
+                }
             }
 
             Icon(
@@ -302,4 +316,18 @@ private fun SourceItem(
             )
         }
     }
+}
+
+/**
+ * Returns a relevant emoji for a health-check error category.
+ */
+private fun errorCategoryEmoji(category: String): String = when (category.lowercase()) {
+    "dns" -> "🌐"
+    "ssl" -> "🔒"
+    "timeout" -> "⏱"
+    "403" -> "🚫"
+    "404" -> "🔍"
+    "5xx" -> "⚠️"
+    "cloudflare" -> "☁️"
+    else -> "❌"
 }
