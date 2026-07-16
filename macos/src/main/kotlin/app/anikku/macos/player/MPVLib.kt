@@ -568,6 +568,13 @@ object MPVLib {
     const val RENDER_FORMAT_0BGR = "0bgr"
 
     // -------------------------------------------------------------------------
+    // Default User-Agent used for network streams when none is provided.
+    // -------------------------------------------------------------------------
+
+    const val DEFAULT_USER_AGENT =
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
+
+    // -------------------------------------------------------------------------
     // Utility helper — JNA structure for double values
     // -------------------------------------------------------------------------
 

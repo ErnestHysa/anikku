@@ -46,6 +46,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.anikku.macos.platform.logging.UIActionLogger
 import app.anikku.macos.platform.extension.MacOSExtensionManager
+import app.anikku.macos.platform.preference.MacOSPreferenceStore
 import app.anikku.macos.ui.AnikkuScreen
 import cafe.adriel.voyager.navigator.LocalNavigator
 import cafe.adriel.voyager.navigator.currentOrThrow
@@ -73,9 +74,18 @@ object BrowseTab : AnikkuScreen(), Tab {
     private val _extensionManager = MutableStateFlow<MacOSExtensionManager?>(null)
     val extensionManagerFlow: StateFlow<MacOSExtensionManager?> = _extensionManager.asStateFlow()
 
+    /** Preference store reference — set during app initialization. */
+    private val _preferenceStore = MutableStateFlow<MacOSPreferenceStore?>(null)
+    val preferenceStoreFlow: StateFlow<MacOSPreferenceStore?> = _preferenceStore.asStateFlow()
+
     /** Set the extension manager reference (called from AnikkuApp). */
     fun setExtensionManager(manager: MacOSExtensionManager) {
         _extensionManager.value = manager
+    }
+
+    /** Set the preference store reference (called from AnikkuApp). */
+    fun setPreferenceStore(store: MacOSPreferenceStore) {
+        _preferenceStore.value = store
     }
 
     override val options: TabOptions
@@ -90,6 +100,7 @@ object BrowseTab : AnikkuScreen(), Tab {
     override fun Content() {
         val navigator = LocalNavigator.currentOrThrow
         val extensionManager by extensionManagerFlow.collectAsState()
+        val preferenceStore by preferenceStoreFlow.collectAsState()
 
         // Collect sources from installed extensions
         val installedExtensions by remember(extensionManager) {
@@ -233,6 +244,7 @@ object BrowseTab : AnikkuScreen(), Tab {
                                     sourceId = source.id,
                                     sourceName = source.name,
                                     extensionManager = extensionManager,
+                                    preferenceStore = preferenceStore,
                                 ))
                             },
                         )

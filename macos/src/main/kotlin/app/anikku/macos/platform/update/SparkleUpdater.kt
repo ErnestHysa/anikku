@@ -72,8 +72,25 @@ class SparkleUpdater(
     /** The JNA-loaded Sparkle helper dylib, or null if unavailable. */
     private val sparkleLib: SparkleHelperLib? = loadSparkleHelper()
 
+    /**
+     * Whether we are running inside a packaged macOS .app bundle.
+     *
+     * When running via `./gradlew run` (dev mode), there is no .app bundle and
+     * thus no Info.plist with SUFeedURL. Sparkle would fail to find the feed
+     * URL and show a native error dialog. We detect this by checking if the
+     * working directory or executable path contains ".app".
+     */
+    private val isPackagedApp: Boolean by lazy {
+        val cwd = System.getProperty("user.dir", "")
+        val classPath = System.getProperty("java.class.path", "")
+        // When running from a packaged .app, the working directory is
+        // Anikku.app/Contents/MacOS/ or Anikku.app/Contents/Resources/.
+        // When running via Gradle (./gradlew run), it's the project root.
+        cwd.contains(".app") || classPath.contains(".app")
+    }
+
     /** Whether the Sparkle helper library is available and loaded. */
-    val isAvailable: Boolean get() = sparkleLib != null
+    val isAvailable: Boolean get() = sparkleLib != null && isPackagedApp
 
     // ---- Initialization ----
 
@@ -81,10 +98,20 @@ class SparkleUpdater(
      * Initialize Sparkle at app startup.
      * Must be called once before any other Sparkle methods.
      *
+     * In dev builds (running via `./gradlew run`), this is a no-op because
+     * Sparkle requires a properly packaged .app bundle with Info.plist
+     * containing SUFeedURL. The AppUpdateChecker fallback handles updates.
+     *
      * @param feedURL The appcast feed URL. If null, Sparkle reads SUFeedURL
      *                from the app's Info.plist (injected by patchInfoPlist).
      */
     fun initialize(feedURL: String? = null) {
+        if (!isPackagedApp) {
+            logger.info { "Not running from .app bundle — Sparkle initialization skipped (dev mode). " +
+                "Using AppUpdateChecker fallback for update checks." }
+            return
+        }
+
         val lib = sparkleLib
         if (lib != null) {
             logger.info { "Initializing Sparkle with feed URL: ${feedURL ?: "(from Info.plist)"}" }
@@ -108,14 +135,14 @@ class SparkleUpdater(
     /**
      * Check for updates silently in the background.
      *
-     * If Sparkle is available, triggers a background check that shows a
-     * notification when an update is found. Otherwise, delegates to
-     * [AppUpdateChecker.checkForUpdate] and shows a macOS notification
-     * when an update is available.
+     * If Sparkle is available and running in a packaged .app, triggers a
+     * background check that shows a notification when an update is found.
+     * Otherwise, delegates to [AppUpdateChecker.checkForUpdate] and shows a
+     * macOS notification when an update is available.
      */
     fun checkForUpdatesSilently() {
         val lib = sparkleLib
-        if (lib != null) {
+        if (lib != null && isPackagedApp) {
             logger.info { "Sparkle: starting background update check" }
             try {
                 lib.sparkle_checkInBackground()
@@ -131,15 +158,16 @@ class SparkleUpdater(
     /**
      * Check for updates and display the update dialog.
      *
-     * If Sparkle is available, opens the Sparkle update dialog.
-     * Otherwise, delegates to [AppUpdateChecker.checkAndPrompt] which opens
-     * the browser to the download page.
+     * If Sparkle is available and running in a packaged .app, opens the
+     * native Sparkle update dialog. Otherwise, delegates to
+     * [AppUpdateChecker.checkAndPrompt] which opens the browser to the
+     * download page.
      *
      * @return true if the check was initiated.
      */
     fun checkForUpdatesWithUI(): Boolean {
         val lib = sparkleLib
-        if (lib != null) {
+        if (lib != null && isPackagedApp) {
             logger.info { "Sparkle: showing update dialog" }
             try {
                 lib.sparkle_checkForUpdates()
@@ -151,7 +179,7 @@ class SparkleUpdater(
             return true
         }
 
-        logger.info { "Sparkle not available — using AppUpdateChecker fallback" }
+        logger.info { "Sparkle not available in dev mode — using AppUpdateChecker fallback" }
         if (appUpdateChecker != null) {
             appUpdateChecker.checkAndPrompt()
             return true

@@ -21,3 +21,9 @@ local.properties
 /app/google-services.json
 *.jks
 app/standard/preview/*
+
+# Sparkle Ed25519 private signing key — DO NOT COMMIT!
+# Keep this file secure. Generate via:
+#   openssl genpkey -algorithm ed25519 -out macos/ed25519-key.pem
+*.key.pem
+ed25519-key.pem

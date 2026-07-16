@@ -1,6 +1,6 @@
 package app.anikku.macos.player
 
-import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,17 +13,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import com.sun.jna.Pointer
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -36,9 +33,6 @@ private val logger = KotlinLogging.logger {}
 
 /**
  * Target render interval in milliseconds (~33 fps).
- *
- * This is a target polling interval; the actual frame is only updated when
- * [MPVSoftwareRenderer.render] returns a new [BufferedImage].
  */
 private const val FRAME_INTERVAL_MS = 30L
 
@@ -46,30 +40,20 @@ private const val FRAME_INTERVAL_MS = 30L
  * Compose Desktop video surface for mpv software-rendered frames.
  *
  * Uses [MPVSoftwareRenderer] to pull decoded frames from libmpv and
- * renders them onto a Compose [Canvas] as [ImageBitmap]s.
+ * renders them onto a Compose [Image] composable for reliable display
+ * on macOS.
  *
- * Replaces the earlier SwingPanel + AWT Canvas approach with a pure
- * Compose solution that works reliably on macOS without platform-specific
- * native window embedding.
- *
- * ## Rendering Flow
- *
- * ```
- * LaunchedEffect(renderer) ─► [MPVSoftwareRenderer.render()]
- *                                      │
- *                                      ▼
- *                              BufferedImage (ARGB)
- *                                      │
- *                                      ▼
- *                            .toComposeImageBitmap()
- *                                      │
- *                                      ▼
- *                              Canvas.drawImage()
- * ```
- *
- * @param mpvHandle The mpv core handle (null if mpv is unavailable).
- * @param renderer The [MPVSoftwareRenderer] instance, or null if not ready.
- * @param modifier Standard Compose modifier.
+ * Rendering Flow:
+ *   LaunchedEffect ─► [MPVSoftwareRenderer.render()]
+ *                              │
+ *                              ▼
+ *                      BufferedImage
+ *                              │
+ *                              ▼
+ *                    .toComposeImageBitmap()
+ *                              │
+ *                              ▼
+ *                    Image(bitmap = ...)
  */
 @Composable
 fun MPVVideoSurface(
@@ -82,8 +66,14 @@ fun MPVVideoSurface(
     // Current rendered frame as a Compose ImageBitmap
     var currentFrame by remember { mutableStateOf<ImageBitmap?>(null) }
 
+    // Frame counter to force recomposition even when bitmap reference is reused
+    var frameCounter by remember { mutableStateOf(0L) }
+
     // Surface size for aspect-ratio-aware rendering
     var surfaceSize by remember { mutableStateOf(IntSize.Zero) }
+
+    // Flag set when the first frame has been rendered
+    var hasFirstFrame by remember { mutableStateOf(false) }
 
     // Periodic render loop: pull frames from the software renderer.
     // Rendering is performed on Dispatchers.IO to avoid blocking the Compose
@@ -99,11 +89,11 @@ fun MPVVideoSurface(
             }
             if (bufferedImage != null) {
                 currentFrame = bufferedImage.toComposeImageBitmap()
+                hasFirstFrame = true
+                frameCounter++ // Force recomposition
             }
 
-            // Adaptive delay: aim for the target frame interval, but never
-            // sleep a negative amount (i.e., if rendering took longer than the
-            // target interval, immediately render the next frame).
+            // Adaptive delay: aim for the target frame interval
             val elapsedMs = (System.nanoTime() - startTime) / 1_000_000L
             val sleepMs = (FRAME_INTERVAL_MS - elapsedMs).coerceAtLeast(0L)
             delay(sleepMs)
@@ -114,6 +104,7 @@ fun MPVVideoSurface(
     DisposableEffect(renderer) {
         onDispose {
             currentFrame = null
+            hasFirstFrame = false
         }
     }
 
@@ -150,45 +141,20 @@ fun MPVVideoSurface(
         contentAlignment = Alignment.Center,
     ) {
         val bitmap = currentFrame
-        if (bitmap != null) {
-            Canvas(modifier = Modifier.fillMaxSize()) {
-                drawVideoFrame(bitmap)
-            }
+        if (bitmap != null && hasFirstFrame) {
+            // Use Image composable for reliable frame display on macOS
+            Image(
+                bitmap = bitmap,
+                contentDescription = "Video frame",
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Fit,
+            )
         }
     }
 }
 
-/**
- * Draw the video frame centered and scaled to fit the canvas,
- * maintaining the original aspect ratio.
- */
-private fun DrawScope.drawVideoFrame(bitmap: ImageBitmap) {
-    val frameWidth = bitmap.width.toFloat()
-    val frameHeight = bitmap.height.toFloat()
-    val canvasWidth = size.width
-    val canvasHeight = size.height
-
-    if (frameWidth <= 0f || frameHeight <= 0f || canvasWidth <= 0f || canvasHeight <= 0f) return
-
-    val scaleX = canvasWidth / frameWidth
-    val scaleY = canvasHeight / frameHeight
-    val scale = minOf(scaleX, scaleY)
-
-    val drawWidth = (frameWidth * scale).toInt()
-    val drawHeight = (frameHeight * scale).toInt()
-
-    val offsetX = ((canvasWidth - drawWidth) / 2f).toInt()
-    val offsetY = ((canvasHeight - drawHeight) / 2f).toInt()
-
-    drawImage(
-        image = bitmap,
-        dstOffset = IntOffset(offsetX, offsetY),
-        dstSize = IntSize(drawWidth, drawHeight),
-    )
-}
-
 // ---------------------------------------------------------------------------
-// MPV utility functions (used by MPVVideoSurface and others)
+// MPV utility functions
 // ---------------------------------------------------------------------------
 
 /**
@@ -205,7 +171,6 @@ fun togglePause(handle: Pointer) {
 
 /**
  * Seek relative to the current position.
- * @param seconds Positive = forward, negative = backward.
  */
 fun seekRelative(handle: Pointer, seconds: Double) {
     try {
@@ -219,7 +184,6 @@ fun seekRelative(handle: Pointer, seconds: Double) {
 
 /**
  * Adjust volume by the given delta.
- * @param delta Positive = louder, negative = quieter.
  */
 fun adjustVolume(handle: Pointer, delta: Int) {
     try {

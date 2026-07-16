@@ -52,7 +52,7 @@ class MPVSoftwareRenderer(
     /** Native memory buffer for raw RGBA pixel data. */
     private var pixelBuffer: Memory? = null
 
-    /** Reusable [BufferedImage] for frame output. */
+    /** Reusable [BufferedImage] for frame output. Uses TYPE_INT_ARGB_PRE for Skia compatibility. */
     private var frameImage: BufferedImage? = null
 
     /** Reusable [IntArray] for bulk native → Java heap copy (reduces GC). */
@@ -112,6 +112,8 @@ class MPVSoftwareRenderer(
      * resized.
      *
      * Reallocates the pixel buffer if the size has changed.
+     * Uses TYPE_INT_ARGB_PRE (premultiplied alpha) for Skia compatibility
+     * on Compose Desktop — Skia requires proper alpha values.
      */
     fun updateVideoSize(width: Int, height: Int) {
         if (width <= 0 || height <= 0) return
@@ -124,10 +126,12 @@ class MPVSoftwareRenderer(
             // Allocate native pixel buffer (4 bytes per pixel, "bgr0" format)
             val newSize = width * height * 4
             pixelBuffer = Memory(newSize.toLong())
-            // TYPE_INT_RGB stores pixels as 0x00RRGGBB. On little-endian (macOS)
-            // this is laid out in memory as B, G, R, 0 — exactly matching mpv's
-            // "bgr0" format, so we can copy the frame with a single bulk read.
-            frameImage = BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
+            // Use TYPE_INT_ARGB_PRE (premultiplied alpha) for Skia compatibility.
+            // The mpv bgr0 format produces B, G, R, 0 bytes per pixel.
+            // On little-endian macOS this is stored as 0x00RRGGBB.
+            // TYPE_INT_ARGB_PRE expects 0xAARRGGBB. We set alpha=255 in the
+            // copy loop to ensure opaque rendering.
+            frameImage = BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB)
 
             // Reuse render param memory; reallocate only when dimensions change.
             sizeParams = Memory(8).also { mem ->
@@ -211,9 +215,6 @@ class MPVSoftwareRenderer(
             if (snapshot.isRgb0Fallback) {
                 copyBufferToImageRgb0(snapshot)
             } else {
-                // Because we requested "bgr0" and use TYPE_INT_RGB, the
-                // in-memory layout matches exactly, so a single bulk int copy
-                // is sufficient.
                 copyBufferToImage(snapshot)
             }
 
@@ -243,34 +244,40 @@ class MPVSoftwareRenderer(
     }
 
     /**
-     * Copy raw BGR0/RGB0 pixel data from a native [Memory] buffer into a
-     * [BufferedImage].
+     * Copy raw BGR0 pixel data from a native [Memory] buffer into a
+     * [BufferedImage] with TYPE_INT_ARGB.
      *
-     * Because mpv writes "bgr0" and [BufferedImage.TYPE_INT_RGB] stores
-     * 0x00RRGGBB (little-endian bytes B, G, R, 0), the layouts match exactly,
-     * so we can copy the entire frame in one bulk operation.
+     * The mpv buffer has bytes B, G, R, 0 per pixel (bgr0 format).
+     * BufferedImage.TYPE_INT_ARGB has layout 0xAARRGGBB.
+     *
+     * On little-endian: mpv bytes [B, G, R, 0] → int 0x00RRGGBB
+     * We need: int 0xFFRRGGBB (alpha=255 for opaque)
+     *
+     * We set the alpha byte to 0xFF (255) after the bulk copy.
      */
     private fun copyBufferToImage(snapshot: RenderSnapshot) {
         val (nativeBuffer, image, width, height, stride, _, rawInts) = snapshot
         val pixels = (image.raster.dataBuffer as DataBufferInt).data
         val intCount = height * stride / 4
 
-        // Single bulk native → JVM copy. On little-endian macOS the bytes
-        // B, G, R, 0 produced by mpv become the int 0x00RRGGBB, which is
-        // exactly what TYPE_INT_RGB expects.
+        // Bulk native → JVM copy of raw pixel ints (0x00RRGGBB format from bgr0)
         nativeBuffer.read(0, rawInts, 0, intCount)
 
-        // BufferedImage may have a larger int[] than width*height due to
-        // scanline padding, so copy row-by-row to handle stride differences.
+        // Copy row-by-row, setting alpha to 0xFF for each pixel
         if (stride == width * 4) {
-            // Fast path: no padding, copy entire frame at once
-            System.arraycopy(rawInts, 0, pixels, 0, width * height)
+            // Fast path: no padding
+            for (i in 0 until width * height) {
+                // rawInts[i] = 0x00RRGGBB, set alpha = 0xFF → 0xFFRRGGBB
+                pixels[i] = rawInts[i] or 0xFF000000.toInt()
+            }
         } else {
-            // Slow path: copy each row separately to account for stride
+            // Slow path: copy each row separately
             for (y in 0 until height) {
                 val srcPos = y * stride / 4
                 val dstPos = y * width
-                System.arraycopy(rawInts, srcPos, pixels, dstPos, width)
+                for (x in 0 until width) {
+                    pixels[dstPos + x] = rawInts[srcPos + x] or 0xFF000000.toInt()
+                }
             }
         }
     }
@@ -278,14 +285,13 @@ class MPVSoftwareRenderer(
     /**
      * Fallback copy for "rgb0" format (R, G, B, 0 in memory).
      * Needed when the installed libmpv does not support "bgr0".
+     * Sets alpha to 0xFF for each pixel.
      */
     private fun copyBufferToImageRgb0(snapshot: RenderSnapshot) {
         val (nativeBuffer, image, width, height, stride) = snapshot
         val pixels = (image.raster.dataBuffer as DataBufferInt).data
         val byteCount = height * stride
 
-        // Use a local ByteArray to avoid any thread-safety concerns with the
-        // fallback path. This path is only used when bgr0 is unsupported.
         val rawBytes = ByteArray(byteCount)
         nativeBuffer.read(0, rawBytes, 0, byteCount)
 
@@ -297,7 +303,8 @@ class MPVSoftwareRenderer(
                 val r = rawBytes[srcIdx].toInt() and 0xFF
                 val g = rawBytes[srcIdx + 1].toInt() and 0xFF
                 val b = rawBytes[srcIdx + 2].toInt() and 0xFF
-                pixels[destIdx] = (r shl 16) or (g shl 8) or b
+                // Set alpha = 0xFF (fully opaque)
+                pixels[destIdx] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
             }
         }
     }

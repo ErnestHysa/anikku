@@ -24,30 +24,6 @@ private val logger = KotlinLogging.logger {}
  * Manages playback lifecycle, position tracking, audio/subtitle tracks,
  * and episode navigation. Communicates with mpv via [MPVLib] and
  * processes events via [MPVEventLoop].
- *
- * ## Architecture
- *
- * ```
- * PlayerViewModel ←→ MPVEventLoop (event processing)
- *        ↕
- *   MPVLib (native calls via JNA)
- *        ↕
- *   libmpv (video decoding + rendering)
- * ```
- *
- * ## Usage
- *
- * ```kotlin
- * val player = remember { PlayerViewModel() }
- *
- * // Observe state
- * val state by player.playbackState.collectAsState()
- *
- * // Control playback
- * player.loadEpisode(videoUrl)
- * player.togglePause()
- * player.seekTo(120.0)
- * ```
  */
 class PlayerViewModel {
 
@@ -149,8 +125,6 @@ class PlayerViewModel {
     /**
      * Initialize the mpv core and event loop.
      * Safe to call multiple times — subsequent calls are no-ops.
-     *
-     * @return true if mpv was successfully initialized, false otherwise.
      */
     fun initialize(): Boolean {
         if (mpvHandle != null) return true
@@ -242,15 +216,8 @@ class PlayerViewModel {
                 loop.events.collect { event ->
                     when (event.eventId) {
                         MPVLib.MPV_EVENT_FILE_LOADED -> {
-                            // Capture token at event-processing start. If loadToken
-                            // has changed by the time we finish, the event is stale.
                             val eventToken = loadToken
-                            val isCurrentLoad = loadToken === eventToken
-
-                            // Only apply state changes if the event is from the
-                            // current load — stale FILE_LOADED from a previous
-                            // episode must not overwrite the new LOADING state.
-                            if (isCurrentLoad) {
+                            if (loadToken === eventToken) {
                                 _playbackState.value = PlaybackState.PLAYING
                                 _isPaused.value = false
                                 updateDuration()
@@ -262,18 +229,23 @@ class PlayerViewModel {
                             }
                         }
                         MPVLib.MPV_EVENT_END_FILE -> {
-                            // Capture token at event-processing start.
                             val eventToken = loadToken
-
                             if (_playbackState.value == PlaybackState.LOADING ||
                                 _playbackState.value == PlaybackState.SEEKING) {
-                                // File ended while still loading — only set ERROR
-                                // if the token still matches (not a stale event).
                                 if (loadToken === eventToken) {
                                     _playbackState.value = PlaybackState.ERROR
                                     logger.warn { "🎬 VIDEO_END: file ended while still loading — likely unreachable URL, blocked CDN, or embed page URL" }
                                 } else {
                                     logger.debug { "🎬 VIDEO_END: ignoring stale END_FILE from previous load (state was LOADING/SEEKING)" }
+                                }
+                            } else if (_playbackState.value == PlaybackState.PLAYING) {
+                                // File ended during normal playback. With keep-open=no,
+                                // mpv stops playback entirely. We keep the PLAYING state
+                                // so the UI shows the last frame with working controls.
+                                if (loadToken === eventToken) {
+                                    logger.info { "🎬 VIDEO_FILE: playback ended (keep-open=no, stream finished)" }
+                                } else {
+                                    logger.debug { "🎬 VIDEO_END: ignoring stale END_FILE from previous load" }
                                 }
                             } else {
                                 if (loadToken === eventToken) {
@@ -301,9 +273,7 @@ class PlayerViewModel {
                         }
                         MPVLib.MPV_EVENT_PLAYBACK_RESTART -> {
                             val eventToken = loadToken
-                            val isCurrentLoad = loadToken === eventToken
-
-                            if (isCurrentLoad) {
+                            if (loadToken === eventToken) {
                                 _playbackState.value = PlaybackState.PLAYING
                                 _isPaused.value = false
                                 loadTimeoutJob?.cancel()
@@ -324,12 +294,13 @@ class PlayerViewModel {
                 }
             }
 
-            // Periodic position updates — tracked for cleanup on shutdown
+            // Periodic position updates — always update regardless of playback state
             positionUpdateJob = scope.launch {
                 while (isActive) {
-                    delay(500)
-                    if (mpvHandle != null && _playbackState.value == PlaybackState.PLAYING) {
+                    delay(250) // 250ms for smoother position tracking
+                    if (mpvHandle != null) {
                         updatePosition()
+                        updateDuration()
                     }
                 }
             }
@@ -347,16 +318,11 @@ class PlayerViewModel {
 
     /**
      * Configure mpv options before initialization.
-     * Returns false if any critical option fails.
      */
     private fun configureMPV(handle: Pointer): Boolean {
         var allOk = true
         val criticalOptions = listOf(
             "vo" to "libmpv",
-            // Use videotoolbox-copy so mpv decodes on the GPU but copies the
-            // decoded frame back to CPU RAM for the software renderer. Plain
-            // "videotoolbox" would keep frames on the GPU and is incompatible
-            // with MPV_RENDER_API_TYPE_SW.
             "hwdec" to "videotoolbox-copy",
             "cache" to "yes",
             "cache-secs" to "30",
@@ -365,13 +331,15 @@ class PlayerViewModel {
         )
         val nonCriticalOptions = listOf(
             "audio-file-auto" to "no",
-            // Enable yt-dlp integration so mpv can play YouTube, Vimeo, Dailymotion,
-            // Bilibili, Twitch, and hundreds of other streaming sites via yt-dlp.
             "ytdl" to "yes",
+            "ytdl-format" to "bestvideo+bestaudio/best",
+            "ytdl-raw-options" to "format-sort=+size:codec:h264:avc1:res:br,fragment-retries=10",
             "sub-auto" to "fuzzy",
             "sub-file-auto" to "no",
             "osd-level" to "0",
-            "keep-open" to "yes",
+            // Use keep-open=no to prevent mpv from staying on the last frame and
+            // instead allow proper cleanup and state transitions.
+            "keep-open" to "no",
             "screenshot-format" to "png",
             "screenshot-template" to "anikku-screenshot-%n",
         )
@@ -407,23 +375,19 @@ class PlayerViewModel {
     /**
      * Set a network timeout on mpv so it doesn't hang forever when a server
      * is unreachable, blocked by Cloudflare, or the URL is not a valid stream.
-     *
-     * mpv's `stream-timeout` controls how long it waits for a network connection.
-     * We set it to 10 seconds — long enough for most CDNs but short enough to
-     * avoid the "stuck at seeking" problem.
      */
     private fun setNetworkTimeout(handle: Pointer) {
         try {
             // stream-timeout: seconds to wait for network I/O (default = 0 = infinite)
-            val result = MPVLib.setOptionString(handle, "stream-timeout", "10")
+            // Use 30s — long enough for slow CDNs but short enough to avoid hanging.
+            val result = MPVLib.setOptionString(handle, "stream-timeout", "30")
             if (result != null && result < 0) {
                 logger.debug { "stream-timeout option not supported by this mpv build (non-fatal)" }
             } else {
-                logger.info { "🎬 MPV_CONFIG: stream-timeout set to 10s" }
+                logger.info { "🎬 MPV_CONFIG: stream-timeout set to 30s" }
             }
 
-            // Set a max timeout for the demuxer opening the stream
-            val result3 = MPVLib.setOptionString(handle, "demuxer-readahead-secs", "10")
+            val result3 = MPVLib.setOptionString(handle, "demuxer-readahead-secs", "20")
             if (result3 != null && result3 < 0) {
                 logger.debug { "demuxer-readahead-secs option not supported (non-fatal)" }
             }
@@ -476,54 +440,16 @@ class PlayerViewModel {
     /** Tracks the load timeout coroutine so it can be cancelled on success/error. */
     private var loadTimeoutJob: Job? = null
 
-    /**
-     * Monotonically-increasing token that identifies the current load generation.
-     * A new object is created each time [loadEpisode] is called. Event handlers
-     * capture this token at the start of processing and compare it against the
-     * current token at the end. If the token has changed, the event is from a
-     * previous load and should be ignored.
-     *
-     * This prevents stale events (e.g., MPV_EVENT_END_FILE from a previous
-     * episode) from overwriting state or cancelling the timeout for a newer load.
-     */
     @Volatile
     private var loadToken: Any? = null
 
     /**
      * Load and play a video URL with optional HTTP headers.
-     *
-     * Many streaming sources require specific HTTP headers (like Referer or Origin)
-     * to serve the video stream. Without them, the server may reject the request,
-     * return a 403, or serve a placeholder file (causing "stuck at seeking" or
-     * 1-second playback).
-     *
-     * This method sets `http-header-fields` on mpv BEFORE calling `loadfile`,
-     * so mpv includes the required headers in its HTTP requests to the stream server.
-     *
-     * After sending the loadfile command, a 20-second timeout is started. If
-     * neither MPV_EVENT_FILE_LOADED nor MPV_EVENT_PLAYBACK_RESTART fires within
-     * that window, the state transitions to ERROR to prevent "stuck at loading/seeking".
-     *
-     * @param url The video URL to play (can be an http:// or file:// URI)
-     * @param headers Optional HTTP headers (e.g. Referer, User-Agent) to pass to mpv
      */
     fun loadEpisode(url: String, headers: Map<String, String>? = null) {
         // ── Magnet link handling ────────────────────────────────────
-        // If the URL is a magnet: link, delegate to MagnetStreamer to
-        // convert it into a local HTTP stream via webtorrent-cli.
         if (url.startsWith("magnet:")) {
             loadMagnetEpisode(url)
-            return
-        }
-
-        // Pre-check: reject non-video URLs (embed pages, iframes) before sending to mpv.
-        // mpv cannot play HTML, so sending an embed URL would cause it to hang until
-        // the 10-second stream-timeout fires. This check catches the most common
-        // cases instantly so the user sees an error instead of a spinner.
-        if (!isVideoUrl(url)) {
-            logger.warn { "🎬 VIDEO_LOAD: Rejected non-video URL — likely an embed/player page: ${url.take(100)}" }
-            _playbackState.value = PlaybackState.ERROR
-            CrashReporter.logEvent("Video load rejected", "embed/player URL detected: url=$url")
             return
         }
 
@@ -536,9 +462,6 @@ class PlayerViewModel {
 
         currentUrl = url
 
-        // Create a unique token for this load. Event handlers compare against
-        // this token to detect stale events from a previous episode load.
-        // Using referential identity (===) means each call gets a distinct object.
         val token = Any()
         loadToken = token
 
@@ -547,32 +470,56 @@ class PlayerViewModel {
         CrashReporter.logEvent("Video loading", "url=$url")
 
         try {
-            // Set HTTP headers BEFORE loadfile so mpv sends them with the initial request.
-            // mpv's http-header-fields format: "Header1: value1", "Header2: value2"
-            if (!headers.isNullOrEmpty()) {
-                val httpHeaderFields = headers.entries.joinToString(",") { (name, value) ->
-                    val escapedValue = value.replace("\"", "\\\"")
-                    "\"$name: $escapedValue\""
+            val userAgent = headers?.entries?.firstOrNull { it.key.equals("User-Agent", ignoreCase = true) }?.value
+                ?: MPVLib.DEFAULT_USER_AGENT
+
+            if (headers.isNullOrEmpty()) {
+                val clearResult = MPVLib.setPropertyString(handle, "http-header-fields", "")
+                if (clearResult != null && clearResult < 0) {
+                    logger.debug { "Failed to clear http-header-fields (error $clearResult) — non-fatal" }
                 }
-                logger.info { "🎬 VIDEO_LOAD: setting http-header-fields: $httpHeaderFields" }
-                val headerResult = MPVLib.setOptionString(handle, "http-header-fields", httpHeaderFields)
+            } else {
+                val httpHeaderFields = headers.entries
+                    .filter { !it.key.equals("User-Agent", ignoreCase = true) }
+                    .joinToString(",") { (name, value) ->
+                        val escapedValue = value.replace(",", "\\,")
+                        "$name: $escapedValue"
+                    }
+                val headerResult = MPVLib.setPropertyString(handle, "http-header-fields", httpHeaderFields)
                 if (headerResult != null && headerResult < 0) {
-                    logger.warn { "🎬 VIDEO_LOAD: http-header-fields returned $headerResult (non-fatal)" }
+                    logger.warn { "Failed to set http-header-fields (error $headerResult) — headers may not be sent" }
                 }
             }
+            val uaResult = MPVLib.setPropertyString(handle, "user-agent", userAgent)
+            if (uaResult != null && uaResult < 0) {
+                logger.warn { "Failed to set user-agent property (error $uaResult) — User-Agent may not be sent" }
+            }
 
+            // Dynamically set ytdl-format based on URL type
+            val ytdlFormat = if (url.contains(".mpd", ignoreCase = true) ||
+                url.contains("dash", ignoreCase = true) ||
+                url.contains("manifest", ignoreCase = true)
+            ) {
+                "bestvideo+bestaudio/best"
+            } else {
+                "best"
+            }
+            val formatResult = MPVLib.setPropertyString(handle, "ytdl-format", ytdlFormat)
+            if (formatResult != null && formatResult < 0) {
+                logger.debug { "Failed to set ytdl-format=$ytdlFormat (error $formatResult) — non-fatal" }
+            } else if (ytdlFormat != "best") {
+                logger.info { "🎬 VIDEO_LOAD: set ytdl-format=$ytdlFormat for DASH stream" }
+            }
+
+            logger.info { "🎬 VIDEO_LOAD: set http-header-fields and user-agent properties" }
             MPVLib.command(handle, "loadfile", url, "replace")
             logger.info { "🎬 VIDEO_LOAD: loadfile command sent successfully" }
 
-            // Start a timeout: if the file doesn't load within 20 seconds,
-            // transition to ERROR to prevent getting stuck at LOADING/SEEKING.
-            // Guards by token: if a new loadEpisode() bumps loadToken before
-            // this timeout fires, the token comparison ensures we don't act.
+            // Start a timeout: if the file doesn't load within 30 seconds,
+            // transition to ERROR to prevent getting stuck at LOADING.
             loadTimeoutJob?.cancel()
             loadTimeoutJob = scope.launch {
                 delay(LOAD_TIMEOUT_MS)
-                // Stale timeout guard: if loadToken was bumped by a newer
-                // loadEpisode(), this timeout belongs to an old load — skip.
                 if (loadToken !== token) return@launch
 
                 val state = _playbackState.value
@@ -592,31 +539,13 @@ class PlayerViewModel {
 
     // ── Magnet Link Handling ──────────────────────────────────────
 
-    /**
-     * Load a magnet:// torrent URL by first converting it to a local HTTP stream
-     * via [MagnetStreamer], then feeding that stream URL to mpv.
-     *
-     * Architecture:
-     *   magnet:?xt=urn:btih:...  ─→  webtorrent-cli (spawned by MagnetStreamer)
-     *        │
-     *        ▼  (local HTTP server at http://localhost:PORT/0)
-     *   mpv plays the stream
-     *
-     * If webtorrent-cli is not installed, the user will see an error with
-     * instructions to install it:
-     *   npm install -g webtorrent-cli
-     */
     private fun loadMagnetEpisode(magnetUrl: String) {
         logger.info { "🧲 MAGNET: Starting torrent stream: ${magnetUrl.take(80)}..." }
         _playbackState.value = PlaybackState.LOADING
 
-        // Create a unique token for this load. If loadEpisode is called again
-        // while a magnet stream is starting, the old coroutine will compare
-        // tokens and skip calling loadEpisode with the stale URL.
         val token = Any()
         magnetLoadToken = token
 
-        // Kill any previous magnet process
         magnetProcess?.let { prevProcess ->
             try {
                 prevProcess.destroy()
@@ -629,9 +558,6 @@ class PlayerViewModel {
         scope.launch {
             try {
                 val result = MagnetStreamer.startStreaming(magnetUrl)
-
-                // Stale guard: if loadEpisode was called again while we were
-                // waiting for webtorrent to start, ignore this result.
                 if (magnetLoadToken !== token) return@launch
 
                 withContext(Dispatchers.Main) {
@@ -639,17 +565,13 @@ class PlayerViewModel {
                         is MagnetStreamResult.Success -> {
                             magnetProcess = result.process
                             logger.info { "🧲 MAGNET: webtorrent server ready at ${result.httpUrl}" }
-                            // Stale guard check again after context switch
                             if (magnetLoadToken !== token) {
                                 MagnetStreamer.stopStreaming(result)
                                 return@withContext
                             }
-                            // Load the HTTP stream URL into mpv (no special headers needed
-                            // for localhost streaming)
                             loadEpisode(result.httpUrl)
                         }
                         is MagnetStreamResult.Failure -> {
-                            // Don't show error if this was superseded by a newer load
                             if (magnetLoadToken !== token) return@withContext
                             _playbackState.value = PlaybackState.ERROR
                             logger.warn { "🧲 MAGNET: Failed to start torrent stream: ${result.message}" }
@@ -668,48 +590,8 @@ class PlayerViewModel {
         }
     }
 
-    /**
-     * Fast URL-pattern check to detect non-video URLs (embed pages, iframes, etc.)
-     * before sending them to mpv. mpv cannot play HTML pages — sending an embed URL
-     * causes it to hang until the network timeout fires.
-     *
-     * @return true if the URL looks like a playable video stream, false if it looks
-     *         like an HTML embed page or other non-video content.
-     */
-    private fun isVideoUrl(url: String): Boolean {
-        // Definitive video file extensions — these are always safe to send to mpv
-        val videoExtensions = listOf(
-            ".mp4", ".m3u8", ".ts", ".webm", ".mkv", ".avi", ".mov",
-            ".flv", ".wmv", ".ogv", ".3gp", ".mpd", ".m4v", ".aac",
-            ".mp3", ".ogg", ".opus", ".flac", ".mka",
-        )
-        val lowerUrl = url.lowercase()
-
-        // Positive match: URL ends with a known video extension
-        if (videoExtensions.any { lowerUrl.contains(it) }) {
-            return true
-        }
-
-        // Negative match: URL contains embed-related keywords
-        // These are HTML pages, not video streams.
-        val embedPatterns = listOf(
-            "/embed", "/iframe", "/player/", "/e/", "embed-",
-            "embed/", "/play/", "/watch/", "/v/", "/video/",
-        )
-        if (embedPatterns.any { lowerUrl.contains(it) }) {
-            logger.warn { "🎬 VIDEO_URL_REJECTED: URL contains embed/player pattern — not a playable stream: ${url.take(100)}" }
-            return false
-        }
-
-        // If we can't determine from the URL, log a warning and allow it through
-        // (it might be a CDN proxy URL with no extension, which is common for HLS/DASH)
-        logger.info { "🎬 VIDEO_URL_AMBIGUOUS: URL has no recognizable video extension or embed pattern: ${url.take(100)}" }
-        return true
-    }
-
-    /** 20-second timeout for mpv file loading. */
     companion object {
-        private const val LOAD_TIMEOUT_MS = 20_000L
+        private const val LOAD_TIMEOUT_MS = 30_000L // 30 seconds for slower CDNs
     }
 
     /**
@@ -740,14 +622,13 @@ class PlayerViewModel {
 
     /**
      * Seek relative to the current position.
-     * @param offset Offset in seconds (positive = forward, negative = backward).
      */
     fun seekRelative(offset: Double) {
         seekTo(currentPosition.value + offset)
     }
 
     /**
-     * Set volume (0–200). Always updates local state even without mpv.
+     * Set volume (0–200).
      */
     fun setVolume(vol: Int) {
         val clamped = vol.coerceIn(0, 200)
@@ -763,7 +644,7 @@ class PlayerViewModel {
     }
 
     /**
-     * Set playback speed (0.25–4.0). Always updates local state even without mpv.
+     * Set playback speed (0.25–4.0).
      */
     fun setSpeed(speed: Double) {
         val clamped = speed.coerceIn(0.25, 4.0)
@@ -788,14 +669,12 @@ class PlayerViewModel {
             MPVLib.setPropertyString(handle, "fullscreen", if (fs) "no" else "yes")
             _isFullscreen.value = !fs
         } catch (e: Exception) {
-            // Fullscreen toggling may fail in windowed mode — safe to ignore
             _isFullscreen.value = !_isFullscreen.value
         }
     }
 
     /**
      * Take a screenshot of the current video frame.
-     * @return The file path of the screenshot, or null on failure.
      */
     fun takeScreenshot(): String? {
         val handle = mpvHandle ?: return null
@@ -817,12 +696,8 @@ class PlayerViewModel {
      */
     fun refreshTracks() {
         val handle = mpvHandle ?: return
-
-        // Parse track list from mpv property
         val trackList = MPVLib.getPropertyString(handle, "track-list") ?: return
 
-        // Track list is returned as a Lua table string — parse it
-        // For now, use a simplified approach: query individual track properties
         try {
             val audioCount = MPVLib.getPropertyInt(handle, "audio-count", 0)
             val subCount = MPVLib.getPropertyInt(handle, "sub-count", 0)
@@ -907,10 +782,6 @@ class PlayerViewModel {
     // Video equalizer controls
     // -------------------------------------------------------------------------
 
-    /**
-     * Set video brightness.
-     * UI range: -1.0..1.0 (default 0). Mapped to mpv range: -100..100.
-     */
     fun setBrightness(value: Float) {
         val clamped = value.coerceIn(-1f, 1f)
         _brightness.value = clamped
@@ -924,10 +795,6 @@ class PlayerViewModel {
         }
     }
 
-    /**
-     * Set video contrast.
-     * UI range: 0.0..2.0 (default 1.0). Mapped to mpv range: -100..100.
-     */
     fun setContrast(value: Float) {
         val clamped = value.coerceIn(0f, 2f)
         _contrast.value = clamped
@@ -941,10 +808,6 @@ class PlayerViewModel {
         }
     }
 
-    /**
-     * Set video saturation.
-     * UI range: 0.0..2.0 (default 1.0). Mapped to mpv range: -100..100.
-     */
     fun setSaturation(value: Float) {
         val clamped = value.coerceIn(0f, 2f)
         _saturation.value = clamped
@@ -958,10 +821,6 @@ class PlayerViewModel {
         }
     }
 
-    /**
-     * Set video gamma.
-     * UI range: 0.1..2.0 (default 1.0). Mapped to mpv range: -100..100.
-     */
     fun setGamma(value: Float) {
         val clamped = value.coerceIn(0.1f, 2f)
         _gamma.value = clamped
@@ -975,9 +834,6 @@ class PlayerViewModel {
         }
     }
 
-    /**
-     * Reset all equalizer values to defaults.
-     */
     fun resetEqualizer() {
         setBrightness(0f)
         setContrast(1f)
@@ -985,10 +841,6 @@ class PlayerViewModel {
         setGamma(1f)
     }
 
-    /**
-     * Set subtitle delay in seconds. Negative = earlier, positive = later.
-     * UI range: -10.0..10.0 (default 0.0). Maps directly to mpv sub-delay.
-     */
     fun setSubtitleDelay(delay: Double) {
         val clamped = delay.coerceIn(-10.0, 10.0)
         _subtitleDelay.value = clamped
@@ -1002,10 +854,6 @@ class PlayerViewModel {
         }
     }
 
-    /**
-     * Set audio delay in seconds. Negative = audio plays earlier, positive = later.
-     * UI range: -10.0..10.0 (default 0.0). Maps directly to mpv audio-delay.
-     */
     fun setAudioDelay(delay: Double) {
         val clamped = delay.coerceIn(-10.0, 10.0)
         _audioDelay.value = clamped
@@ -1019,10 +867,6 @@ class PlayerViewModel {
         }
     }
 
-    /**
-     * Set display aspect ratio.
-     * Common values: "-1" (original), "4:3", "16:9", "16:10", "21:9", "3:2", "5:4", "1:1".
-     */
     fun setAspectRatio(ratio: String) {
         _aspectRatio.value = ratio
         val handle = mpvHandle
@@ -1035,9 +879,6 @@ class PlayerViewModel {
         }
     }
 
-    /**
-     * Set video rotation in degrees (0, 90, 180, 270).
-     */
     fun setVideoRotation(degrees: Int) {
         val clamped = when (degrees) {
             90 -> 90; 180 -> 180; 270 -> 270; else -> 0
@@ -1053,17 +894,11 @@ class PlayerViewModel {
         }
     }
 
-    /**
-     * Toggle horizontal flip.
-     */
     fun toggleHflip() {
         _isHflip.value = !_isHflip.value
         applyVideoFilters()
     }
 
-    /**
-     * Toggle vertical flip.
-     */
     fun toggleVflip() {
         _isVflip.value = !_isVflip.value
         applyVideoFilters()
@@ -1100,7 +935,9 @@ class PlayerViewModel {
         val handle = mpvHandle ?: return
         try {
             val dur = MPVLib.getPropertyDouble(handle, "duration", 0.0)
-            _duration.value = dur
+            if (dur > 0) {
+                _duration.value = dur
+            }
         } catch (_: Exception) { }
     }
 

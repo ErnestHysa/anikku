@@ -166,6 +166,11 @@ data class PlayerScreen(
      *         false if the server returned text/html (indicating an embed page).
      */
     private suspend fun checkUrlContentType(url: String): Boolean {
+        // Only HTTP(S) URLs can be checked with a HEAD request.
+        if (!url.startsWith("http://", ignoreCase = true) && !url.startsWith("https://", ignoreCase = true)) {
+            return true
+        }
+
         // Fast path: URLs with known video extensions skip the HEAD request
         val knownVideoExts = listOf(
             ".mp4", ".m3u8", ".ts", ".webm", ".mkv", ".avi", ".mov",
@@ -179,13 +184,20 @@ data class PlayerScreen(
         // Slow path: do a HEAD request to check Content-Type
         return withContext(Dispatchers.IO) {
             try {
-                val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                val parsedUrl = java.net.URL(url)
+                val connection = parsedUrl.openConnection() as java.net.HttpURLConnection
                 connection.requestMethod = "HEAD"
                 connection.connectTimeout = 3000
                 connection.readTimeout = 3000
-                connection.setRequestProperty("User-Agent", DEFAULT_USER_AGENT)
-                // Some CDNs require a Referer matching their embed page to serve content
-                connection.setRequestProperty("Referer", url.substringBeforeLast("/"))
+                connection.setRequestProperty("User-Agent", MPVLib.DEFAULT_USER_AGENT)
+                // Some CDNs require a Referer matching their embed page to serve content.
+                // Use the URL origin (scheme + host + port) so query strings and trailing
+                // slashes do not produce an broken Referer.
+                val origin = runCatching {
+                    val portSuffix = if (parsedUrl.port == -1 || parsedUrl.port == parsedUrl.defaultPort) "" else ":${parsedUrl.port}"
+                    "${parsedUrl.protocol}://${parsedUrl.host}$portSuffix"
+                }.getOrNull() ?: url.substringBeforeLast("/")
+                connection.setRequestProperty("Referer", origin)
                 connection.connect()
 
                 val contentType = connection.contentType ?: ""
@@ -455,14 +467,6 @@ data class PlayerScreen(
                             val videoUrl = video.videoUrl
                             if (videoUrl.isBlank()) continue
 
-                            // Quick URL-level check: skip known embed patterns
-                            val lowerVideoUrl = videoUrl.lowercase()
-                            val embedPatterns = listOf("/embed", "/iframe", "/player/", "embed-")
-                            if (embedPatterns.any { lowerVideoUrl.contains(it) }) {
-                                logger.warn { "🎬 VIDEO_URL_REJECTED: Source returned embed URL for candidate #$orderedIndex: ${videoUrl.take(80)}" }
-                                continue
-                            }
-
                             // Content-Type verification (HEAD request) — only for ambiguous URLs
                             val isPlayable = checkUrlContentType(videoUrl)
                             if (!isPlayable) {
@@ -482,13 +486,13 @@ data class PlayerScreen(
                                         map[headers.name(i)] = headers.value(i)
                                     }
                                     if (!map.containsKey("User-Agent")) {
-                                        map["User-Agent"] = DEFAULT_USER_AGENT
+                                        map["User-Agent"] = MPVLib.DEFAULT_USER_AGENT
                                     }
                                     map
-                                } ?: mapOf("User-Agent" to DEFAULT_USER_AGENT)
+                                } ?: mapOf("User-Agent" to MPVLib.DEFAULT_USER_AGENT)
                             } catch (e: Exception) {
                                 logger.warn { "Failed to extract headers from video: ${e.message}" }
-                                mapOf("User-Agent" to DEFAULT_USER_AGENT)
+                                mapOf("User-Agent" to MPVLib.DEFAULT_USER_AGENT)
                             }
 
                             return ResolveResult(
@@ -529,11 +533,6 @@ data class PlayerScreen(
         }
 
         return null
-    }
-
-    companion object {
-        private const val DEFAULT_USER_AGENT =
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
     }
 
     @Composable
@@ -1095,11 +1094,20 @@ private fun PlayerContent(
 
     // Sync with mpv state when available
     LaunchedEffect(isPaused) { isPlaying = !isPaused }
+    // Always update elapsed time from currentPosition when it changes,
+    // regardless of whether duration is set yet.
     LaunchedEffect(currentPosition) {
-        if (duration > 0 && currentPosition > 0) {
+        if (currentPosition > 0) {
             elapsedSeconds = currentPosition.toLong()
+        }
+    }
+    // Update duration and seek fraction separately (duration changes less often)
+    LaunchedEffect(duration, currentPosition) {
+        if (duration > 0) {
             totalSeconds = duration.toLong()
-            seekFraction = (currentPosition / duration).toFloat().coerceIn(0f, 1f)
+            if (currentPosition > 0) {
+                seekFraction = (currentPosition / duration).toFloat().coerceIn(0f, 1f)
+            }
         }
     }
 
@@ -1153,42 +1161,8 @@ private fun PlayerContent(
     // Keyboard shortcuts
     val interactionSource = remember { MutableInteractionSource() }
 
-    // Show loading state
-    if (isLoading || isResolvingVideo) {
-        Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(48.dp),
-                    color = Color.White.copy(alpha = 0.6f),
-                    strokeWidth = 3.dp,
-                )
-                Spacer(Modifier.height(20.dp))
-                Text(
-                    if (resolutionStatusText.isNotBlank()) resolutionStatusText else "Loading episode...",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = Color.White.copy(alpha = 0.6f),
-                )
-                if (isResolvingVideo) {
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "This may take a few seconds — the source is fetching video streams",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color.White.copy(alpha = 0.3f),
-                    )
-                }
-                if (isAutoRetrying && videoQualityLabel != null) {
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "Quality: ${videoQualityLabel}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF1A73E8).copy(alpha = 0.6f),
-                        fontWeight = FontWeight.Medium,
-                    )
-                }
-            }
-        }
-        return
-    }
+    // Loading overlay (shown on top of video surface while buffering)
+    val showLoadingOverlay = isLoading || isResolvingVideo
 
     // Show error state when video URL resolution failed, mpv reported an error,
     // or we are not still resolving it. Do NOT check playbackState == IDLE here
@@ -1475,6 +1449,43 @@ private fun PlayerContent(
                 }
             },
     ) {
+        // === Loading overlay (shown on top of video surface while buffering) ===
+        if (showLoadingOverlay) {
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.9f)), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(48.dp),
+                        color = Color.White.copy(alpha = 0.6f),
+                        strokeWidth = 3.dp,
+                    )
+                    Spacer(Modifier.height(20.dp))
+                    Text(
+                        if (resolutionStatusText.isNotBlank()) resolutionStatusText else "Loading episode...",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = Color.White.copy(alpha = 0.6f),
+                    )
+                    if (isResolvingVideo) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "This may take a few seconds — the source is fetching video streams",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color.White.copy(alpha = 0.3f),
+                        )
+                    }
+                    if (isAutoRetrying && videoQualityLabel != null) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "Quality: ${videoQualityLabel}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF1A73E8).copy(alpha = 0.6f),
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
+                }
+            }
+        }
+
+
         // === MPV Video Surface (when available) ===
         if (isMPVAvailable && mpvHandle != null) {
             MPVVideoSurface(
@@ -1590,7 +1601,7 @@ private fun PlayerContent(
         )
 
         // === Center play/pause ===
-        AnimatedVisibility(visible = !isPlaying && isControlsVisible, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.Center)) {
+        AnimatedVisibility(visible = !isPlaying && isControlsVisible && !showLoadingOverlay, enter = fadeIn(), exit = fadeOut(), modifier = Modifier.align(Alignment.Center)) {
             IconButton(onClick = { onTogglePlay(); isPlaying = true }, modifier = Modifier.size(72.dp)) {
                 Icon(Icons.Outlined.PlayCircle, contentDescription = "Play", tint = Color.White, modifier = Modifier.fillMaxSize())
             }
