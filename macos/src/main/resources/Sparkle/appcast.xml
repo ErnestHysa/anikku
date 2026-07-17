@@ -50,36 +50,31 @@
       =========================================================================
     -->
 
-    <!--
-      Placeholder entry — replace with a real release entry when publishing.
+    <!-- ================================================================
+         v1.0.0 entry — Ed25519 signature and DMG size need to be
+         filled in after building and uploading the DMG.
 
-      Copy and paste this block (remove the XML comments), update the values,
-      then run generate-appcast.sh to create the proper signature.
-
+         To generate the real signature:
+           ./macos/scripts/generate-appcast.sh \
+             --version 1.0.0 \
+             --dmg ./build/compose/binaries/main/dmg/Anikku-1.0.0.dmg \
+             --signing-key ./macos/ed25519-key.pem \
+             --appcast ./macos/src/main/resources/Sparkle/appcast.xml
+         ================================================================ -->
     <item>
       <title>Version 1.0.0</title>
       <sparkle:version>1.0.0</sparkle:version>
       <sparkle:shortVersionString>1.0.0</sparkle:shortVersionString>
-      <pubDate>Mon, 14 Jul 2026 00:00:00 +0000</pubDate>
+      <pubDate>Thu, 16 Jul 2026 23:56:36 +0000</pubDate>
       <enclosure
         url="https://github.com/ErnestHysa/anikku/releases/download/v1.0.0/Anikku-1.0.0.dmg"
-        sparkle:edSignature="BASE64_EDDSA_SIGNATURE_HERE"
-        length="12345678"
+        sparkle:edSignature="REPLACE_WITH_REAL_SIGNATURE"
+        length="0"
         type="application/octet-stream" />
       <sparkle:releaseNotesLink>
         https://github.com/ErnestHysa/anikku/releases/tag/v1.0.0
       </sparkle:releaseNotesLink>
     </item>
-
-    -->
-
-    <!--
-      ⚠️ IMPORTANT: Before first real release, add a release entry above.
-         Sparkle will fail if the appcast has no items.
-         For testing locally, run:
-           cd /path/to/appcast/dir && python3 -m http.server 8080
-         Then set SUFeedURL to http://localhost:8080/appcast.xml
-    -->
 
   </channel>
 </rss>
