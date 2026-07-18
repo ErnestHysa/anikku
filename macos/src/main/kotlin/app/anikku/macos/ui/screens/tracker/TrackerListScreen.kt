@@ -158,7 +158,7 @@ class TrackerListScreen : AnikkuScreen() {
                                 toastHost.show("Tracker manager not available", ToastDuration.SHORT)
                                 return@TrackerListItem
                             }
-                            toastHost.show("Opening browser for ${status.displayName} login...", ToastDuration.LONG)
+                            toastHost.show("Opening login screen for ${status.displayName}...", ToastDuration.LONG)
                             navigator.push(
                                 TrackerDetailScreen(
                                     tracker = status.tracker,

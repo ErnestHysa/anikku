@@ -32,7 +32,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,8 +46,6 @@ import app.anikku.macos.ui.components.LocalToastHost
 import app.anikku.macos.ui.components.ToastDuration
 import app.anikku.macos.ui.screens.tracker.TrackerListScreen
 import cafe.adriel.voyager.navigator.LocalNavigator
-import cafe.adriel.voyager.navigator.currentOrThrow
-import kotlinx.coroutines.launch
 
 /**
  * OAuth client credentials for tracker services.
@@ -84,7 +81,7 @@ fun TrackerSettingsPanel(
     onTrackerChanged: () -> Unit = {},
 ) {
     val toastHost = LocalToastHost.current
-    val scope = rememberCoroutineScope()
+    val navigator = LocalNavigator.current
     var loggingInTracker by remember { mutableStateOf<String?>(null) }
 
     // Collect login statuses reactively
@@ -121,7 +118,7 @@ fun TrackerSettingsPanel(
                 }
 
                 loggingInTracker = status.tracker
-                toastHost.show("Opening browser for ${status.displayName} login...", ToastDuration.LONG)
+                toastHost.show("Opening login screen for ${status.displayName}...", ToastDuration.LONG)
 
                 trackerManager.login(
                     tracker = status.tracker,
@@ -165,12 +162,14 @@ fun TrackerSettingsPanel(
     Spacer(Modifier.height(4.dp))
 
     // Navigate to the full TrackerListScreen
-    val nav = LocalNavigator.currentOrThrow
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 24.dp, vertical = 4.dp)
-            .clickable { nav.push(TrackerListScreen()) },
+            .clickable {
+                navigator?.push(TrackerListScreen())
+                    ?: toastHost.show("Navigation not available", ToastDuration.SHORT)
+            },
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
