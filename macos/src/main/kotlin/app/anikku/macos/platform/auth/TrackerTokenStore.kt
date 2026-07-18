@@ -118,6 +118,40 @@ class TrackerTokenStore(
         logger.info { "Tokens removed for $tracker" }
     }
 
+    // -----------------------------------------------------------------------
+    // OAuth client credential persistence
+    // -----------------------------------------------------------------------
+
+    /**
+     * Save OAuth client credentials (client ID and secret) for a tracker.
+     */
+    fun saveClientCredentials(tracker: String, clientId: String, clientSecret: String) {
+        preferenceStore.getString("creds_id_$tracker", "").set(clientId)
+        preferenceStore.getString("creds_secret_$tracker", "").set(clientSecret)
+        logger.info { "OAuth client credentials saved for $tracker" }
+    }
+
+    /**
+     * Load stored OAuth client credentials for a tracker.
+     * Returns null if no credentials have been saved.
+     */
+    fun getClientCredentials(tracker: String): Pair<String, String>? {
+        val clientId = preferenceStore.getString("creds_id_$tracker", "").get()
+        val clientSecret = preferenceStore.getString("creds_secret_$tracker", "").get()
+        return if (clientId.isNotBlank() && clientSecret.isNotBlank()) {
+            Pair(clientId, clientSecret)
+        } else null
+    }
+
+    /**
+     * Remove stored OAuth client credentials for a tracker.
+     */
+    fun removeClientCredentials(tracker: String) {
+        preferenceStore.getString("creds_id_$tracker", "").delete()
+        preferenceStore.getString("creds_secret_$tracker", "").delete()
+        logger.info { "OAuth client credentials removed for $tracker" }
+    }
+
     /**
      * Remove all stored tokens (logout all).
      */

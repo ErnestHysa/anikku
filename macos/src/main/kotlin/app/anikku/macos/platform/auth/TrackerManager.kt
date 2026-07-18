@@ -44,7 +44,7 @@ private val logger = KotlinLogging.logger {}
  */
 class TrackerManager(
     private val oauthManager: TrackerOAuthManager,
-    private val tokenStore: TrackerTokenStore,
+    val tokenStore: TrackerTokenStore,
     private val httpClient: OkHttpClient,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
 ) {

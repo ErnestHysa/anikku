@@ -81,8 +81,6 @@ data class TrackerCredentials(
 @Composable
 fun TrackerSettingsPanel(
     trackerManager: TrackerManager?,
-    myanimelistCredentials: TrackerCredentials = TrackerCredentials(),
-    anilistCredentials: TrackerCredentials = TrackerCredentials(),
     onTrackerChanged: () -> Unit = {},
 ) {
     val toastHost = LocalToastHost.current
@@ -97,26 +95,28 @@ fun TrackerSettingsPanel(
     HeadingItem("Tracking")
 
     statuses.forEach { status ->
+        // Load stored credentials from the token store
+        val creds = remember(trackerManager, status.tracker) {
+            trackerManager?.tokenStore?.getClientCredentials(status.tracker)
+        }
+        val clientId = creds?.first.orEmpty()
+        val clientSecret = creds?.second.orEmpty()
+
         TrackerCard(
             tracker = status.tracker,
             displayName = status.displayName,
             isLoggedIn = status.isLoggedIn,
             username = status.username,
             isLoggingIn = loggingInTracker == status.tracker,
+            hasCredentials = clientId.isNotBlank(),
             onLogin = {
                 if (trackerManager == null) {
                     toastHost.show("Tracker manager not available", ToastDuration.SHORT)
                     return@TrackerCard
                 }
 
-                val creds = when (status.tracker) {
-                    "myanimelist" -> myanimelistCredentials
-                    "anilist" -> anilistCredentials
-                    else -> TrackerCredentials()
-                }
-
-                if (creds.clientId.isBlank()) {
-                    toastHost.show("${status.displayName}: Set client ID in code or use a proxy", ToastDuration.LONG)
+                if (clientId.isBlank()) {
+                    toastHost.show("${status.displayName}: Set client ID/secret in the detail screen", ToastDuration.LONG)
                     return@TrackerCard
                 }
 
@@ -125,8 +125,8 @@ fun TrackerSettingsPanel(
 
                 trackerManager.login(
                     tracker = status.tracker,
-                    clientId = creds.clientId,
-                    clientSecret = creds.clientSecret,
+                    clientId = clientId,
+                    clientSecret = clientSecret,
                 ) { success, message ->
                     loggingInTracker = null
                     toastHost.show(message, ToastDuration.SHORT)
@@ -152,7 +152,7 @@ fun TrackerSettingsPanel(
 
     // Info text about credentials
     Text(
-        text = "To use tracker sync, register an app with each service and set the client ID/secret.",
+        text = "To use tracker sync, set up your OAuth app credentials in the Manage Trackers screen.",
         modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
@@ -231,6 +231,7 @@ private fun TrackerCard(
     isLoggedIn: Boolean,
     username: String?,
     isLoggingIn: Boolean,
+    hasCredentials: Boolean = false,
     onLogin: () -> Unit,
     onLogout: () -> Unit,
 ) {
@@ -260,12 +261,14 @@ private fun TrackerCard(
                     text = when {
                         isLoggingIn -> "Logging in..."
                         isLoggedIn -> "Logged in${if (username != null) " as $username" else ""}"
+                        !hasCredentials -> "Credentials not configured"
                         else -> "Not connected"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = when {
                         isLoggingIn -> MaterialTheme.colorScheme.tertiary
                         isLoggedIn -> Color(0xFF4CAF50)
+                        !hasCredentials -> MaterialTheme.colorScheme.error
                         else -> MaterialTheme.colorScheme.onSurfaceVariant
                     },
                 )

@@ -23,8 +23,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Launch
+import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.Logout
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.Button
@@ -38,8 +40,10 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -54,6 +58,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.anikku.macos.platform.auth.LocalTrackerManager
@@ -61,7 +67,6 @@ import app.anikku.macos.platform.auth.TrackerTokenStore
 import app.anikku.macos.ui.AnikkuScreen
 import app.anikku.macos.ui.components.LocalToastHost
 import app.anikku.macos.ui.components.ToastDuration
-import app.anikku.macos.ui.settings.TrackerCredentials
 import cafe.adriel.voyager.core.screen.ScreenKey
 import cafe.adriel.voyager.core.screen.uniqueScreenKey
 import cafe.adriel.voyager.navigator.LocalNavigator
@@ -73,7 +78,7 @@ import kotlinx.coroutines.launch
  * Possible states during the OAuth login flow.
  */
 private enum class LoginState {
-    /** Waiting for user action — show Connect button. */
+    /** Waiting for user action — show Connect or credential input. */
     IDLE,
     /** OAuth flow in progress — browser opened, waiting for user to authorize. */
     AUTHORIZING,
@@ -84,42 +89,21 @@ private enum class LoginState {
 }
 
 /**
- * Default credentials placeholder.
- * In production, users should register their own OAuth app with each tracker.
- * For built-in convenience, this can be populated with the app's registered credentials.
- */
-object TrackerCredentialsProvider {
-    /**
-     * Default credentials for each tracker.
-     * Override these by providing custom [TrackerCredentials] to the detail screen.
-     */
-    val defaults: Map<String, TrackerCredentials> = mapOf(
-        "myanimelist" to TrackerCredentials(),
-        "anilist" to TrackerCredentials(),
-        "kitsu" to TrackerCredentials(),
-        "shikimori" to TrackerCredentials(),
-    )
-}
-
-/**
  * Tracker detail screen — OAuth login flow for a single tracker service.
  *
  * Shows a detailed view of the tracker with:
  * - Brand icon and name
  * - Login status and username
  * - OAuth flow with animated states (IDLE → AUTHORIZING → SUCCESS/ERROR)
- * - Connect and Disconnect buttons
- * - Info about how to register an OAuth app
+ * - Credential input fields when no OAuth app is configured
+ * - Save & Connect flow to persist credentials before authorizing
  *
  * @param tracker The tracker name (e.g., "myanimelist", "anilist").
  * @param displayName The human-readable tracker name (e.g., "MyAnimeList").
- * @param credentials Optional OAuth client credentials. If empty, the user
- *                    will see instructions on how to register an app.
  */
 data class TrackerDetailScreen(
     val tracker: String,
     val displayName: String,
-    val credentials: TrackerCredentials? = null,
 ) : AnikkuScreen() {
 
     override val key: ScreenKey = uniqueScreenKey
@@ -127,6 +111,12 @@ data class TrackerDetailScreen(
     // Class-level state to survive Voyager backstack disposal
     private val _loginState = mutableStateOf(LoginState.IDLE)
     private val _errorMessage = mutableStateOf<String?>(null)
+
+    // Credential input state
+    private val _clientId = mutableStateOf("")
+    private val _clientSecret = mutableStateOf("")
+    private val _showSecret = mutableStateOf(false)
+    private val _saveCredentialsMode = mutableStateOf(false)
 
     @OptIn(ExperimentalMaterial3Api::class)
     @Composable
@@ -145,7 +135,7 @@ data class TrackerDetailScreen(
         val isLoggedIn = status?.isLoggedIn == true
         val username = status?.username
 
-        // Reset login state if logged in externally (e.g., from another screen)
+        // Reset login state if logged in externally
         if (isLoggedIn && _loginState.value != LoginState.SUCCESS && _loginState.value != LoginState.IDLE) {
             _loginState.value = LoginState.SUCCESS
         }
@@ -161,7 +151,19 @@ data class TrackerDetailScreen(
             else -> null
         }
 
-        val hasCredentials = credentials?.clientId?.isNotBlank() == true
+        // Load stored credentials or use the ones already typed
+        val storedCreds = remember(tracker, trackerManager) {
+            trackerManager?.tokenStore?.getClientCredentials(tracker)
+        }
+
+        val hasCredentials = _clientId.value.isNotBlank() && _clientSecret.value.isNotBlank() ||
+            storedCreds != null
+
+        // Seed input fields from stored credentials on first composition
+        if (storedCreds != null && _clientId.value.isEmpty() && _clientSecret.value.isEmpty()) {
+            _clientId.value = storedCreds.first
+            _clientSecret.value = storedCreds.second
+        }
 
         Scaffold(
             topBar = {
@@ -277,9 +279,8 @@ data class TrackerDetailScreen(
                     ) {
                         when (state) {
                             LoginState.IDLE -> {
-                                // ---- Not logged in ----
                                 if (isLoggedIn) {
-                                    // Already logged in — show disconnect
+                                    // ---- Already logged in — show disconnect ----
                                     Button(
                                         onClick = {
                                             trackerManager?.logout(tracker)
@@ -305,18 +306,116 @@ data class TrackerDetailScreen(
                                             style = MaterialTheme.typography.labelLarge,
                                         )
                                     }
+                                } else if (hasCredentials && !_saveCredentialsMode.value) {
+                                    // ---- Have credentials — show Connect + Edit buttons ----
+                                    // Compute a single source of truth for credentials
+                                    val activeClientId = _clientId.value.ifBlank { storedCreds?.first.orEmpty() }
+                                    val activeClientSecret = _clientSecret.value.ifBlank { storedCreds?.second.orEmpty() }
+
+                                    Button(
+                                        onClick = {
+                                            _loginState.value = LoginState.AUTHORIZING
+                                            _errorMessage.value = null
+                                            if (trackerManager != null) {
+                                                trackerManager.login(
+                                                    tracker = tracker,
+                                                    clientId = activeClientId,
+                                                    clientSecret = activeClientSecret,
+                                                ) { success, message ->
+                                                    scope.launch {
+                                                        if (success) {
+                                                            _loginState.value = LoginState.SUCCESS
+                                                            toastHost.show(
+                                                                "Connected to $displayName",
+                                                                ToastDuration.SHORT,
+                                                            )
+                                                        } else {
+                                                            _loginState.value = LoginState.ERROR
+                                                            _errorMessage.value = message
+                                                            toastHost.show(
+                                                                "$displayName: $message",
+                                                                ToastDuration.LONG,
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            } else {
+                                                _loginState.value = LoginState.ERROR
+                                                _errorMessage.value = "Tracker manager not available"
+                                            }
+                                        },
+                                        shape = RoundedCornerShape(12.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(52.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = brandColor,
+                                        ),
+                                    ) {
+                                        Icon(
+                                            Icons.Outlined.Launch,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(20.dp),
+                                        )
+                                        Spacer(Modifier.width(8.dp))
+                                        Text(
+                                            "Connect $displayName",
+                                            style = MaterialTheme.typography.labelLarge,
+                                        )
+                                    }
+
+                                    Spacer(Modifier.height(8.dp))
+
+                                    // Edit credentials button
+                                    TextButton(
+                                        onClick = { _saveCredentialsMode.value = true },
+                                        modifier = Modifier.align(Alignment.CenterHorizontally),
+                                    ) {
+                                        Icon(
+                                            Icons.Outlined.Refresh,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(14.dp),
+                                        )
+                                        Spacer(Modifier.width(4.dp))
+                                        Text(
+                                            "Edit OAuth credentials",
+                                            style = MaterialTheme.typography.labelMedium,
+                                        )
+                                    }
                                 } else {
-                                    // Connect button
-                                    if (hasCredentials) {
-                                        Button(
-                                            onClick = {
-                                                _loginState.value = LoginState.AUTHORIZING
-                                                _errorMessage.value = null
+                                    // ---- No credentials or edit mode — show input fields ----
+                                    val isEditMode = _saveCredentialsMode.value
+                                    InputCredentialsCard(
+                                        displayName = displayName,
+                                        clientId = _clientId.value,
+                                        clientSecret = _clientSecret.value,
+                                        showSecret = _showSecret.value,
+                                        registrationUrl = registrationUrl,
+                                        onClientIdChange = { _clientId.value = it },
+                                        onClientSecretChange = { _clientSecret.value = it },
+                                        onToggleSecret = { _showSecret.value = !_showSecret.value },
+                                        onSave = {
+                                            if (_clientId.value.isNotBlank() && _clientSecret.value.isNotBlank()) {
                                                 if (trackerManager != null) {
+                                                    trackerManager.tokenStore.saveClientCredentials(
+                                                        tracker = tracker,
+                                                        clientId = _clientId.value,
+                                                        clientSecret = _clientSecret.value,
+                                                    )
+                                                    toastHost.show(
+                                                        "Credentials saved for $displayName",
+                                                        ToastDuration.SHORT,
+                                                    )
+                                                }
+                                                _saveCredentialsMode.value = false
+                                                // Auto-trigger OAuth login after saving credentials
+                                                if (!isEditMode && trackerManager != null) {
+                                                    _loginState.value = LoginState.AUTHORIZING
+                                                    _errorMessage.value = null
                                                     trackerManager.login(
                                                         tracker = tracker,
-                                                        clientId = credentials!!.clientId,
-                                                        clientSecret = credentials!!.clientSecret,
+                                                        clientId = _clientId.value,
+                                                        clientSecret = _clientSecret.value,
                                                     ) { success, message ->
                                                         scope.launch {
                                                             if (success) {
@@ -335,92 +434,33 @@ data class TrackerDetailScreen(
                                                             }
                                                         }
                                                     }
-                                                } else {
-                                                    _loginState.value = LoginState.ERROR
-                                                    _errorMessage.value = "Tracker manager not available"
                                                 }
-                                            },
-                                            shape = RoundedCornerShape(12.dp),
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .height(52.dp),
-                                            colors = ButtonDefaults.buttonColors(
-                                                containerColor = brandColor,
-                                            ),
-                                        ) {
-                                            Icon(
-                                                Icons.Outlined.Launch,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(20.dp),
-                                            )
-                                            Spacer(Modifier.width(8.dp))
-                                            Text(
-                                                "Connect $displayName",
-                                                style = MaterialTheme.typography.labelLarge,
-                                            )
-                                        }
-                                    } else {
-                                        // No credentials — show instruction card
-                                        Card(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            shape = RoundedCornerShape(12.dp),
-                                            colors = CardDefaults.cardColors(
-                                                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                            ),
-                                        ) {
-                                            Column(modifier = Modifier.padding(20.dp)) {
-                                                Text(
-                                                    text = "OAuth Credentials Required",
-                                                    style = MaterialTheme.typography.titleSmall,
-                                                    fontWeight = FontWeight.SemiBold,
+                                            } else {
+                                                toastHost.show(
+                                                    "Please enter both Client ID and Client Secret",
+                                                    ToastDuration.SHORT,
                                                 )
-                                                Spacer(Modifier.height(8.dp))
-                                                Text(
-                                                    text = "To connect $displayName, you need to register a developer application and obtain OAuth client credentials:",
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                )
-                                                Spacer(Modifier.height(12.dp))
-                                                Text(
-                                                    text = "1. Go to the developer portal",
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                )
-                                                Text(
-                                                    text = "2. Create a new OAuth application",
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                )
-                                                Text(
-                                                    text = "3. Set the redirect URI to: http://127.0.0.1:0/callback",
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                )
-                                                Text(
-                                                    text = "4. Set the client ID and secret in the app",
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                )
-                                                Spacer(Modifier.height(12.dp))
-                                                if (registrationUrl != null) {
-                                                    OutlinedButton(
-                                                        onClick = {
-                                                            app.anikku.macos.platform.web.BrowserLauncher.openSafe(registrationUrl)
-                                                        },
-                                                        shape = RoundedCornerShape(8.dp),
-                                                        modifier = Modifier.fillMaxWidth(),
-                                                    ) {
-                                                        Icon(
-                                                            Icons.Outlined.Launch,
-                                                            contentDescription = null,
-                                                            modifier = Modifier.size(16.dp),
-                                                        )
-                                                        Spacer(Modifier.width(6.dp))
-                                                        Text(
-                                                            "Open ${displayName} Developer Portal",
-                                                            style = MaterialTheme.typography.labelSmall,
-                                                        )
-                                                    }
-                                                }
                                             }
-                                        }
-                                    }
+                                        },
+                                        onCancel = {
+                                            // Restore stored credential values on cancel
+                                            _saveCredentialsMode.value = false
+                                            val stored = trackerManager?.tokenStore?.getClientCredentials(tracker)
+                                            _clientId.value = stored?.first.orEmpty()
+                                            _clientSecret.value = stored?.second.orEmpty()
+                                        },
+                                        onClear = {
+                                            // Clear all credentials
+                                            trackerManager?.tokenStore?.removeClientCredentials(tracker)
+                                            _clientId.value = ""
+                                            _clientSecret.value = ""
+                                            _saveCredentialsMode.value = false
+                                            toastHost.show("Credentials cleared for $displayName", ToastDuration.SHORT)
+                                        },
+                                        showCancel = isEditMode,
+                                        showClear = isEditMode,
+                                        saveLabel = if (isEditMode) "Save" else "Save & Connect",
+                                    )
                                 }
                             }
 
@@ -573,7 +613,7 @@ data class TrackerDetailScreen(
                 Spacer(Modifier.height(28.dp))
 
                 // =====================================================================
-                // Info card about OAuth data usage
+                // Info card about OAuth data usage (only when idle)
                 // =====================================================================
                 if (loginState == LoginState.IDLE) {
                     HorizontalDivider(modifier = Modifier.padding(horizontal = 32.dp))
@@ -614,6 +654,181 @@ data class TrackerDetailScreen(
     }
 }
 
+/**
+ * Card with credential input fields for OAuth client ID and secret.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun InputCredentialsCard(
+    displayName: String,
+    clientId: String,
+    clientSecret: String,
+    showSecret: Boolean,
+    registrationUrl: String?,
+    onClientIdChange: (String) -> Unit,
+    onClientSecretChange: (String) -> Unit,
+    onToggleSecret: () -> Unit,
+    onSave: () -> Unit,
+    onCancel: () -> Unit = {},
+    onClear: () -> Unit = {},
+    showCancel: Boolean = false,
+    showClear: Boolean = false,
+    saveLabel: String = "Save & Connect",
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        ),
+    ) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Text(
+                text = "Connect to $displayName",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(Modifier.height(8.dp))
+
+            // Instructions
+            Text(
+                text = "Enter your OAuth app credentials to enable tracker sync:",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "1. Open the developer portal",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Text(
+                text = "2. Create a new application with redirect URI:",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                text = "http://127.0.0.1:0/callback",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Text(
+                text = "3. Copy the Client ID and Client Secret below",
+                style = MaterialTheme.typography.bodySmall,
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            // Open developer portal button
+            if (registrationUrl != null) {
+                OutlinedButton(
+                    onClick = { app.anikku.macos.platform.web.BrowserLauncher.openSafe(registrationUrl) },
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(
+                        Icons.Outlined.Launch,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "Open ${displayName} Developer Portal",
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            // Client ID field
+            OutlinedTextField(
+                value = clientId,
+                onValueChange = onClientIdChange,
+                label = { Text("Client ID") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            // Client Secret field (with show/hide toggle)
+            OutlinedTextField(
+                value = clientSecret,
+                onValueChange = onClientSecretChange,
+                label = { Text("Client Secret") },
+                singleLine = true,
+                visualTransformation = if (showSecret) {
+                    VisualTransformation.None
+                } else {
+                    PasswordVisualTransformation()
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                trailingIcon = {
+                    TextButton(onClick = onToggleSecret) {
+                        Text(
+                            if (showSecret) "Hide" else "Show",
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    }
+                },
+            )
+
+            Spacer(Modifier.height(16.dp))
+
+            // Action buttons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (showCancel) {
+                    OutlinedButton(
+                        onClick = onCancel,
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.weight(1f).height(44.dp),
+                    ) {
+                        Text("Cancel", style = MaterialTheme.typography.labelLarge)
+                    }
+                }
+                if (showClear) {
+                    OutlinedButton(
+                        onClick = onClear,
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error,
+                        ),
+                        modifier = Modifier.weight(1f).height(44.dp),
+                    ) {
+                        Icon(
+                            Icons.Outlined.Delete,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text("Clear", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+                Button(
+                    onClick = onSave,
+                    enabled = clientId.isNotBlank() && clientSecret.isNotBlank(),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.weight(1f).height(44.dp),
+                ) {
+                    Icon(
+                        Icons.Outlined.Save,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(saveLabel, style = MaterialTheme.typography.labelLarge)
+                }
+            }
+        }
+    }
+}
+
 @Composable
 private fun BulletPoint(text: String) {
     Row(
@@ -634,5 +849,3 @@ private fun BulletPoint(text: String) {
         )
     }
 }
-
-
