@@ -784,6 +784,31 @@ data class PlayerScreen(
             }
         }
 
+        // Reset the scrobble guard when switching episodes so each episode
+        // gets exactly one scrobble attempt. This runs AFTER the old episode's
+        // saveResumePosition call in onNavigateEpisode (which fires before
+        // currentEpisodeIndex is updated), so the flag is clean for the new episode.
+        LaunchedEffect(currentEpisodeIndex) {
+            hasScrobbledThisEpisode = false
+        }
+
+        // Auto-scrobble when the episode ends naturally (ENDED state) or when
+        // the user pauses after watching >80%. The guard flag hasScrobbledThisEpisode
+        // ensures we only fire once per episode regardless of how many times this
+        // LaunchedEffect re-runs (e.g., pause → resume → pause again).
+        LaunchedEffect(playbackState) {
+            val episode = allEpisodes.getOrNull(currentEpisodeIndex) ?: return@LaunchedEffect
+            val shouldScrobble = when (playbackState) {
+                PlaybackState.ENDED -> true
+                PlaybackState.PAUSED -> currentPosition > 0 && duration > 0 &&
+                    currentPosition / duration >= 0.8
+                else -> false
+            }
+            if (shouldScrobble && duration > 0) {
+                saveResumePosition(episode, currentPosition.toLong(), duration.toLong())
+            }
+        }
+
         // Clean up when the screen is removed — save position + record history
         DisposableEffect(Unit) {
             onDispose {
