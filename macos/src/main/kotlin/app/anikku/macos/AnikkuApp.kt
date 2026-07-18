@@ -35,6 +35,7 @@ import app.anikku.macos.platform.auth.TrackerManager
 import app.anikku.macos.platform.auth.TrackerOAuthManager
 import app.anikku.macos.platform.auth.TrackerTokenStore
 import app.anikku.macos.platform.network.ChromeCDPClient
+import app.anikku.macos.platform.security.MacOSKeychain
 import app.anikku.macos.platform.network.ProxyConfig
 import app.anikku.macos.platform.network.ProxyType
 import app.anikku.macos.ui.components.LocalToastHost
@@ -171,10 +172,12 @@ fun main() = application {
             println("[AnikkuApp] Dock integration failed (non-fatal): ${e.message}")
         }
 
+        val keychain = remember { MacOSKeychain(service = "anikku", account = "anikku-app") }
+
         val trackerManager = remember {
             TrackerManager(
                 oauthManager = app.networkHelper.client.let { TrackerOAuthManager(it) },
-                tokenStore = app.preferenceStore.let { TrackerTokenStore(it) },
+                tokenStore = app.preferenceStore.let { TrackerTokenStore(it, keychain) },
                 httpClient = app.networkHelper.client,
             )
         }
