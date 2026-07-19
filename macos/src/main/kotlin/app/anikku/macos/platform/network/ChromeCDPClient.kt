@@ -11,7 +11,9 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import java.io.File
+import java.time.Instant
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -65,6 +67,22 @@ object ChromeCDPClient {
      */
     @Volatile
     var debugMode: Boolean = false
+
+    /** Ring buffer of captured CDP debug messages. Thread-safe, bounded at MAX_DEBUG_MESSAGES. */
+    private val debugLog = ConcurrentLinkedQueue<String>()
+    private const val MAX_DEBUG_MESSAGES = 500
+
+    /**
+     * Return all captured CDP debug messages as a timestamped, newline-joined string.
+     * Used by Network Settings to export the log to a file for support purposes.
+     */
+    fun getDebugLog(): String = debugLog.joinToString("\n")
+
+    /**
+     * Clear the in-memory debug log buffer.
+     * Called after a successful export so the next export starts fresh.
+     */
+    fun clearDebugLog() { debugLog.clear() }
 
     /**
      * Is Chrome (or alternative browser) installed?
@@ -388,10 +406,17 @@ object ChromeCDPClient {
     /**
      * Log a debug message only when [debugMode] is enabled.
      * Uses INFO level so these messages appear in the default log configuration.
+     * Also captures the message in an in-memory ring buffer for file export.
      */
     private fun logDebug(message: String) {
         if (debugMode) {
-            logger.info { "[CDP-DEBUG] $message" }
+            val entry = "[${Instant.now()}] $message"
+            logger.info { "[CDP-DEBUG] $entry" }
+            debugLog.add(entry)
+            // Prune ring buffer if over capacity
+            while (debugLog.size > MAX_DEBUG_MESSAGES) {
+                debugLog.poll()
+            }
         }
     }
 

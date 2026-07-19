@@ -1,6 +1,8 @@
 package app.anikku.macos.ui.settings
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -10,15 +12,19 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import app.anikku.macos.platform.MacOSShareUtil
+import app.anikku.macos.platform.network.ChromeCDPClient
 import app.anikku.macos.platform.network.ProxyType
 import app.anikku.macos.ui.components.CheckboxItem
 import app.anikku.macos.ui.components.HeadingItem
@@ -27,6 +33,7 @@ import app.anikku.macos.ui.components.SelectItem
 import app.anikku.macos.ui.components.TextItem
 import app.anikku.macos.ui.components.ToastDuration
 import java.io.File
+import java.time.Instant
 
 /**
  * Network settings panel — configures proxy, Chrome path, and SSL bypass.
@@ -234,6 +241,57 @@ fun NetworkSettingsPanel() {
             color = MaterialTheme.colorScheme.onTertiaryContainer,
             modifier = Modifier.padding(12.dp),
         )
+    }
+
+    // Export CDP log button — only shown when debug mode is active
+    if (cdpDebugMode) {
+        Spacer(Modifier.height(8.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedButton(
+                onClick = {
+                    val logText = ChromeCDPClient.getDebugLog()
+                    if (logText.isEmpty()) {
+                        toastHost.show("No CDP debug messages captured yet", ToastDuration.SHORT)
+                    } else {
+                        val exportFile = File.createTempFile(
+                            "anikku-cdp-debug-", ".log"
+                        )
+                        exportFile.deleteOnExit()
+                        try {
+                            val header = "Anikku CDP Debug Log\n" +
+                                "Exported: ${Instant.now()}\n" +
+                                "=" .repeat(60) + "\n\n"
+                            exportFile.writeText(header + logText)
+                            MacOSShareUtil.shareFile(exportFile)
+                            toastHost.show("CDP debug log exported — choose where to save", ToastDuration.LONG)
+                        } catch (e: Exception) {
+                            toastHost.show(
+                                "Failed to export: ${e.message?.take(60)}",
+                                ToastDuration.LONG,
+                            )
+                        }
+                    }
+                },
+            ) {
+                Text("Export CDP Log", style = MaterialTheme.typography.labelMedium)
+            }
+
+            OutlinedButton(
+                onClick = {
+                    val count = ChromeCDPClient.getDebugLog().lines().size
+                    ChromeCDPClient.clearDebugLog()
+                    toastHost.show("Cleared $count CDP debug messages", ToastDuration.SHORT)
+                },
+            ) {
+                Text("Clear", style = MaterialTheme.typography.labelMedium)
+            }
+        }
     }
 
     HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
