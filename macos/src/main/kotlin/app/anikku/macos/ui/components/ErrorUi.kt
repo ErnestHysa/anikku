@@ -20,12 +20,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import app.anikku.macos.platform.logging.TerminalErrorLogger
 
 /**
  * Error type enum for categorizing error states across the app.
@@ -94,7 +96,18 @@ fun ErrorUi(
     onPrimaryAction: (() -> Unit)? = null,
     onSecondaryAction: (() -> Unit)? = null,
     secondaryActionLabel: String? = null,
+    source: String? = null,
+    location: String? = null,
 ) {
+    // Log the error to the terminal as soon as the full-screen error is composed.
+    LaunchedEffect(errorType) {
+        TerminalErrorLogger.logUiError(
+            message = "${errorType.title}: ${errorType.message}",
+            source = source,
+            location = location ?: "ErrorUi.${errorType.name}",
+        )
+    }
+
     Box(
         modifier = modifier.fillMaxSize(),
         contentAlignment = Alignment.Center,
@@ -164,12 +177,26 @@ fun ErrorUi(
  * Compact inline error banner for embedding within screens.
  * Renders a smaller version of the error UI suitable for
  * use in List headers or as a snackbar-like element.
+ *
+ * Errors shown via this banner are also logged to the terminal so they can be
+ * copy-pasted and included in the shutdown summary.
  */
 @Composable
 fun ErrorBanner(
     errorType: ErrorType,
     onDismiss: (() -> Unit)? = null,
+    source: String? = null,
+    location: String? = null,
 ) {
+    // Log the error to the terminal as soon as the banner is composed.
+    LaunchedEffect(errorType) {
+        TerminalErrorLogger.logUiError(
+            message = "${errorType.title}: ${errorType.message}",
+            source = source,
+            location = location ?: "ErrorBanner.${errorType.name}",
+        )
+    }
+
     androidx.compose.material3.AlertDialog(
         onDismissRequest = { onDismiss?.invoke() },
         icon = {

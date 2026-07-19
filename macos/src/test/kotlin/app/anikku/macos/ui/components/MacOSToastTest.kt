@@ -9,6 +9,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import app.anikku.macos.platform.logging.TerminalErrorLogger
 import app.anikku.macos.ui.theme.AnikkuTheme
 import org.junit.Rule
 import org.junit.Test
@@ -109,6 +110,50 @@ class MacOSToastTest {
         assert(state.currentToast?.text == "New") {
             "New toast should replace old one"
         }
+    }
+
+    @Test
+    fun `show with isError true logs error to TerminalErrorLogger`() {
+        TerminalErrorLogger.clear()
+        val state = ToastHostState()
+        state.show(
+            text = "Network error",
+            duration = ToastDuration.LONG,
+            isError = true,
+            source = "TestSource",
+            location = "TestScreen.load",
+        )
+
+        val error = TerminalErrorLogger.errors.single()
+        assert(error.message == "Network error")
+        assert(error.source == "TestSource")
+        assert(error.location == "TestScreen.load")
+    }
+
+    @Test
+    fun `show with isError false does not log error`() {
+        TerminalErrorLogger.clear()
+        val state = ToastHostState()
+        state.show("Just a message")
+
+        assert(TerminalErrorLogger.errors.isEmpty())
+    }
+
+    @Test
+    fun `showError convenience method logs error and shows toast`() {
+        TerminalErrorLogger.clear()
+        val state = ToastHostState()
+        state.showError(
+            text = "Something went wrong",
+            source = "TestSource",
+            location = "TestScreen.load",
+        )
+
+        assert(state.currentToast?.text == "Something went wrong")
+        val error = TerminalErrorLogger.errors.single()
+        assert(error.message == "Something went wrong")
+        assert(error.source == "TestSource")
+        assert(error.location == "TestScreen.load")
     }
 
     @Test

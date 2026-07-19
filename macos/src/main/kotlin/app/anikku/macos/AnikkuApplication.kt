@@ -13,6 +13,7 @@ import app.anikku.macos.platform.extension.MacOSExtensionLoader
 import app.anikku.macos.platform.extension.MacOSExtensionManager
 import app.anikku.macos.platform.logging.CrashReporter
 import app.anikku.macos.platform.logging.MacOSLogger
+import app.anikku.macos.platform.logging.TerminalErrorLogger
 import app.anikku.macos.platform.logging.UIActionLogger
 import app.anikku.macos.platform.network.InsecureSSLHelper
 import app.anikku.macos.platform.network.MacOSCookieJar
@@ -264,7 +265,7 @@ class AnikkuApplication {
 
     /**
      * Called when the application is shutting down.
-     * Cleans up all Phase 7 services.
+     * Cleans up all Phase 7 services and prints a summary of UI errors to the terminal.
      */
     fun onShutdown() {
         backgroundScheduler.cancelAll()
@@ -277,6 +278,9 @@ class AnikkuApplication {
         notificationManager.shutdown()
 
         CrashReporter.logEvent("App shutdown")
+
+        // Print a terminal summary of every UI error captured this session.
+        TerminalErrorLogger.printShutdownSummary()
     }
 
 }

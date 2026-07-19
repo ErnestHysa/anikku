@@ -656,7 +656,14 @@ data class PlayerScreen(
                         usedSource = true
                     }
                 } catch (e: Exception) {
-                    toastHost.show("Failed to fetch episodes: ${e.message?.take(60)}", ToastDuration.LONG)
+                    toastHost.show(
+                        text = "Failed to fetch episodes: ${e.message?.take(60)}",
+                        duration = ToastDuration.LONG,
+                        isError = true,
+                        source = sourceId?.toString(),
+                        throwable = e,
+                        location = "PlayerScreen.LaunchedEffect.fetchEpisodes",
+                    )
                 }
             }
 
@@ -679,7 +686,13 @@ data class PlayerScreen(
                 },
                 onError = { msg ->
                     videoResolutionError = msg
-                    toastHost.show(msg, ToastDuration.LONG)
+                    toastHost.show(
+                        text = msg,
+                        duration = ToastDuration.LONG,
+                        isError = true,
+                        source = sourceId?.toString(),
+                        location = "PlayerScreen.resolveVideoUrl",
+                    )
                 },
                 onDiagnostic = { diag ->
                     videoErrorDiagnostic = diag
@@ -1023,7 +1036,15 @@ data class PlayerScreen(
                             onCandidateList = { candidates ->
                                 videoCandidates = candidates
                             },
-                            onError = { msg -> toastHost.show(msg, ToastDuration.LONG) },
+                            onError = { msg ->
+                                toastHost.show(
+                                    text = msg,
+                                    duration = ToastDuration.LONG,
+                                    isError = true,
+                                    source = sourceId?.toString(),
+                                    location = "PlayerScreen.onNavigateEpisode.resolveVideoUrl",
+                                )
+                            },
                             onDiagnostic = { diag ->
                                 videoErrorDiagnostic = diag
                             },
@@ -1034,7 +1055,13 @@ data class PlayerScreen(
                             videoQualityResolution = resolved.qualityResolution
                             videoQualityLabel = resolved.qualityLabel
                         } else {
-                            toastHost.show("No video source available", ToastDuration.SHORT)
+                            toastHost.show(
+                                text = "No video source available",
+                                duration = ToastDuration.SHORT,
+                                isError = true,
+                                source = sourceId?.toString(),
+                                location = "PlayerScreen.onNavigateEpisode",
+                            )
                         }
                     }
                 } else if (index > currentEpisodeIndex) {

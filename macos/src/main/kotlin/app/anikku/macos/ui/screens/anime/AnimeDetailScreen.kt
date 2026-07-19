@@ -218,10 +218,24 @@ data class AnimeDetailScreen(
                         episodes = episodeModels
                     } catch (e: NoClassDefFoundError) {
                         errorMessage = "Missing dependency: ${e.message}"
-                        toastHost.show("Missing dependency: ${e.message}", ToastDuration.LONG)
+                        toastHost.show(
+                            text = "Missing dependency: ${e.message}",
+                            duration = ToastDuration.LONG,
+                            isError = true,
+                            source = sourceId?.toString(),
+                            throwable = e,
+                            location = "AnimeDetailScreen.fetchAnimeDetails",
+                        )
                     } catch (e: Exception) {
                         errorMessage = "${e::class.simpleName}: ${e.message}"
-                        toastHost.show("Source error: ${e.message}", ToastDuration.LONG)
+                        toastHost.show(
+                            text = "Source error: ${e.message}",
+                            duration = ToastDuration.LONG,
+                            isError = true,
+                            source = sourceId?.toString(),
+                            throwable = e,
+                            location = "AnimeDetailScreen.fetchAnimeDetails",
+                        )
                     }
                 } else {
                     errorMessage = "Source not found — install this anime's extension via the Extensions tab"

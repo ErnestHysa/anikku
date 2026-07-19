@@ -141,10 +141,24 @@ data class SourceBrowseScreen(
             } catch (e: NoClassDefFoundError) {
                 errorMessage = "Missing JVM dependency: ${e.message}. " +
                     "This source needs a JVM-compatible build. Try building from source with: ./gradlew buildKeiyoushiExtension"
-                toastHost.show("Missing dependency for $sourceName", app.anikku.macos.ui.components.ToastDuration.LONG)
+                toastHost.show(
+                    text = "Missing dependency for $sourceName",
+                    duration = app.anikku.macos.ui.components.ToastDuration.LONG,
+                    isError = true,
+                    source = sourceName,
+                    throwable = e,
+                    location = "SourceBrowseScreen.fetchPopular",
+                )
             } catch (e: Exception) {
                 errorMessage = formatError(e)
-                toastHost.show("$sourceName: ${e::class.simpleName} — ${e.message?.take(80)}", app.anikku.macos.ui.components.ToastDuration.LONG)
+                toastHost.show(
+                    text = "$sourceName: ${e::class.simpleName} — ${e.message?.take(80)}",
+                    duration = app.anikku.macos.ui.components.ToastDuration.LONG,
+                    isError = true,
+                    source = sourceName,
+                    throwable = e,
+                    location = "SourceBrowseScreen.fetchPopular",
+                )
             }
         } else if (source != null) {
             errorMessage = "Source does not support catalog browsing (missing CatalogueSource interface)"
@@ -243,20 +257,29 @@ data class SourceBrowseScreen(
             }
             BaseUrlOverrideResult.MISSING_FIELD -> {
                 toastHost.show(
-                    "$sourceName does not support base URL override (field missing)",
-                    app.anikku.macos.ui.components.ToastDuration.LONG,
+                    text = "$sourceName does not support base URL override (field missing)",
+                    duration = app.anikku.macos.ui.components.ToastDuration.LONG,
+                    isError = true,
+                    source = sourceName,
+                    location = "SourceBrowseScreen.applyBaseUrlOverride",
                 )
             }
             BaseUrlOverrideResult.ACCESS_DENIED -> {
                 toastHost.show(
-                    "$sourceName does not support base URL override (access denied)",
-                    app.anikku.macos.ui.components.ToastDuration.LONG,
+                    text = "$sourceName does not support base URL override (access denied)",
+                    duration = app.anikku.macos.ui.components.ToastDuration.LONG,
+                    isError = true,
+                    source = sourceName,
+                    location = "SourceBrowseScreen.applyBaseUrlOverride",
                 )
             }
             BaseUrlOverrideResult.UNKNOWN_ERROR -> {
                 toastHost.show(
-                    "Failed to override base URL for $sourceName",
-                    app.anikku.macos.ui.components.ToastDuration.LONG,
+                    text = "Failed to override base URL for $sourceName",
+                    duration = app.anikku.macos.ui.components.ToastDuration.LONG,
+                    isError = true,
+                    source = sourceName,
+                    location = "SourceBrowseScreen.applyBaseUrlOverride",
                 )
             }
         }
@@ -385,8 +408,15 @@ data class SourceBrowseScreen(
                             isLoading = true
                             val page = source.getPopularAnime(page = 1)
                             animeList = page.animes.map { it.toAnimeModel(sourceId) }
-                        } catch (_: Exception) {
-                            toastHost.show("Failed to reload popular anime", ToastDuration.SHORT)
+                        } catch (e: Exception) {
+                            toastHost.show(
+                                text = "Failed to reload popular anime",
+                                duration = ToastDuration.SHORT,
+                                isError = true,
+                                source = sourceName,
+                                throwable = e,
+                                location = "SourceBrowseScreen.search.clearSearchResults",
+                            )
                         }
                         isLoading = false
                     }
@@ -415,7 +445,14 @@ data class SourceBrowseScreen(
                     UIActionLogger.logExtension(sourceName, "searchResults", "count=${animeList.size}, query=$searchQuery")
                 } catch (e: Exception) {
                     errorMessage = "Search error: ${e.message}"
-                    toastHost.show("Search failed: ${e.message?.take(80)}", ToastDuration.LONG)
+                    toastHost.show(
+                        text = "Search failed: ${e.message?.take(80)}",
+                        duration = ToastDuration.LONG,
+                        isError = true,
+                        source = sourceName,
+                        throwable = e,
+                        location = "SourceBrowseScreen.search",
+                    )
                 }
                 isSearching = false
             }

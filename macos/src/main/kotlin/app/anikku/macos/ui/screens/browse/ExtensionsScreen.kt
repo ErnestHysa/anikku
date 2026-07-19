@@ -105,7 +105,14 @@ data class ExtensionsScreen(
                     // Use force=false so the 1-day rate limit in MacOSExtensionManager is respected
                     extensionManager.findAvailableExtensions(defaultRepoUrl, force = false)
                 } catch (e: Exception) {
-                    toastHost.show("Failed to fetch extensions: ${e.message?.take(60)}", ToastDuration.LONG)
+                    toastHost.show(
+                        text = "Failed to fetch extensions: ${e.message?.take(60)}",
+                        duration = ToastDuration.LONG,
+                        isError = true,
+                        source = defaultRepoUrl,
+                        throwable = e,
+                        location = "ExtensionsScreen.autoFetchAvailableExtensions",
+                    )
                 }
                 hasAutoFetched = true
                 isFetching = false
@@ -259,7 +266,13 @@ data class ExtensionsScreen(
                                                         toastHost.show("Installed ${ext.name}", ToastDuration.SHORT)
                                                     }
                                                     is InstallStep.Error -> {
-                                                        toastHost.show(step.message, ToastDuration.LONG)
+                                                        toastHost.show(
+                                                            text = step.message,
+                                                            duration = ToastDuration.LONG,
+                                                            isError = true,
+                                                            source = ext.pkgName,
+                                                            location = "ExtensionsScreen.installExtension",
+                                                        )
                                                     }
                                                     else -> {} // Installing handled internally
                                                 }

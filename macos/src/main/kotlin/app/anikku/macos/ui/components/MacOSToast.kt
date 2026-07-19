@@ -25,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import app.anikku.macos.platform.logging.TerminalErrorLogger
 import kotlinx.coroutines.delay
 
 /**
@@ -44,6 +45,10 @@ internal data class ToastMessage(
     val id: Long,
     val text: String,
     val duration: ToastDuration,
+    val isError: Boolean = false,
+    val source: String? = null,
+    val throwable: Throwable? = null,
+    val location: String? = null,
 )
 
 /**
@@ -68,15 +73,65 @@ class ToastHostState {
      *
      * If a toast is already visible, it will be replaced by this one
      * (the new toast appears immediately with a fresh animation).
+     *
+     * @param text The message to display.
+     * @param duration How long the toast should remain visible.
+     * @param isError Whether this toast represents an error. When true, the error
+     *        is also logged to the terminal and included in the shutdown summary.
+     * @param source Optional source/extension that caused the error.
+     * @param throwable Optional underlying exception.
+     * @param location Optional code location where the error was reported.
      */
     fun show(
         text: String,
         duration: ToastDuration = ToastDuration.SHORT,
+        isError: Boolean = false,
+        source: String? = null,
+        throwable: Throwable? = null,
+        location: String? = null,
     ) {
+        if (isError) {
+            TerminalErrorLogger.logUiError(
+                message = text,
+                source = source,
+                throwable = throwable,
+                location = location,
+            )
+        }
         currentToast = ToastMessage(
             id = nextId++,
             text = text,
             duration = duration,
+            isError = isError,
+            source = source,
+            throwable = throwable,
+            location = location,
+        )
+    }
+
+    /**
+     * Convenience method for showing an error toast and logging it to the terminal.
+     *
+     * @param text The error message to display.
+     * @param duration How long the toast should remain visible.
+     * @param source Optional source/extension that caused the error.
+     * @param throwable Optional underlying exception.
+     * @param location Optional code location where the error was reported.
+     */
+    fun showError(
+        text: String,
+        duration: ToastDuration = ToastDuration.LONG,
+        source: String? = null,
+        throwable: Throwable? = null,
+        location: String? = null,
+    ) {
+        show(
+            text = text,
+            duration = duration,
+            isError = true,
+            source = source,
+            throwable = throwable,
+            location = location,
         )
     }
 
