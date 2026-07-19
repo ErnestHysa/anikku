@@ -19,6 +19,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -42,6 +43,7 @@ import app.anikku.macos.ui.components.HeadingItem
 import app.anikku.macos.ui.components.LocalToastHost
 import app.anikku.macos.ui.components.SelectItem
 import app.anikku.macos.ui.components.ToastDuration
+import app.anikku.macos.ui.screens.crashlog.CrashLogViewerScreen
 import app.anikku.macos.ui.screens.downloads.DownloadQueueScreen
 import app.anikku.macos.ui.screens.stats.StatsScreen
 import app.anikku.macos.ui.theme.AnikkuTheme
@@ -299,6 +301,21 @@ fun SettingsScreen() {
             title = "Watch Statistics",
             subtitle = "View anime watching stats, genres, and activity",
             onClick = { statsNav.push(StatsScreen()) },
+        )
+
+        HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
+
+        // =====================================================================
+        // Diagnostics
+        // =====================================================================
+        val diagNav = LocalNavigator.currentOrThrow
+        HeadingItem("Diagnostics")
+
+        NavCard(
+            icon = { Icon(Icons.Outlined.Warning, contentDescription = null, modifier = Modifier.size(24.dp)) },
+            title = "Crash & Error Logs",
+            subtitle = "View crash reports and error logs from this session",
+            onClick = { diagNav.push(CrashLogViewerScreen()) },
         )
 
         HorizontalDivider(modifier = Modifier.padding(top = 8.dp))

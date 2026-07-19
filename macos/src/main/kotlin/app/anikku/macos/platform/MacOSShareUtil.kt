@@ -2,13 +2,14 @@ package app.anikku.macos.platform
 
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
+import java.io.File
 
 /**
  * macOS share utilities for the Anikku desktop app.
  *
- * Provides clipboard copying and macOS Notification Center notifications,
- * used as the primary "Share" mechanism on macOS Desktop.
- */
+ * Provides clipboard copying, file sharing via the macOS native Share Menu
+ * (AirDrop, Mail, Messages, Notes, etc.), and macOS Notification Center
+ * notifications.
 object MacOSShareUtil {
 
     /**
@@ -74,5 +75,28 @@ object MacOSShareUtil {
             showMacOSNotification(title, description)
         }
         return copied
+    }
+
+    /**
+     * Opens the macOS native Share Menu for a file.
+     *
+     * This launches the system share sheet (AirDrop, Mail, Messages,
+     * Notes, Reminders, etc.) so the user can export the file directly.
+     *
+     * The file must exist on disk before calling this method.
+     *
+     * @param file The file to share.
+     * @return true if the Share Menu was launched successfully.
+     */
+    fun shareFile(file: File): Boolean {
+        if (!file.exists() || !file.isFile) return false
+        return try {
+            val shareMenu = "/System/Library/CoreServices/ShareMenu.app"
+            ProcessBuilder("open", "-a", shareMenu, file.absolutePath)
+                .start()
+            true
+        } catch (_: Exception) {
+            false
+        }
     }
 }

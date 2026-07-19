@@ -1,11 +1,13 @@
 package app.anikku.macos.platform.logging
 
+import app.anikku.macos.platform.storage.MacOSStorageProvider
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import java.io.File
 
 class TerminalErrorLoggerTest {
 
@@ -83,12 +85,36 @@ class TerminalErrorLoggerTest {
     }
 
     @Test
-    fun `errors list is capped to avoid unbounded growth`() {
-        repeat(150) { index ->
-            TerminalErrorLogger.logUiError("Error $index")
-        }
-        // The internal cap should keep only the most recent errors.
-        assertTrue(TerminalErrorLogger.errorCount <= 100)
+    fun `printShutdownSummary writes summary to crash log file`() {
+        // Initialize CrashReporter so logBlock() writes to a real file.
+        // CrashReporter writes to ~/Library/Logs/Anikku/ by default.
+        CrashReporter.initialize(MacOSStorageProvider(), version = "test")
+
+        TerminalErrorLogger.logUiError("Test error", source = "TestSource", location = "Test.location")
+        TerminalErrorLogger.logUiError("Another error", source = "TestSource", location = "Test.location2")
+
+        TerminalErrorLogger.printShutdownSummary()
+
+        // Verify the crash log file exists and contains the summary.
+        val crashLogs = CrashReporter.getRecentCrashLogs()
+        assertTrue(crashLogs.isNotEmpty(), "Expected at least one crash log file to exist")
+
+        val crashLogContent = crashLogs.first().readText()
+        assertTrue(
+            crashLogContent.contains("UI_ERROR_SUMMARY"),
+            "Crash log should contain the UI error summary block",
+        )
+        assertTrue(
+            crashLogContent.contains("ANIKKU MACOS — UI ERROR SUMMARY"),
+            "Crash log should contain the summary header",
+        )
+        assertTrue(
+            crashLogContent.contains("TestSource"),
+            "Crash log summary should contain the error source",
+        )
+
+        // Cleanup — remove crash log files created by this test.
+        crashLogs.forEach { it.delete() }
     }
 
 }

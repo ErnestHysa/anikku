@@ -163,6 +163,28 @@ object CrashReporter {
     }
 
     /**
+     * Write a multi-line block of text to the crash log file.
+     *
+     * This is useful for writing structured summaries (e.g., the terminal
+     * error logger's shutdown summary) into the crash log so they are
+     * preserved alongside crash reports.
+     *
+     * @param tag A tag identifying the source of the block.
+     * @param text The full multi-line text to write.
+     */
+    fun logBlock(tag: String, text: String) {
+        val logFile = currentLogFile ?: return
+        try {
+            val timestamp = LocalDateTime.now().format(formatter)
+            logFile.appendText("[$timestamp] BLOCK [$tag]:\n")
+            logFile.appendText(text)
+            logFile.appendText("\n")
+        } catch (_: Exception) {
+            // Cannot log to file — safe to ignore
+        }
+    }
+
+    /**
      * Report a handled exception (non-fatal).
      *
      * @param tag A tag identifying the source.

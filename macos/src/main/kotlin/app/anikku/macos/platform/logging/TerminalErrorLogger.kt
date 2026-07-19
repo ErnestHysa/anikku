@@ -123,6 +123,9 @@ object TerminalErrorLogger {
      * Print a formatted shutdown summary of all captured UI errors.
      * This should be called once when the application is closing.
      *
+     * The summary is written to both the terminal (for copy-paste) and
+     * the crash log file (for persistence alongside crash reports).
+     *
      * Repeated errors with the same message and source are grouped together and
      * shown with an occurrence count, so the summary stays readable even when the
      * same failure happens many times.
@@ -160,7 +163,13 @@ object TerminalErrorLogger {
             }
         }
 
-        println(header + body + footer)
+        val terminalOutput = header + body + footer
+        println(terminalOutput)
+
+        // Also persist the summary in the crash log file so it survives
+        // terminal closure and can be reviewed alongside crash reports.
+        CrashReporter.logBlock("UI_ERROR_SUMMARY", terminalOutput)
+
         logger.info { "UI error shutdown summary printed (count=${snapshot.size})" }
     }
 
