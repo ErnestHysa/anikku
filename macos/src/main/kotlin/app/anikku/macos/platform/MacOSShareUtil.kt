@@ -10,6 +10,7 @@ import java.io.File
  * Provides clipboard copying, file sharing via the macOS native Share Menu
  * (AirDrop, Mail, Messages, Notes, etc.), and macOS Notification Center
  * notifications.
+ */
 object MacOSShareUtil {
 
     /**

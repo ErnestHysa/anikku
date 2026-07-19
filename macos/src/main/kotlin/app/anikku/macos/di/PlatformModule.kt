@@ -13,6 +13,8 @@ import app.anikku.macos.platform.network.HttpRetryInterceptor
 import app.anikku.macos.platform.network.MacOSCookieJar
 import app.anikku.macos.platform.network.FallbackDns
 import app.anikku.macos.platform.network.MacOSNetworkHelper
+import app.anikku.macos.platform.network.UserAgentInterceptor
+import okhttp3.brotli.BrotliInterceptor
 import app.anikku.macos.platform.notification.MacOSNotificationManager
 import app.anikku.macos.platform.preference.MacOSPreferenceStore
 import app.anikku.macos.platform.security.MacOSBiometricAuth
@@ -81,6 +83,11 @@ fun platformModule(app: AnikkuApplication) = module {
             cookieJar = app.cookieJar,
             dns = FallbackDns,
             extraInterceptors = listOf(
+                // UserAgentInterceptor ensures a Chrome-like User-Agent on every
+                // request so Cloudflare sees a real browser, reducing challenge rates.
+                UserAgentInterceptor {
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
+                },
                 // HttpRetryInterceptor handles transient errors (502, 503, 504, 429)
                 // with exponential backoff. It runs BEFORE other interceptors so retries
                 // also go through Cloudflare bypass and diagnostic logging.
@@ -93,6 +100,10 @@ fun platformModule(app: AnikkuApplication) = module {
                 // DiagnosticLoggingInterceptor logs error responses (non-2xx) with
                 // full request/response details for debugging extension API errors.
                 DiagnosticLoggingInterceptor(isDebugBuild = false),
+                // BrotliInterceptor decompresses brotli-encoded responses.
+                // Cloudflare often uses br encoding — without this, responses
+                // appear as garbage bytes and parsing fails.
+                BrotliInterceptor,
             ),
         )
     }

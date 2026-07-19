@@ -379,5 +379,21 @@ object ChromeCDPClient {
         "cf_chl_3",
         "cf_chl_rc_ni",
         "cf_chl_rc_m",
+        "cf_chl_seq",                    // Cloudflare challenge sequence
+        "cf_chl_prog",                   // Cloudflare challenge progress
+        "cf_chl_cc",                     // Cloudflare challenge captcha
+        "cf_ob_info",                    // Cloudflare observability
+        "cf_use_ob",                     // Cloudflare observability flag
+        "__cflb",                        // Cloudflare load balancer
+        "__cfruid",                      // Cloudflare rate-limiting UID
+        "__cfwaitingroom",               // Cloudflare Waiting Room
+        // Non-Cloudflare WAF cookies (Chrome CDP can solve these too)
+        "dd_testcookie",                 // DataDome test
+        "ak_bmsc",                       // Akamai bot manager
+        "bm_sz",                         // Akamai bot manager session
+        "_abck",                         // Akamai sensor data
+        "reese84",                       // Imperva/Incapsula
+        "incap_ses",                     // Imperva session
+        "visid_incap",                   // Imperva visitor ID
     )
 }

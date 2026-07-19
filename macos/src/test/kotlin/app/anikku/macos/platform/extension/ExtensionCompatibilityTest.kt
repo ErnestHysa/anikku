@@ -18,6 +18,13 @@ import org.junit.jupiter.api.TestInstance
 import org.junit.jupiter.api.Timeout
 import org.koin.core.context.stopKoin
 import java.util.concurrent.TimeUnit
+import app.anikku.macos.platform.network.CloudflareInterceptor
+import app.anikku.macos.platform.network.DiagnosticLoggingInterceptor
+import app.anikku.macos.platform.network.HttpRetryInterceptor
+import app.anikku.macos.platform.network.MacOSCookieJar
+import app.anikku.macos.platform.network.FallbackDns
+import app.anikku.macos.platform.network.UserAgentInterceptor
+import okhttp3.brotli.BrotliInterceptor
 import org.koin.core.context.startKoin
 import org.koin.dsl.module
 import tachiyomi.core.common.preference.PreferenceStore
@@ -104,6 +111,14 @@ class ExtensionCompatibilityTest {
         try { stopKoin() } catch (_: Throwable) {}
         val testPrefsFile = File.createTempFile("anikku-test-prefs", ".json")
         testPrefsFile.deleteOnExit()
+
+        // Temp cookie file — shared cookie store between OkHttp and CloudflareInterceptor.
+        // This is how headless Chrome extracts cf_clearance cookies and injects them
+        // into the OkHttp client for subsequent extension requests.
+        val cookieFile = File.createTempFile("anikku-test-cookies", ".json")
+        cookieFile.deleteOnExit()
+        val cookieJar = MacOSCookieJar(cookieFile)
+
         startKoin {
             modules(module {
                 single<Json> { Json { ignoreUnknownKeys = true } }
@@ -112,10 +127,32 @@ class ExtensionCompatibilityTest {
                 single<PreferenceStore> {
                     app.anikku.macos.platform.preference.MacOSPreferenceStore(testPrefsFile)
                 }
+                // Full Cloudflare bypass pipeline — matches the production
+                // NetworkHelper in PlatformModule.kt. This ensures extension
+                // HTTP requests get:
+                //   - Chrome-like User-Agent (reduces challenge rate)
+                //   - HTTP retry with exponential backoff (3 retries)
+                //   - Cloudflare bypass via headless Chrome (solves JS challenges)
+                //   - Diagnostic logging (non-2xx responses)
+                //   - Brotli decompression (brotli-encoded responses)
+                //   - DNS-over-HTTPS fallback (when system DNS fails)
                 single {
                     eu.kanade.tachiyomi.network.NetworkHelper(
                         preferences = eu.kanade.tachiyomi.network.NetworkPreferences(get<PreferenceStore>()),
-                        isDebugBuild = false,
+                        isDebugBuild = true,
+                        cookieJar = cookieJar,
+                        dns = FallbackDns,
+                        extraInterceptors = listOf(
+                            UserAgentInterceptor {
+                                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
+                            },
+                            HttpRetryInterceptor(maxRetries = 3, baseDelayMs = 1000),
+                            CloudflareInterceptor(cookieJar) {
+                                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
+                            },
+                            DiagnosticLoggingInterceptor(isDebugBuild = true),
+                            BrotliInterceptor,
+                        ),
                     )
                 }
                 single { exh.pref.DelegateSourcePreferences(get<PreferenceStore>()) }
@@ -124,6 +161,9 @@ class ExtensionCompatibilityTest {
 
         // Install lenient SSL for extension requests
         app.anikku.macos.platform.network.InsecureSSLHelper.install()
+
+        println("  🌐 Cloudflare bypass: ${if (app.anikku.macos.platform.network.ChromeCDPClient.isChromeInstalled) "✅ Chrome detected" else "⚠ Chrome not found — bypass disabled"}")
+        println()
     }
 
     @AfterAll

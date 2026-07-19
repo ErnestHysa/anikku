@@ -96,9 +96,13 @@ class CloudflareInterceptor(
             if (response.header("cf-ray") != null) return true
         }
 
-        // Slow path for HTTP 400/429: peek body for Cloudflare challenge patterns.
+        // Check for non-Cloudflare WAFs (DataDome, Akamai, Imperva) via response headers.
+        // These WAFs use different blocking mechanisms but Chrome CDP can bypass them too.
+        if (isNonCloudflareWaf(response)) return true
+
+        // Slow path for HTTP 400/429/406: peek body for challenge patterns.
         // Some sites (e.g. AllAnime) return HTTP 400 for Cloudflare blocks instead
-        // of the typical 403/503.
+        // of the typical 403/503. Some return 406 (Not Acceptable) with CF challenge.
         if (response.code !in CLOUDFLARE_CODES && response.code !in CLOUDFLARE_EXTENDED_CODES) {
             return false
         }
@@ -115,13 +119,40 @@ class CloudflareInterceptor(
                 bodyPeek.contains("Attention Required!") ||
                 bodyPeek.contains("cloudflareinsights.com") ||
                 bodyPeek.contains("__cf_chl") ||
+                bodyPeek.contains("turnstile") ||                     // Cloudflare Turnstile
+                bodyPeek.contains("challenges.cloudflare.com") ||    // Turnstile domain
                 (bodyPeek.contains("jschl") && bodyPeek.contains("cf-")) ||
                 // AllAnime-specific: error body with Cloudflare-related patterns
                 (response.code == 400 && bodyPeek.contains("<html", ignoreCase = true) &&
-                    (bodyPeek.contains("cloudflare") || bodyPeek.contains("cf-")))
+                    (bodyPeek.contains("cloudflare") || bodyPeek.contains("cf-"))) ||
+                // DataDome WAF: sets dd-checksum cookies
+                bodyPeek.contains("datadome") || bodyPeek.contains("geo.captcha-delivery.com") ||
+                // Akamai/Imperva WAF patterns
+                bodyPeek.contains("akamai") || bodyPeek.contains("imperva") ||
+                bodyPeek.contains("_abck") || bodyPeek.contains("bm_sz")
         } catch (_: Exception) {
             false
         }
+    }
+
+    /**
+     * Detect non-Cloudflare WAFs via response headers.
+     * These WAFs set distinctive headers that signal a bot challenge.
+     * Chrome CDP can solve them the same way it solves Cloudflare.
+     */
+    private fun isNonCloudflareWaf(response: Response): Boolean {
+        // DataDome: sets X-DataDome header with blocked/challenge status
+        val dd = response.header("X-DataDome") ?: response.header("x-datadome")
+        if (dd != null) return true
+
+        // Akamai: sets X-Akamai-Edge or X-Akamai-Request-ID on challenges
+        if (response.header("X-Akamai-Edge") != null && response.code in CLOUDFLARE_CODES) return true
+
+        // Imperva/Incapsula: sets X-Iinfo or X-CDN headers on challenges
+        val imperva = response.header("X-Iinfo") ?: response.header("x-iinfo")
+        if (imperva != null && response.code in CLOUDFLARE_CODES) return true
+
+        return false
     }
 
     private fun injectCookies(host: String, cookies: Map<String, String>) {
@@ -152,7 +183,7 @@ class CloudflareInterceptor(
     companion object {
         private const val X_CF_BYPASS = "X-CF-Bypass-Attempted"
         private val CLOUDFLARE_CODES = setOf(403, 503)
-        private val CLOUDFLARE_EXTENDED_CODES = setOf(400, 429)
+        private val CLOUDFLARE_EXTENDED_CODES = setOf(400, 406, 429)
         private val CLOUDFLARE_SERVERS = setOf("cloudflare-nginx", "cloudflare")
     }
 }
