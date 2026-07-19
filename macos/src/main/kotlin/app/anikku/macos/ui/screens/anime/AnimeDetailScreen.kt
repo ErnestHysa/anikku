@@ -94,6 +94,7 @@ import app.anikku.macos.ui.screens.models.EpisodeModel
 import app.anikku.macos.ui.screens.models.toAnimeModel
 import app.anikku.macos.ui.screens.models.toEpisodeModel
 import app.anikku.macos.ui.screens.player.PlayerScreen
+import app.anikku.macos.ui.screens.tracker.TrackerSearchScreen
 import cafe.adriel.voyager.core.screen.ScreenKey
 import cafe.adriel.voyager.core.screen.uniqueScreenKey
 import cafe.adriel.voyager.navigator.LocalNavigator
@@ -426,7 +427,14 @@ data class AnimeDetailScreen(
                                 )
                             )
                         },
-                        onDownloadEpisode = { episode ->
+                        onLinkToTracker = {
+                                navigator.push(
+                                    TrackerSearchScreen(
+                                        animeTitle = anime?.title ?: animeTitle ?: "",
+                                    )
+                                )
+                            },
+                            onDownloadEpisode = { episode ->
                             val dm = effectiveDownloadManager
                             if (dm != null && sourceId != null) {
                                 val isAlready = downloadStateMap[episode.episodeNumber] == true
@@ -466,6 +474,7 @@ private fun AnimeDetailContent(
     onShare: () -> Unit,
     onCopyUrl: () -> Unit,
     onOpenInBrowser: () -> Unit,
+    onLinkToTracker: () -> Unit = {},
     onBack: () -> Unit,
     onMarkAllSeen: () -> Unit = {},
     onPlayEpisode: (EpisodeModel) -> Unit,
@@ -570,6 +579,7 @@ private fun AnimeDetailContent(
                     onShare = onShare,
                     onCopyUrl = onCopyUrl,
                     onOpenInBrowser = onOpenInBrowser,
+                    onLinkToTracker = onLinkToTracker,
                 )
             }
 
@@ -634,6 +644,7 @@ private fun AnimeInfoHeader(
     onShare: () -> Unit = {},
     onCopyUrl: () -> Unit = {},
     onOpenInBrowser: () -> Unit = {},
+    onLinkToTracker: () -> Unit = {},
 ) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(16.dp),
@@ -713,6 +724,13 @@ private fun AnimeInfoHeader(
                 Icon(Icons.Outlined.OpenInBrowser, contentDescription = null)
                 Spacer(Modifier.width(4.dp))
                 Text("Open in Browser")
+            }
+
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = onLinkToTracker, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(8.dp)) {
+                Text("🔗", style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.width(4.dp))
+                Text("Link to Tracker")
             }
         }
     }
