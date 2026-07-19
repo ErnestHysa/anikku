@@ -19,28 +19,6 @@ private val logger = KotlinLogging.logger {}
 
 /**
  * High-level manager for tracker authentication and token lifecycle.
- *
- * Orchestrates the full OAuth flow:
- * 1. Opens system browser for authorization
- * 2. Starts local callback server
- * 3. Exchanges authorization code for tokens
- * 4. Persists tokens via [TrackerTokenStore]
- * 5. Validates/refreshes tokens on app start
- *
- * ## Usage
- *
- * ```kotlin
- * val manager = TrackerManager(networkHelper.client, preferenceStore)
- *
- * // Get login status
- * val statuses = manager.getLoginStatuses()
- *
- * // Login to MyAnimeList
- * manager.login("myanimelist", "client_id", "client_secret")
- *
- * // Logout
- * manager.logout("myanimelist")
- * ```
  */
 class TrackerManager(
     private val oauthManager: TrackerOAuthManager,
@@ -49,30 +27,14 @@ class TrackerManager(
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
 ) {
 
-    /** Observable login status for all trackers. */
     private val _loginStatuses = MutableStateFlow(tokenStore.getAllStatuses())
     val loginStatuses: StateFlow<List<TrackerTokenStore.TrackerLoginStatus>> =
         _loginStatuses.asStateFlow()
 
-    // -----------------------------------------------------------------------
-    // Public API
-    // -----------------------------------------------------------------------
-
-    /**
-     * Refresh the login status from stored tokens.
-     */
     fun refreshStatus() {
         _loginStatuses.value = tokenStore.getAllStatuses()
     }
 
-    /**
-     * Perform the full OAuth login flow for a tracker.
-     *
-     * @param tracker The tracker name (e.g., "myanimelist", "anilist").
-     * @param clientId OAuth client ID.
-     * @param clientSecret OAuth client secret.
-     * @param onResult Called on the main thread with the result message.
-     */
     fun login(
         tracker: String,
         clientId: String,
@@ -87,16 +49,14 @@ class TrackerManager(
                     clientId = clientId,
                     clientSecret = clientSecret,
                 )
-
                 if (token != null) {
-                    // Validate and get username
                     val username = lookupUsername(tracker, token.accessToken)
                     tokenStore.saveTokensWithUsername(tracker, token, username ?: tracker)
                     refreshStatus()
                     logger.info { "OAuth login successful for $tracker (user: $username)" }
                     onResult(true, "Logged in to $tracker${if (username != null) " as $username" else ""}")
                 } else {
-                    logger.warn { "OAuth login failed for $tracker — no token returned" }
+                    logger.warn { "OAuth login failed for $tracker -- no token returned" }
                     onResult(false, "Authentication failed or timed out")
                 }
             } catch (e: Exception) {
@@ -106,38 +66,17 @@ class TrackerManager(
         }
     }
 
-    /**
-     * Logout from a tracker by removing stored tokens.
-     */
     fun logout(tracker: String) {
         tokenStore.removeTokens(tracker)
         refreshStatus()
     }
 
-    /**
-     * Check if the user is logged in to a tracker.
-     */
     fun isLoggedIn(tracker: String): Boolean = tokenStore.isLoggedIn(tracker)
 
-    /**
-     * Get the username for a logged-in tracker.
-     */
     fun getUsername(tracker: String): String? = tokenStore.getUsername(tracker)
 
-    /**
-     * Search a tracker for an anime by title.
-     *
-     * **Note:** This method performs synchronous network I/O. Call it from a
-     * background thread (e.g., inside [scrobbleProgress]) to avoid blocking
-     * the UI.
-     *
-     * @param tracker The tracker name (e.g., "myanimelist", "anilist").
-     * @param query The anime title to search for.
-     * @return A list of search results, or an empty list if not logged in or on error.
-     */
     fun searchAnime(tracker: String, query: String): List<TrackerSearchResult> {
         val token = tokenStore.getTokens(tracker)?.accessToken ?: return emptyList()
-
         return try {
             when (tracker) {
                 "myanimelist" -> searchMyAnimeList(token, query)
@@ -150,19 +89,6 @@ class TrackerManager(
         }
     }
 
-    /**
-     * Update the watched progress for a specific anime on a tracker.
-     *
-     * **Note:** This method performs synchronous network I/O. Call it from a
-     * background thread (e.g., inside [scrobbleProgress]) to avoid blocking
-     * the UI.
-     *
-     * @param tracker The tracker name (e.g., "myanimelist", "anilist").
-     * @param remoteAnimeId The tracker's anime ID.
-     * @param episodeNumber The number of episodes watched.
-     * @param status Optional status override (e.g., "watching", "completed").
-     * @return true if the update was accepted by the API.
-     */
     fun updateProgress(
         tracker: String,
         remoteAnimeId: String,
@@ -170,7 +96,6 @@ class TrackerManager(
         status: String? = null,
     ): Boolean {
         val token = tokenStore.getTokens(tracker)?.accessToken ?: return false
-
         return try {
             when (tracker) {
                 "myanimelist" -> updateMyAnimeList(token, remoteAnimeId, episodeNumber, status)
@@ -183,19 +108,6 @@ class TrackerManager(
         }
     }
 
-    /**
-     * Scrobble progress for an anime across all logged-in trackers.
-     * Searches for the anime by title and updates the progress to [episodeNumber].
-     *
-     * **Note:** This method performs synchronous network I/O. Call it from a
-     * background thread (e.g., via `scope.launch { ... }`) to avoid blocking
-     * the UI.
-     *
-     * @param animeTitle The anime title to search for.
-     * @param episodeNumber The episode number to report.
-     * @return A [ScrobbleResult] listing trackers that succeeded, failed, or
-     *         could not find a matching anime.
-     */
     fun scrobbleProgress(animeTitle: String, episodeNumber: Int): ScrobbleResult {
         if (animeTitle.isBlank()) return ScrobbleResult()
 
@@ -207,17 +119,27 @@ class TrackerManager(
             .filter { it.isLoggedIn }
             .forEach { status ->
                 try {
-                    val results = searchAnime(status.tracker, animeTitle)
-                    val bestMatch = results.firstOrNull()
-                    if (bestMatch == null) {
-                        notFound.add(status.tracker)
-                        logger.info { "No ${status.tracker} match for \"$animeTitle\"" }
-                        return@forEach
+                    val manualId = tokenStore.getAnimeMapping(status.tracker, animeTitle)
+                    val matchId: String
+
+                    if (manualId != null) {
+                        matchId = manualId
+                        logger.info { "Using manual mapping for \"$animeTitle\" on ${status.tracker} -> id=$matchId" }
+                    } else {
+                        val results = searchAnime(status.tracker, animeTitle)
+                        val bestMatch = results.firstOrNull()
+                        if (bestMatch == null) {
+                            notFound.add(status.tracker)
+                            logger.info { "No ${status.tracker} match for \"$animeTitle\"" }
+                            return@forEach
+                        }
+                        matchId = bestMatch.id
                     }
-                    val updated = updateProgress(status.tracker, bestMatch.id, episodeNumber)
+
+                    val updated = updateProgress(status.tracker, matchId, episodeNumber)
                     if (updated) {
                         successes.add(status.tracker)
-                        logger.info { "Scrobbled \"$animeTitle\" ep $episodeNumber to ${status.tracker} (id=${bestMatch.id})" }
+                        logger.info { "Scrobbled \"$animeTitle\" ep $episodeNumber to ${status.tracker} (id=$matchId)" }
                     } else {
                         failures.add(status.tracker)
                         logger.warn { "Tracker ${status.tracker} rejected progress update for \"$animeTitle\"" }
@@ -231,9 +153,17 @@ class TrackerManager(
         return ScrobbleResult(successes, failures, notFound)
     }
 
-    // -----------------------------------------------------------------------
-    // Internal tracker implementations
-    // -----------------------------------------------------------------------
+    fun setAnimeMapping(animeTitle: String, tracker: String, trackerAnimeId: String) {
+        tokenStore.saveAnimeMapping(tracker, animeTitle, trackerAnimeId)
+        logger.info { "Manual mapping: \"${animeTitle.take(40)}\" on $tracker -> $trackerAnimeId" }
+    }
+
+    fun clearAnimeMapping(animeTitle: String, tracker: String) {
+        tokenStore.removeAnimeMapping(tracker, animeTitle)
+        logger.info { "Manual mapping cleared for \"${animeTitle.take(40)}\" on $tracker" }
+    }
+
+    // -- Internal tracker implementations ----------------------------------
 
     private fun searchMyAnimeList(token: String, query: String): List<TrackerSearchResult> {
         val url = okhttp3.HttpUrl.Builder()
@@ -253,7 +183,10 @@ class TrackerManager(
         val response = httpClient.newCall(request).execute()
         if (!response.isSuccessful) return emptyList()
 
-        val data = JSONObject(response.body?.string() ?: "").optJSONArray("data") ?: return emptyList()
+        val bodyStr = response.body?.string() ?: ""
+        response.close()
+
+        val data = JSONObject(bodyStr).optJSONArray("data") ?: return emptyList()
         return (0 until data.length()).map { i ->
             val node = data.getJSONObject(i).getJSONObject("node")
             TrackerSearchResult(
@@ -266,8 +199,9 @@ class TrackerManager(
 
     private fun searchAniList(token: String, query: String): List<TrackerSearchResult> {
         val escapedQuery = JSONObject.quote(query)
+        val dollar = '$'
         val gql = """
-            {"query":"query Search(${'$'}q: String) { Page(perPage: 5) { media(search: ${'$'}q, type: ANIME) { id title { romaji english } coverImage { medium } } } }","variables":{"q":$escapedQuery}}
+            {"query":"query Search(${dollar}q: String) { Page(perPage: 5) { media(search: ${dollar}q, type: ANIME) { id title { romaji english } coverImage { medium } } } }","variables":{"q":$escapedQuery}}
         """.trimIndent()
 
         val request = okhttp3.Request.Builder()
@@ -279,7 +213,10 @@ class TrackerManager(
         val response = httpClient.newCall(request).execute()
         if (!response.isSuccessful) return emptyList()
 
-        val media = JSONObject(response.body?.string() ?: "")
+        val bodyStr = response.body?.string() ?: ""
+        response.close()
+
+        val media = JSONObject(bodyStr)
             .optJSONObject("data")
             ?.optJSONObject("Page")
             ?.optJSONArray("media") ?: return emptyList()
@@ -334,15 +271,17 @@ class TrackerManager(
             else -> null
         }
 
+        val mediaId = remoteAnimeId.toIntOrNull() ?: return false
         val variables = JSONObject().apply {
-            put("mediaId", remoteAnimeId.toIntOrNull() ?: return false)
+            put("mediaId", mediaId)
             put("progress", episodeNumber.coerceAtLeast(0))
             if (alStatus != null) put("status", alStatus)
         }
 
-        val statusDeclaration = if (alStatus != null) ", ${'$'}status: MediaListStatus" else ""
-        val statusArgument = if (alStatus != null) ", status: ${'$'}status" else ""
-        val query = "mutation Save(${'$'}mediaId: Int, ${'$'}progress: Int$statusDeclaration) { SaveMediaListEntry(mediaId: ${'$'}mediaId, progress: ${'$'}progress$statusArgument) { id progress } }"
+        val dollar = '$'
+        val statusDeclaration = if (alStatus != null) ", ${dollar}status: MediaListStatus" else ""
+        val statusArgument = if (alStatus != null) ", status: ${dollar}status" else ""
+        val query = "mutation Save(${dollar}mediaId: Int, ${dollar}progress: Int$statusDeclaration) { SaveMediaListEntry(mediaId: ${dollar}mediaId, progress: ${dollar}progress$statusArgument) { id progress } }"
 
         val payload = JSONObject().apply {
             put("query", query)
@@ -360,10 +299,6 @@ class TrackerManager(
         return response.isSuccessful
     }
 
-    /**
-     * Validate and optionally refresh tokens for all trackers.
-     * Called on app startup.
-     */
     fun validateAllTokens() {
         tokenStore.getAllStatuses().filter { it.isLoggedIn }.forEach { status ->
             val stored = tokenStore.getTokens(status.tracker) ?: return@forEach
@@ -372,8 +307,8 @@ class TrackerManager(
                 if (!isValid && stored.refreshToken.isNotEmpty()) {
                     scope.launch {
                         try {
-                            val clientId = "" // Would need stored client ID
-                            val clientSecret = "" // Would need stored client secret
+                            val clientId = ""
+                            val clientSecret = ""
                             val refreshed = oauthManager.refreshToken(
                                 tracker = status.tracker,
                                 refreshToken = stored.refreshToken,
@@ -396,13 +331,6 @@ class TrackerManager(
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Internal
-    // -----------------------------------------------------------------------
-
-    /**
-     * Look up the username for a tracker using a valid access token.
-     */
     private fun lookupUsername(tracker: String, accessToken: String): String? {
         return try {
             when (tracker) {
@@ -414,11 +342,15 @@ class TrackerManager(
                     val response = httpClient.newCall(request).execute()
                     if (response.isSuccessful) {
                         val body = response.body?.string() ?: return null
+                        response.close()
                         JSONObject(body).optString("name")
-                    } else null
+                    } else {
+                        response.close()
+                        null
+                    }
                 }
                 "anilist" -> {
-                    val query = "{\"query\":\"query { Viewer { name } }\"}"
+                    val query = """{"query":"query { Viewer { name } }"}"""
                     val request = okhttp3.Request.Builder()
                         .url("https://graphql.anilist.co")
                         .header("Authorization", "Bearer $accessToken")
@@ -427,11 +359,15 @@ class TrackerManager(
                     val response = httpClient.newCall(request).execute()
                     if (response.isSuccessful) {
                         val body = response.body?.string() ?: return null
+                        response.close()
                         JSONObject(body)
                             .optJSONObject("data")
                             ?.optJSONObject("Viewer")
                             ?.optString("name")
-                    } else null
+                    } else {
+                        response.close()
+                        null
+                    }
                 }
                 else -> null
             }
@@ -462,13 +398,8 @@ data class ScrobbleResult(
     val isEmpty: Boolean
         get() = successes.isEmpty() && failures.isEmpty() && notFound.isEmpty()
 
-    /**
-     * Format a user-facing toast message from this result, or null if there
-     * is nothing to report.
-     */
     fun toToastMessage(): String? {
         if (isEmpty) return null
-
         val parts = mutableListOf<String>()
         if (successes.isNotEmpty()) {
             parts.add("Scrobbled to ${successes.joinToString()}")
@@ -479,19 +410,8 @@ data class ScrobbleResult(
         if (notFound.isNotEmpty()) {
             parts.add("no match: ${notFound.joinToString()}")
         }
-
         return parts.joinToString("; ")
     }
 }
 
-/**
- * CompositionLocal for [TrackerManager] — used in SettingsScreen
- * to provide tracker login/logout functionality.
- *
- * Must be provided via [CompositionLocalProvider] in AnikkuApp.kt:
- * ```kotlin
- * val trackerManager = TrackerManager(oauthManager, tokenStore, httpClient)
- * CompositionLocalProvider(LocalTrackerManager provides trackerManager) { ... }
- * ```
- */
 val LocalTrackerManager = compositionLocalOf<TrackerManager?> { null }

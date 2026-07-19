@@ -237,13 +237,12 @@ private fun InfoStep(number: String, text: String) {
 /**
  * Color mapping for tracker brand identities.
  */
-@Composable
 internal fun trackerBrandColor(tracker: String): Color = when (tracker) {
     "myanimelist" -> Color(0xFF2E51A2) // MAL blue
     "anilist" -> Color(0xFF02A9FF)     // AniList light blue
     "kitsu" -> Color(0xFFE53E3E)       // Kitsu red
     "shikimori" -> Color(0xFF4A90D9)   // Shikimori blue
-    else -> MaterialTheme.colorScheme.primary
+    else -> Color(0xFF6750A4)           // Default purple
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

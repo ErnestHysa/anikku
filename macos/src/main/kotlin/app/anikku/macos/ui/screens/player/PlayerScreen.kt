@@ -25,6 +25,7 @@ import androidx.compose.material.icons.outlined.CameraAlt
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -78,6 +79,7 @@ import app.anikku.macos.ui.components.VideoQualityBadge
 import app.anikku.macos.ui.components.ToastDuration
 import app.anikku.macos.ui.screens.models.EpisodeModel
 import app.anikku.macos.ui.screens.models.toEpisodeModel
+import app.anikku.macos.ui.screens.tracker.TrackerSearchScreen
 import cafe.adriel.voyager.core.screen.ScreenKey
 import cafe.adriel.voyager.core.screen.uniqueScreenKey
 import cafe.adriel.voyager.navigator.LocalNavigator
@@ -985,6 +987,13 @@ data class PlayerScreen(
             hasNextQuality = lastAttemptedIndex >= 0 && lastAttemptedIndex + 1 < videoCandidates.size,
             nextQualityLabel = videoCandidates.getOrNull(lastAttemptedIndex + 1)
                 ?.label?.takeIf { it.isNotBlank() } ?: "next quality",
+            onLinkToTracker = {
+                navigator.push(
+                    TrackerSearchScreen(
+                        animeTitle = animeTitle,
+                    )
+                )
+            },
             onNavigateEpisode = { index ->
                 if (index in allEpisodes.indices) {
                     // Save resume position for current episode before switching
@@ -1090,6 +1099,7 @@ private fun PlayerContent(
     hasNextQuality: Boolean = false,
     nextQualityLabel: String? = null,
     isAutoRetrying: Boolean = false,
+    onLinkToTracker: () -> Unit = {},
     onBack: () -> Unit,
     onRetry: () -> Unit = {},
     onRetryNext: () -> Unit = {},
@@ -1426,6 +1436,33 @@ private fun PlayerContent(
                             color = Color.White.copy(alpha = 0.25f),
                         )
                     }
+
+                    // Link to Tracker button
+                    Spacer(Modifier.height(16.dp))
+                    Surface(
+                        onClick = onLinkToTracker,
+                        shape = MaterialTheme.shapes.small,
+                        color = Color(0xFF02A9FF).copy(alpha = 0.15f),
+                        tonalElevation = 0.dp,
+                        modifier = Modifier.height(36.dp),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(start = 16.dp, end = 16.dp),
+                        ) {
+                            Text(
+                                "🔗",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                "Link Anime to Tracker",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFF02A9FF),
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -1609,6 +1646,11 @@ private fun PlayerContent(
                             DropdownMenuItem(text = { Text("Equalizer") }, onClick = { showSettingsMenu = false; showEqualizerPanel = true })
                             DropdownMenuItem(text = { Text("Aspect Ratio") }, onClick = { showSettingsMenu = false; showAspectRatioPanel = true })
                             DropdownMenuItem(text = { Text("Video Filters") }, onClick = { showSettingsMenu = false; showVideoFilterPanel = true })
+                            HorizontalDivider(modifier = Modifier.padding(horizontal = 8.dp))
+                            DropdownMenuItem(
+                                text = { Text("🔗  Link to Tracker", fontWeight = FontWeight.Medium) },
+                                onClick = { showSettingsMenu = false; onLinkToTracker() },
+                            )
                         }
                     }
                     if (isMPVAvailable) {
