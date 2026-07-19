@@ -155,7 +155,13 @@ class TrackerListScreen : AnikkuScreen() {
                         },
                         onLogin = {
                             if (trackerManager == null) {
-                                toastHost.show("Tracker manager not available", ToastDuration.SHORT)
+                                toastHost.show(
+                                    text = "Tracker manager not available",
+                                    duration = ToastDuration.SHORT,
+                                    isError = true,
+                                    source = status.tracker,
+                                    location = "TrackerListScreen.onLogin",
+                                )
                                 return@TrackerListItem
                             }
                             toastHost.show("Opening login screen for ${status.displayName}...", ToastDuration.LONG)

@@ -141,7 +141,13 @@ data class TrackerSearchScreen(
                                 return@Button
                             }
                             if (trackerManager == null) {
-                                toastHost.show("Tracker manager not available", ToastDuration.SHORT)
+                                toastHost.show(
+                                    text = "Tracker manager not available",
+                                    duration = ToastDuration.SHORT,
+                                    isError = true,
+                                    source = "tracker",
+                                    location = "TrackerSearchScreen.search",
+                                )
                                 return@Button
                             }
                             isSearching = true

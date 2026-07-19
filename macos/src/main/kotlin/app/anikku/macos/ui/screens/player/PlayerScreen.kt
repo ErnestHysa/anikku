@@ -766,7 +766,13 @@ data class PlayerScreen(
                         result.toToastMessage()?.let { message ->
                             withContext(Dispatchers.Main) {
                                 val duration = if (result.failures.isNotEmpty()) ToastDuration.LONG else ToastDuration.SHORT
-                                toastHost.show(message, duration)
+                                toastHost.show(
+                                    text = message,
+                                    duration = duration,
+                                    isError = result.failures.isNotEmpty(),
+                                    source = sourceId?.toString(),
+                                    location = "PlayerScreen.scrobbleProgress",
+                                )
                             }
                         }
                     }
@@ -865,7 +871,13 @@ data class PlayerScreen(
                     },
                     onError = { msg ->
                         videoResolutionError = msg
-                        toastHost.show(msg, ToastDuration.LONG)
+                        toastHost.show(
+                            text = msg,
+                            duration = ToastDuration.LONG,
+                            isError = true,
+                            source = sourceId?.toString(),
+                            location = "PlayerScreen.resolveAndPlay",
+                        )
                     },
                     onDiagnostic = { diag ->
                         videoErrorDiagnostic = diag
@@ -1079,7 +1091,13 @@ data class PlayerScreen(
                 if (result != null) {
                     toastHost.show("Screenshot captured", ToastDuration.SHORT)
                 } else {
-                    toastHost.show("Screenshot failed", ToastDuration.SHORT)
+                    toastHost.show(
+                        text = "Screenshot failed",
+                        duration = ToastDuration.SHORT,
+                        isError = true,
+                        source = sourceId?.toString(),
+                        location = "PlayerScreen.takeScreenshot",
+                    )
                 }
             },
         )

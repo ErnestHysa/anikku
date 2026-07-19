@@ -333,8 +333,11 @@ data class TrackerDetailScreen(
                                                             _loginState.value = LoginState.ERROR
                                                             _errorMessage.value = message
                                                             toastHost.show(
-                                                                "$displayName: $message",
-                                                                ToastDuration.LONG,
+                                                                text = "$displayName: $message",
+                                                                duration = ToastDuration.LONG,
+                                                                isError = true,
+                                                                source = tracker,
+                                                                location = "TrackerDetailScreen.login.connect",
                                                             )
                                                         }
                                                     }
@@ -428,8 +431,11 @@ data class TrackerDetailScreen(
                                                                 _loginState.value = LoginState.ERROR
                                                                 _errorMessage.value = message
                                                                 toastHost.show(
-                                                                    "$displayName: $message",
-                                                                    ToastDuration.LONG,
+                                                                    text = "$displayName: $message",
+                                                                    duration = ToastDuration.LONG,
+                                                                    isError = true,
+                                                                    source = tracker,
+                                                                    location = "TrackerDetailScreen.login.saveAndConnect",
                                                                 )
                                                             }
                                                         }

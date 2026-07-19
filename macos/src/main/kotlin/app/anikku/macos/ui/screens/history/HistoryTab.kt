@@ -97,7 +97,13 @@ object HistoryTab : AnikkuScreen(), Tab {
                         )
                     )
                 } else {
-                    toastHost.show("Cannot resume — source information missing", ToastDuration.SHORT)
+                    toastHost.show(
+                        text = "Cannot resume — source information missing",
+                        duration = ToastDuration.SHORT,
+                        isError = true,
+                        source = null,
+                        location = "HistoryTab.onAnimeClick",
+                    )
                 }
             },
         )

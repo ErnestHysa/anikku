@@ -271,7 +271,13 @@ data class AnimeDetailScreen(
                             if (shared) {
                                 toastHost.show("URL ready to share", ToastDuration.SHORT)
                             } else {
-                                toastHost.show("Could not share", ToastDuration.SHORT)
+                                toastHost.show(
+                                    text = "Could not share",
+                                    duration = ToastDuration.SHORT,
+                                    isError = true,
+                                    source = sourceId?.toString(),
+                                    location = "AnimeDetailScreen.share",
+                                )
                             }
                         } else {
                             toastHost.show("No URL available", ToastDuration.SHORT)
@@ -385,7 +391,13 @@ data class AnimeDetailScreen(
                                         result.toToastMessage()?.let { message ->
                                             withContext(Dispatchers.Main) {
                                                 val duration = if (result.failures.isNotEmpty()) ToastDuration.LONG else ToastDuration.SHORT
-                                                toastHost.show(message, duration)
+                                                toastHost.show(
+                                                    text = message,
+                                                    duration = duration,
+                                                    isError = result.failures.isNotEmpty(),
+                                                    source = sourceId?.toString(),
+                                                    location = "AnimeDetailScreen.scrobbleProgress",
+                                                )
                                             }
                                         }
                                     }
@@ -401,7 +413,13 @@ data class AnimeDetailScreen(
                                     description = "${anime?.title} — URL copied to clipboard",
                                 )
                                 if (shared) toastHost.show("URL ready to share", ToastDuration.SHORT)
-                                else toastHost.show("Could not share", ToastDuration.SHORT)
+                                else toastHost.show(
+                                    text = "Could not share",
+                                    duration = ToastDuration.SHORT,
+                                    isError = true,
+                                    source = sourceId?.toString(),
+                                    location = "AnimeDetailScreen.onShare",
+                                )
                             } else toastHost.show("No URL available", ToastDuration.SHORT)
                         },
                         onCopyUrl = {
@@ -412,7 +430,13 @@ data class AnimeDetailScreen(
                                     clipboard.setContents(StringSelection(url), null)
                                     toastHost.show("URL copied to clipboard", ToastDuration.SHORT)
                                 } catch (_: Exception) {
-                                    toastHost.show("Could not copy URL", ToastDuration.SHORT)
+                                    toastHost.show(
+                                        text = "Could not copy URL",
+                                        duration = ToastDuration.SHORT,
+                                        isError = true,
+                                        source = sourceId?.toString(),
+                                        location = "AnimeDetailScreen.copyUrl",
+                                    )
                                 }
                             } else toastHost.show("No URL available", ToastDuration.SHORT)
                         },
@@ -422,7 +446,13 @@ data class AnimeDetailScreen(
                                 try {
                                     Desktop.getDesktop().browse(URI(url))
                                 } catch (_: Exception) {
-                                    toastHost.show("Could not open browser", ToastDuration.SHORT)
+                                    toastHost.show(
+                                        text = "Could not open browser",
+                                        duration = ToastDuration.SHORT,
+                                        isError = true,
+                                        source = sourceId?.toString(),
+                                        location = "AnimeDetailScreen.openInBrowser",
+                                    )
                                 }
                             } else toastHost.show("No URL available", ToastDuration.SHORT)
                         },

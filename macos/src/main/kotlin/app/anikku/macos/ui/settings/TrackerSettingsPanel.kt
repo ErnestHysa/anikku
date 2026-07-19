@@ -108,7 +108,13 @@ fun TrackerSettingsPanel(
             hasCredentials = clientId.isNotBlank(),
             onLogin = {
                 if (trackerManager == null) {
-                    toastHost.show("Tracker manager not available", ToastDuration.SHORT)
+                    toastHost.show(
+                        text = "Tracker manager not available",
+                        duration = ToastDuration.SHORT,
+                        isError = true,
+                        source = status.tracker,
+                        location = "TrackerSettingsPanel.onLogin",
+                    )
                     return@TrackerCard
                 }
 
@@ -126,7 +132,13 @@ fun TrackerSettingsPanel(
                     clientSecret = clientSecret,
                 ) { success, message ->
                     loggingInTracker = null
-                    toastHost.show(message, ToastDuration.SHORT)
+                    toastHost.show(
+                        text = message,
+                        duration = ToastDuration.SHORT,
+                        isError = !success,
+                        source = status.tracker,
+                        location = "TrackerSettingsPanel.loginResult",
+                    )
                     if (success) onTrackerChanged()
                 }
             },
@@ -168,7 +180,13 @@ fun TrackerSettingsPanel(
             .padding(horizontal = 24.dp, vertical = 4.dp)
             .clickable {
                 navigator?.push(TrackerListScreen())
-                    ?: toastHost.show("Navigation not available", ToastDuration.SHORT)
+                    ?: toastHost.show(
+                        text = "Navigation not available",
+                        duration = ToastDuration.SHORT,
+                        isError = true,
+                        source = "tracker",
+                        location = "TrackerSettingsPanel.navigateToTrackerList",
+                    )
             },
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(

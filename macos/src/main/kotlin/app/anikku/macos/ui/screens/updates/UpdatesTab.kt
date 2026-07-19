@@ -118,7 +118,13 @@ object UpdatesTab : AnikkuScreen(), Tab {
                         )
                     )
                 } else {
-                    toastHost.show("Cannot open update — source information missing", ToastDuration.SHORT)
+                    toastHost.show(
+                        text = "Cannot open update — source information missing",
+                        duration = ToastDuration.SHORT,
+                        isError = true,
+                        source = null,
+                        location = "UpdatesTab.onUpdateClick",
+                    )
                 }
             },
         )
