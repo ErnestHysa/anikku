@@ -92,6 +92,11 @@ fun platformModule(app: AnikkuApplication) = module {
                 // with exponential backoff. It runs BEFORE other interceptors so retries
                 // also go through Cloudflare bypass and diagnostic logging.
                 HttpRetryInterceptor(maxRetries = 3, baseDelayMs = 1000),
+                // BrotliInterceptor decompresses brotli-encoded responses FIRST,
+                // BEFORE CloudflareInterceptor so peekBody() sees readable text.
+                // Cloudflare often uses br encoding — without this, responses
+                // appear as garbage bytes and WAF pattern matching silently fails.
+                BrotliInterceptor,
                 // CloudflareInterceptor detects cf-challenge responses and uses
                 // headless Chrome to extract cf_clearance cookies, then retries.
                 CloudflareInterceptor(app.cookieJar) {
@@ -100,10 +105,6 @@ fun platformModule(app: AnikkuApplication) = module {
                 // DiagnosticLoggingInterceptor logs error responses (non-2xx) with
                 // full request/response details for debugging extension API errors.
                 DiagnosticLoggingInterceptor(isDebugBuild = false),
-                // BrotliInterceptor decompresses brotli-encoded responses.
-                // Cloudflare often uses br encoding — without this, responses
-                // appear as garbage bytes and parsing fails.
-                BrotliInterceptor,
             ),
         )
     }
