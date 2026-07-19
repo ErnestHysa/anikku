@@ -47,6 +47,7 @@ fun NetworkSettingsPanel() {
     var proxyUsername by remember { mutableStateOf(settings.proxyUsername) }
     var proxyPassword by remember { mutableStateOf(settings.proxyPassword) }
     var chromePath by remember { mutableStateOf(settings.chromePath) }
+    var cdpDebugMode by remember { mutableStateOf(settings.cdpDebugMode) }
 
     HeadingItem("Network")
 
@@ -203,6 +204,36 @@ fun NetworkSettingsPanel() {
                 modifier = Modifier.padding(12.dp),
             )
         }
+    }
+
+    // CDP Debug Mode toggle
+    Spacer(Modifier.height(12.dp))
+    CheckboxItem(
+        label = "CDP Debug Mode",
+        checked = cdpDebugMode,
+        onClick = {
+            cdpDebugMode = !cdpDebugMode
+            settings.cdpDebugMode = cdpDebugMode
+            app.anikku.macos.platform.network.ChromeCDPClient.debugMode = cdpDebugMode
+        },
+    )
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp),
+        shape = RoundedCornerShape(8.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.4f),
+        ),
+    ) {
+        Text(
+            text = "Logs every Chrome DevTools WebSocket message during Cloudflare bypass " +
+                "at INFO level. Use only for troubleshooting WAF issues — produces verbose output.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onTertiaryContainer,
+            modifier = Modifier.padding(12.dp),
+        )
     }
 
     HorizontalDivider(modifier = Modifier.padding(top = 8.dp))

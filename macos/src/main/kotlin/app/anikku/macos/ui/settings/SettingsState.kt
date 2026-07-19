@@ -59,6 +59,7 @@ class SettingsState(
         private const val KEY_PROXY_USERNAME = "proxy_username"
         private const val KEY_PROXY_PASSWORD = "proxy_password"
         private const val KEY_CHROME_PATH = "chrome_path"
+        private const val KEY_CDP_DEBUG_MODE = "cdp_debug_mode"
     }
 
     private val themePref = preferenceStore?.getString(KEY_THEME, AnikkuTheme.Theme.DEFAULT.name)
@@ -247,6 +248,22 @@ class SettingsState(
         set(value) {
             _chromePath.value = value
             chromePathPref?.set(value)
+        }
+
+    private val cdpDebugPref = preferenceStore?.getBoolean(KEY_CDP_DEBUG_MODE, false)
+    private val _cdpDebugMode = mutableStateOf(cdpDebugPref?.get() ?: false)
+
+    /**
+     * Chrome DevTools Protocol Debug Mode.
+     * When enabled, the ChromeCDPClient logs every WebSocket message
+     * sent/received during Cloudflare bypass attempts at INFO level.
+     * Useful for troubleshooting WAF bypass issues.
+     */
+    var cdpDebugMode: Boolean
+        get() = _cdpDebugMode.value
+        set(value) {
+            _cdpDebugMode.value = value
+            cdpDebugPref?.set(value)
         }
 
     /**

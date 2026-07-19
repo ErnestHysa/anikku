@@ -107,6 +107,7 @@ fun main() = application {
 
         // Wire Chrome path from settings to CDP client
         ChromeCDPClient.customChromePath = settingsState.chromePath
+        ChromeCDPClient.debugMode = settingsState.cdpDebugMode
         val bookmarkStore = remember { BookmarkStore(app.preferenceStore) }
         val libraryRepository = remember { app.libraryRepository }
         val historyRepository = remember { app.historyRepository }

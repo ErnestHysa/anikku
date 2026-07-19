@@ -59,6 +59,14 @@ object ChromeCDPClient {
     var customChromePath: String = ""
 
     /**
+     * CDP debug mode — when enabled, every WebSocket message sent/received
+     * is logged at INFO level for troubleshooting WAF bypass issues.
+     * Set from Network Settings to inspect the raw CDP traffic.
+     */
+    @Volatile
+    var debugMode: Boolean = false
+
+    /**
      * Is Chrome (or alternative browser) installed?
      * Computed property (not lazy) so [customChromePath] set after object init is respected.
      */
@@ -257,18 +265,22 @@ object ChromeCDPClient {
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     messageId++
-                    webSocket.send("""{"id":$messageId,"method":"Page.enable"}""")
+                    val enablePage = """{"id":$messageId,"method":"Page.enable"}"""
+                    logDebug(">>> $enablePage")
+                    webSocket.send(enablePage)
                     messageId++
-                    webSocket.send(
-                        """{"id":$messageId,"method":"Network.enable"}"""
-                    )
+                    val enableNet = """{"id":$messageId,"method":"Network.enable"}"""
+                    logDebug(">>> $enableNet")
+                    webSocket.send(enableNet)
                     messageId++
-                    webSocket.send(
-                        """{"id":$messageId,"method":"Page.navigate","params":{"url":"$targetUrl"}}"""
-                    )
+                    val navigate = """{"id":$messageId,"method":"Page.navigate","params":{"url":"$targetUrl"}}"""
+                    logDebug(">>> $navigate")
+                    webSocket.send(navigate)
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
+                    // Log truncated incoming CDP message for debug
+                    logDebug("<<< ${text.take(500)}${if (text.length > 500) "..." else ""}")
                     try {
                         val msg = json.parseToJsonElement(text).jsonObject
                         val method = msg["method"]?.jsonPrimitive?.content
@@ -307,8 +319,9 @@ object ChromeCDPClient {
                         if (method == "Page.frameStoppedLoading") {
                             scheduleCookieFetch(webSocket, targetUrl, delayMs = 1000)
                         }
-                    } catch (_: Exception) {
-                        // Malformed CDP message — ignore
+                    } catch (e: Exception) {
+                        // Malformed CDP message — in debug mode, log it so the user can diagnose
+                        logDebug("<<< [MALFORMED] ${text.take(500)} — ${e.message}")
                     }
                 }
 
@@ -332,9 +345,9 @@ object ChromeCDPClient {
 
             while (cookies.isEmpty() && System.currentTimeMillis() - startPoll < maxPollMs) {
                 val pollId = cookieFetchId.incrementAndGet()
-                ws.send(
-                    """{"id":$pollId,"method":"Network.getCookies","params":{"urls":["$targetUrl"]}}"""
-                )
+                val pollMsg = """{"id":$pollId,"method":"Network.getCookies","params":{"urls":["$targetUrl"]}}"""
+                logDebug(">>> $pollMsg")
+                ws.send(pollMsg)
                 try { Thread.sleep(2000) } catch (_: Exception) { break }
             }
         }
@@ -361,9 +374,9 @@ object ChromeCDPClient {
         val thread = Thread({
             Thread.sleep(delayMs)
             val id = cookieFetchId.incrementAndGet()
-            webSocket.send(
-                """{"id":$id,"method":"Network.getCookies","params":{"urls":["$targetUrl"]}}"""
-            )
+            val fetchMsg = """{"id":$id,"method":"Network.getCookies","params":{"urls":["$targetUrl"]}}"""
+            logDebug(">>> $fetchMsg")
+            webSocket.send(fetchMsg)
         }, "chrome-cdp-cookie-fetch")
         thread.isDaemon = true
         thread.start()
@@ -371,6 +384,16 @@ object ChromeCDPClient {
 
     /** Monotonically increasing message ID for scheduled cookie fetch requests. */
     private val cookieFetchId = AtomicInteger(1000)
+
+    /**
+     * Log a debug message only when [debugMode] is enabled.
+     * Uses INFO level so these messages appear in the default log configuration.
+     */
+    private fun logDebug(message: String) {
+        if (debugMode) {
+            logger.info { "[CDP-DEBUG] $message" }
+        }
+    }
 
     private val CLOUDFLARE_COOKIE_NAMES = setOf(
         "cf_clearance",
