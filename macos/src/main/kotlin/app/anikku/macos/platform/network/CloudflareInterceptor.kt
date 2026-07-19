@@ -100,39 +100,80 @@ class CloudflareInterceptor(
         // These WAFs use different blocking mechanisms but Chrome CDP can bypass them too.
         if (isNonCloudflareWaf(response)) return true
 
-        // Slow path for HTTP 400/429/406: peek body for challenge patterns.
+        // Slow path for HTTP 400/406/429: peek body for challenge patterns.
         // Some sites (e.g. AllAnime) return HTTP 400 for Cloudflare blocks instead
         // of the typical 403/503. Some return 406 (Not Acceptable) with CF challenge.
-        if (response.code !in CLOUDFLARE_CODES && response.code !in CLOUDFLARE_EXTENDED_CODES) {
-            return false
+        if (response.code in CLOUDFLARE_EXTENDED_CODES) {
+            return try {
+                val bodyPeek = response.peekBody(BODY_PEEK_BYTES).string()
+                bodyPeek.contains("cf-browser-verify") ||
+                    bodyPeek.contains("cf_chl_opt") ||
+                    bodyPeek.contains("_cf_chl_ctx") ||
+                    bodyPeek.contains("Checking your browser") ||
+                    bodyPeek.contains("cf-wrapper") ||
+                    bodyPeek.contains("challenge-platform") ||
+                    bodyPeek.contains("Just a moment") ||
+                    bodyPeek.contains("Attention Required!") ||
+                    bodyPeek.contains("cloudflareinsights.com") ||
+                    bodyPeek.contains("__cf_chl") ||
+                    bodyPeek.contains("turnstile") ||
+                    bodyPeek.contains("challenges.cloudflare.com") ||
+                    (bodyPeek.contains("jschl") && bodyPeek.contains("cf-")) ||
+                    (response.code == 400 && bodyPeek.contains("<html", ignoreCase = true) &&
+                        (bodyPeek.contains("cloudflare") || bodyPeek.contains("cf-"))) ||
+                    bodyPeek.contains("datadome") || bodyPeek.contains("geo.captcha-delivery.com") ||
+                    bodyPeek.contains("akamai") || bodyPeek.contains("imperva") ||
+                    bodyPeek.contains("_abck") || bodyPeek.contains("bm_sz")
+            } catch (_: Exception) { false }
         }
 
-        return try {
-            val bodyPeek = response.peekBody(2048).string()
-            bodyPeek.contains("cf-browser-verify") ||
-                bodyPeek.contains("cf_chl_opt") ||
-                bodyPeek.contains("_cf_chl_ctx") ||
-                bodyPeek.contains("Checking your browser") ||
-                bodyPeek.contains("cf-wrapper") ||
-                bodyPeek.contains("challenge-platform") ||
-                bodyPeek.contains("Just a moment") ||
-                bodyPeek.contains("Attention Required!") ||
-                bodyPeek.contains("cloudflareinsights.com") ||
-                bodyPeek.contains("__cf_chl") ||
-                bodyPeek.contains("turnstile") ||                     // Cloudflare Turnstile
-                bodyPeek.contains("challenges.cloudflare.com") ||    // Turnstile domain
-                (bodyPeek.contains("jschl") && bodyPeek.contains("cf-")) ||
-                // AllAnime-specific: error body with Cloudflare-related patterns
-                (response.code == 400 && bodyPeek.contains("<html", ignoreCase = true) &&
-                    (bodyPeek.contains("cloudflare") || bodyPeek.contains("cf-"))) ||
-                // DataDome WAF: sets dd-checksum cookies
-                bodyPeek.contains("datadome") || bodyPeek.contains("geo.captcha-delivery.com") ||
-                // Akamai/Imperva WAF patterns
-                bodyPeek.contains("akamai") || bodyPeek.contains("imperva") ||
-                bodyPeek.contains("_abck") || bodyPeek.contains("bm_sz")
-        } catch (_: Exception) {
-            false
+        // Aggressive bypass: ANY HTTP 403 or 503 (even without recognizable WAF markers)
+        // triggers the Chrome CDP bypass. Many anime streaming sites use custom error
+        // pages or generic 503 responses when blocking bots. We skip genuine server
+        // errors (Apache/nginx default pages, JSON API errors, 500s) to avoid wasting
+        // Chrome CDP on real server problems.
+        if (response.code in CLOUDFLARE_CODES) {
+            return try {
+                val bodyPeek = response.peekBody(BODY_PEEK_BYTES).string()
+                !isGenuineServerError(bodyPeek)
+            } catch (_: Exception) {
+                // Can't read body — assume it could be a block and try bypass
+                true
+            }
         }
+
+        return false
+    }
+
+    /**
+     * Check if the response body looks like a genuine server error page
+     * (not a bot challenge). If true, we skip the Chrome CDP bypass to avoid
+     * wasting time on sites that are genuinely broken.
+     */
+    private fun isGenuineServerError(body: String): Boolean {
+        if (body.isEmpty()) return false
+        // Apache/Nginx default error pages
+        if (body.contains("Apache Server") || body.contains("nginx/") || body.contains("<address>")) return true
+        // Generic 403/503 messages that are NOT bot challenges.
+        // Keep threshold conservative (100 bytes) and check for script/challenge
+        // indicators — Cloudflare pages often have minimal markup but always
+        // include JavaScript or challenge-related keywords.
+        val bareBody = body.length < 100
+        if (bareBody && body.contains("403 Forbidden") &&
+            !body.contains("script", ignoreCase = true) &&
+            !body.contains("challenge", ignoreCase = true) &&
+            !body.contains("window.", ignoreCase = true)) return true
+        if (bareBody && body.contains("503 Service") &&
+            !body.contains("script", ignoreCase = true) &&
+            !body.contains("challenge", ignoreCase = true) &&
+            !body.contains("window.", ignoreCase = true)) return true
+        // JSON API errors — these are legitimate server responses to bad requests
+        if (body.trimStart().startsWith("{") && (body.contains("\"error\"") || body.contains("\"message\""))) return true
+        // IIS default pages
+        if (body.contains("Server Error") && body.contains("IIS")) return true
+        // Genuine maintenance page (not a bot-block masquerading as maintenance)
+        if (body.contains("<title>Maintenance</title>") || body.contains("scheduled maintenance")) return true
+        return false
     }
 
     /**
@@ -182,6 +223,7 @@ class CloudflareInterceptor(
 
     companion object {
         private const val X_CF_BYPASS = "X-CF-Bypass-Attempted"
+        private const val BODY_PEEK_BYTES = 8192L
         private val CLOUDFLARE_CODES = setOf(403, 503)
         private val CLOUDFLARE_EXTENDED_CODES = setOf(400, 406, 429)
         private val CLOUDFLARE_SERVERS = setOf("cloudflare-nginx", "cloudflare")

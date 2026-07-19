@@ -57,7 +57,7 @@ class ExtensionCompatibilityTest {
 
     companion object {
         private const val EXTENSIONS_DIR = "Library/Application Support/Anikku/extensions"
-        private const val TIMEOUT_MS = 20_000L
+        private const val TIMEOUT_MS = 30_000L
         private const val REPORT_PATH = "/tmp/anikku_extension_report.html"
 
         private fun ensureUrl(sAnime: SAnime, fallbackUrl: String) {
