@@ -27,3 +27,8 @@ app/standard/preview/*
 #   openssl genpkey -algorithm ed25519 -out macos/ed25519-key.pem
 *.key.pem
 ed25519-key.pem
+
+# Downloaded test video files
+*.mkv
+*.mp4
+*.webm
